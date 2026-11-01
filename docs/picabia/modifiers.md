@@ -426,6 +426,34 @@ straight line, as anywhere in VectorCraft (tlprocedural's trims drew no fill).
   them reshapes it.
 
 
+## Screen: contouring core, written for Picabia; not derived from the AGPL marching-squares package
+
+Screen (PIC20.5, not yet a row) is a vector halftone, like a bitmap halftone screen followed by
+tracing. Its core landed in PIC20.5a; the row, its panel and command come with the geometry rows.
+
+- **Contouring** (`vectorcraft_modifiers::contour`): marching squares written from the textbook
+  algorithm. tlprocedural uses the `marching-squares` npm package, which is AGPL; its source was not
+  read, used or ported (nor any other GPL/AGPL code). `contours(&Grid, level)` gives closed rings
+  round where the field is `>= level`; `bands(&Grid, lo, hi)` round `lo <= field <= hi`. The 16-case
+  table runs every segment with the inside on its right, so outer rings are clockwise on screen and
+  holes counter-clockwise: even-odd and non-zero fill agree. Saddles are decided by the cell
+  centre's average. The grid is framed by outside samples, so a region reaching the edge closes
+  along it. NaN and ±∞ samples are outside. Grids hold at most 1,000,000 cells; bigger, smaller
+  than 2 × 2, or with a bad step, origin or level are refused with an error. Perf: a 1000 × 1000-cell
+  grid contours in about 6 ms (release build, Apple silicon; sampling a sine field about 3 ms).
+- **Field** (`vectorcraft_modifiers::screen`): `Screen::new(shape, lpi, angle, quality)` with
+  shapes Round, Ellipse, Line, Square, Diamond and Cross; cells `72 / lpi` pt apart (lpi
+  1–300, default 20) turned by the angle (clockwise on screen); quality is samples per cell
+  (4–64, default 12). Tone (0 no ink … 1 solid) comes from any function of the point: a
+  `ToneImage` (an image's darkness, from 8-bit grey or RGBA, bilinear, no ink outside it or where
+  transparent; at most 16 M pixels), the layer's fill, or a fixed share. Each shape's threshold
+  comes from its own table of spot values, so the inked share of a cell equals the tone (within
+  2% traced). Round, Square and Diamond dots meet at mid-grey and turn into holes in the shadows.
+  Art too big for the cell cap at the chosen quality is sampled more coarsely (`Traced::coarsened`).
+  Ben-Day dots are Round at a fixed tone; Line Fill is Line at a fixed tone.
+- **Still to wire**: the row kind and its params, clipping the traced rings to the layer's
+  outline, fitting curves to the rings (they are polylines), the panel and the command.
+
 ## Expressions
 
 The amounts of `transformEach` (`offsetX`, `offsetY`, `rotate`, `scaleX`, `scaleY`) and
