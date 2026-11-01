@@ -1,11 +1,11 @@
-//! PICABIA: what `laser.start` and `laser.frame` run: G-code text, a G-code file, or the test card
-//! or power ladder, with the box its moves reach (mm, work coordinates); and the machine profile
+//! PICABIA: what `laser.start` and `laser.frame` run, with the box its moves reach (mm, work
+//! coordinates): G-code text or a G-code file (untrusted: every line checked against a laser
+//! allow-list, [`check_line`]), or a job from Picabia's own writers (the selected objects, a
+//! stencil's sheet, the test card, the power ladder; checked the same way); and the machine profile
 //! the link checks jobs against.
 
 use kurbo::{Point, Rect};
 use serde_json::{Value, json};
-use vectorcraft_modifiers::StencilMaterial;
-use vectorcraft_stencil::{GcodeParams, LadderParams};
 
 use super::{bad, get};
 use crate::{EngineError, Result, Session};
@@ -86,34 +86,72 @@ pub fn rect_json(r: Rect) -> Value {
 }
 
 /// Seconds, rounded to tenths.
-fn secs(v: f64) -> f64 {
-    (finite(v) * 10.0).round() / 10.0
-}
-
-/// A job for `laser.start`/`laser.frame`: its G-code and where it goes.
+/// A job for `laser.start`/`laser.frame`: its G-code, already cleaned into the lines the machine
+/// gets, and where it goes.
 #[derive(Clone, Debug)]
 pub struct LaserRun {
     pub name: String,
-    pub text: String,
+    /// The lines to stream: comments and spaces dropped, each checked by [`check_line`] and by
+    /// GRBL's own line rules ([`vectorcraft_grbl::clean_line`]).
+    pub lines: Vec<String>,
     /// Work coordinates of every motion target, mm.
     pub bounds: Rect,
     pub estimated_sec: Option<f64>,
     pub warnings: Vec<String>,
-    /// `gcode`, `file`, `testCard`, `powerLadder`.
+    /// `gcode`, `file`, `design`, `stencil`, `testCard`, `powerLadder`.
     pub source: &'static str,
+    /// "1 of 2" for a stencil's sheet.
+    pub sheet: Option<String>,
+    pub layer: Option<vectorcraft_doc::NodeId>,
 }
 
-/// The job `p` names: `gcode` (G-code text), `path` (a G-code file) or `testCard`
-/// (card|powerLadder), exactly one of them.
+/// The job `p` names: `gcode` (G-code text) or `path` (a G-code file), both untrusted and checked
+/// line by line; else Picabia's own writers: `testCard` (card|powerLadder), or the objects
+/// `ids`/`id` (default: the selection; a single stencil object's `sheet`).
 pub fn build_run(cmd: &str, s: &Session, p: &Value) -> Result<LaserRun> {
     let given: Vec<&str> = ["gcode", "path", "testCard"].into_iter().filter(|k| get(p, k).is_some()).collect();
-    match given.as_slice() {
-        ["gcode"] => text_run(cmd, p),
-        ["path"] => file_run(cmd, p),
-        ["testCard"] => card_run(cmd, s, p),
-        [] => Err(bad(cmd, "give the job: `gcode` (G-code text), `path` (a G-code file) or `testCard` (card|powerLadder)")),
-        _ => Err(bad(cmd, "give one job: `gcode`, `path` or `testCard`, not several")),
+    if given.len() > 1 {
+        return Err(bad(cmd, "give one job: `gcode`, `path` or `testCard`, not several"));
     }
+    let untrusted = !given.is_empty() && given != ["testCard"];
+    if untrusted {
+        for k in ["ids", "id", "sheet"] {
+            if get(p, k).is_some() {
+                return Err(bad(cmd, format!("`{k}` goes with objects, not with `gcode` or `path`")));
+            }
+        }
+    }
+    let (name, text, source, writer) = match given.as_slice() {
+        ["gcode"] => {
+            let (name, text) = text_job(cmd, p)?;
+            (name, text, "gcode", None)
+        }
+        ["path"] => {
+            let (name, text) = file_job(cmd, p)?;
+            (name, text, "file", None)
+        }
+        _ => {
+            let t = crate::cmd::picabia_modifier::laser_run::trusted_run(cmd, s, p)?;
+            let name = job_name(cmd, p, &t.name)?;
+            (name, t.text.clone(), t.source, Some(t))
+        }
+    };
+    let lines = check_gcode(&text).map_err(|why| EngineError::Disabled(cmd.into(), why))?;
+    // The head starts at the work origin.
+    let mut bounds = gcode_bounds(&text).map_err(|why| EngineError::Disabled(cmd.into(), why))?.union_pt(Point::ZERO);
+    let mut run = LaserRun { name, lines, bounds, estimated_sec: None, warnings: Vec::new(), source, sheet: None, layer: None };
+    if let Some(t) = writer {
+        // The writer's own box too (they agree; the union is never smaller than either).
+        if [t.bounds.x0, t.bounds.y0, t.bounds.x1, t.bounds.y1].iter().all(|v| v.is_finite()) {
+            bounds = bounds.union(t.bounds);
+        }
+        run.bounds = bounds;
+        run.estimated_sec = Some(t.estimated_sec);
+        run.warnings = t.warnings;
+        run.sheet = t.sheet;
+        run.layer = t.layer;
+    }
+    Ok(run)
 }
 
 /// A plain name from `name` (control characters dropped, cut to fit), else `default`.
@@ -128,8 +166,8 @@ fn job_name(cmd: &str, p: &Value, default: &str) -> Result<String> {
     }
 }
 
-/// G-code given as text.
-fn text_run(cmd: &str, p: &Value) -> Result<LaserRun> {
+/// G-code given as text: its name and text.
+fn text_job(cmd: &str, p: &Value) -> Result<(String, String)> {
     let Some(Value::String(text)) = get(p, "gcode") else { return Err(bad(cmd, "`gcode` must be G-code text")) };
     if text.len() as u64 > MAX_GCODE_BYTES {
         return Err(bad(cmd, format!("`gcode` is longer than {} MB", MAX_GCODE_BYTES >> 20)));
@@ -137,13 +175,11 @@ fn text_run(cmd: &str, p: &Value) -> Result<LaserRun> {
     if !text.is_ascii() {
         return Err(EngineError::Disabled(cmd.into(), "the G-code must be plain ASCII text".into()));
     }
-    let name = job_name(cmd, p, "G-code")?;
-    gcode_run(cmd, name, text.clone(), "gcode")
+    Ok((job_name(cmd, p, "G-code")?, text.clone()))
 }
 
-/// A G-code file as a job: read (at most [`MAX_GCODE_BYTES`], ASCII text) and its bounds worked
-/// out ([`gcode_bounds`]).
-fn file_run(cmd: &str, p: &Value) -> Result<LaserRun> {
+/// A G-code file (at most [`MAX_GCODE_BYTES`], ASCII text): its name and text.
+fn file_job(cmd: &str, p: &Value) -> Result<(String, String)> {
     let Some(Value::String(path)) = get(p, "path") else { return Err(bad(cmd, "`path` must be a G-code file path")) };
     let fp = std::path::Path::new(path);
     let ext = fp.extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase).unwrap_or_default();
@@ -155,84 +191,92 @@ fn file_run(cmd: &str, p: &Value) -> Result<LaserRun> {
     let text = String::from_utf8(bytes).ok().filter(|t| t.is_ascii());
     let Some(text) = text else { return Err(EngineError::Disabled(cmd.into(), "the file isn't plain text G-code".into())) };
     let file = fp.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or("G-code");
-    let name = job_name(cmd, p, file)?;
-    gcode_run(cmd, name, text, "file")
+    Ok((job_name(cmd, p, file)?, text))
 }
 
-fn gcode_run(cmd: &str, name: String, text: String, source: &'static str) -> Result<LaserRun> {
-    // The head starts at the work origin.
-    let bounds = gcode_bounds(&text).map_err(|why| EngineError::Disabled(cmd.into(), why))?.union_pt(Point::ZERO);
-    Ok(LaserRun { name, text, bounds, estimated_sec: None, warnings: Vec::new(), source })
-}
+/// The G-codes a laser job may use (×10: `G91.1` is 911): rapid and cut moves, arcs, dwell, the
+/// default XY plane, millimetres, the default work coordinates and modes, absolute and relative
+/// moves, feed per minute.
+const ALLOWED_G: [i64; 16] = [0, 10, 20, 30, 40, 170, 210, 400, 490, 540, 610, 800, 900, 910, 911, 940];
+/// The M-codes a laser job may use: end of program (`M2`, `M30`), the beam in dynamic laser mode
+/// (`M4`) and off (`M5`), air assist (`M8`, `M9`).
+const ALLOWED_M: [i64; 6] = [2, 4, 5, 8, 9, 30];
 
-/// The test card or the power ladder, with the material's settings, the machine's `$30` and
-/// `p`'s settings.
-fn card_run(cmd: &str, s: &Session, p: &Value) -> Result<LaserRun> {
-    let ladder = match get(p, "testCard") {
-        Some(Value::String(k)) if k.trim().eq_ignore_ascii_case("card") => false,
-        Some(Value::String(k)) if k.trim().eq_ignore_ascii_case("powerLadder") => true,
-        _ => return Err(bad(cmd, "`testCard` must be card or powerLadder")),
-    };
-    let material = match get(p, "material") {
-        None => StencilMaterial::Paper,
-        Some(Value::String(m)) => StencilMaterial::ALL
-            .into_iter()
-            .find(|x| x.id().eq_ignore_ascii_case(m.trim()))
-            .ok_or_else(|| bad(cmd, "`material` must be paper, film, card or custom"))?,
-        Some(_) => return Err(bad(cmd, "`material` must be paper, film, card or custom")),
-    };
-    let prof = Machine::of(s);
-    let machine_s_max = s.picabia.laser.machine_s_max();
-    let mut gp = GcodeParams::for_material(material.id());
-    gp.s_max = machine_s_max.unwrap_or(prof.s_max);
-    gp.air = prof.air;
-    gp.apply_json(p);
-    gp.header =
-        vec![format!("machine: {}", prof.name.chars().map(|c| if c.is_ascii() && !c.is_ascii_control() { c } else { '?' }).collect::<String>())];
-    let mut warnings = Vec::new();
-    if let Some(m) = machine_s_max
-        && (gp.s_max - m).abs() > 1e-9
-    {
-        warnings.push(format!("sMax {} was replaced by the machine's $30 = {m}", gp.s_max));
-        gp.s_max = m;
-    }
-    let (g, name) = if ladder {
-        let l = vectorcraft_stencil::power_ladder(&LadderParams::from_json(p));
-        (vectorcraft_stencil::ladder_gcode(&l, &gp), format!("Power ladder {}", material.id()))
-    } else {
-        let Some(mut limits) = material.limits() else {
-            return Err(EngineError::Disabled(cmd.into(), "a custom material's test card needs a stencil's limits: pick paper, film or card".into()));
-        };
-        match get(p, "kerfMm") {
-            None => {}
-            Some(v) => match v.as_f64().filter(|k| k.is_finite() && (0.0..=2.0).contains(k)) {
-                Some(k) => limits.kerf_mm = k,
-                None => return Err(bad(cmd, "`kerfMm` must be a kerf in mm (0-2)")),
-            },
+/// Every line of a job: comments and spaces dropped and checked by [`check_line`] and GRBL's line
+/// rules. Returns the lines to send (empty ones left out), or why not, naming the line.
+pub fn check_gcode(text: &str) -> std::result::Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    for (i, raw) in text.lines().enumerate() {
+        if out.len() >= vectorcraft_grbl::MAX_JOB_LINES {
+            return Err(format!("the job has more than {} lines", vectorcraft_grbl::MAX_JOB_LINES));
         }
-        let sheet = vectorcraft_stencil::test_card(&limits, material.id(), limits.kerf_mm);
-        (vectorcraft_stencil::laser_gcode(&sheet, &gp), format!("Test card {}", material.id()))
-    };
-    if g.text.is_empty() {
-        let why = if g.warnings.is_empty() { "the G-code was refused".to_string() } else { g.warnings.join("; ") };
-        return Err(EngineError::Disabled(cmd.into(), format!("{name}: {why}")));
+        let shown: String = raw.trim().chars().take(40).collect();
+        let at = |why: String| format!("line {} (`{shown}`): {why}", i + 1);
+        let clean = vectorcraft_grbl::clean_line(raw).map_err(|why| at(format!("the line {why}")))?;
+        if clean.is_empty() {
+            continue;
+        }
+        check_line(&clean).map_err(at)?;
+        out.push(clean);
     }
-    warnings.extend(g.warnings.iter().cloned());
-    Ok(LaserRun {
-        name,
-        estimated_sec: Some(secs(vectorcraft_stencil::estimate_sec(&g, prof.rapid_mm_min))),
-        bounds: g.bounds_mm,
-        text: g.text,
-        warnings,
-        source: if ladder { "powerLadder" } else { "testCard" },
-    })
+    if out.is_empty() {
+        return Err("the G-code has no lines to run".into());
+    }
+    Ok(out)
 }
 
-/// The work-coordinate box every move of `text` reaches (mm), arcs as their whole circle. Refused
-/// (the reason) when the file moves in ways that can't be checked against the bed: machine
-/// coordinates (`G53`), returns to stored positions (`G28`, `G30`), coordinate offsets (`G92`,
-/// `G10`), other work coordinate systems (`G54`–`G59` other than `G54`), relative moves (`G91`)
-/// from a position the file never set, or nothing that moves.
+/// One cleaned line against the laser allow-list (GRBL 1.1's documented G-code, narrowed to what a
+/// laser job needs): no `$` system commands (settings, `$H`, `$J=` jogs, resets), no Z or other
+/// axes, no tool changes, no plane, unit or coordinate-system changes, no `M3` (constant power),
+/// and only the G- and M-codes in [`ALLOWED_G`] and [`ALLOWED_M`].
+pub fn check_line(line: &str) -> std::result::Result<(), String> {
+    let upper = line.to_ascii_uppercase();
+    if upper.starts_with('$') {
+        return Err("`$` system commands (settings, homing, jogs, resets) aren't allowed in a job".into());
+    }
+    if upper.starts_with('%') {
+        return Err("`%` program markers aren't allowed in a job".into());
+    }
+    let words = words(&upper)?;
+    let has_g4 = words.iter().any(|(l, v)| *l == 'G' && (v * 10.0).round() as i64 == 40);
+    for (letter, value) in &words {
+        let code = (value * 10.0).round() as i64;
+        match letter {
+            'G' => match code {
+                c if ALLOWED_G.contains(&c) => {}
+                200 => return Err("G20 (inches) isn't allowed: export the job in millimetres (G21)".into()),
+                180 | 190 => return Err(format!("G{} changes the arc plane; laser jobs stay in the XY plane (G17)", trim_num(*value))),
+                280 | 281 | 300 | 301 | 920 | 921 | 922 | 923 | 100 | 530 => {
+                    return Err(format!("G{} moves or offsets in a way that can't be checked against the bed", trim_num(*value)));
+                }
+                _ => return Err(format!("G{} isn't allowed in a laser job", trim_num(*value))),
+            },
+            'M' => match code {
+                c if c % 10 == 0 && ALLOWED_M.contains(&(c / 10)) => {}
+                30 => return Err("M3 (constant power) isn't allowed: laser jobs use M4 (dynamic power, beam off while the head stops)".into()),
+                _ => return Err(format!("M{} isn't allowed in a laser job (only M2, M4, M5, M8, M9, M30)", trim_num(*value))),
+            },
+            'X' | 'Y' | 'I' | 'J' | 'R' | 'N' => {}
+            'F' if *value > 0.0 => {}
+            'F' => return Err("the feed (F) must be more than 0".into()),
+            'S' if *value >= 0.0 => {}
+            'S' => return Err("the power (S) can't be negative".into()),
+            'P' if has_g4 && *value >= 0.0 => {}
+            'P' => return Err("P is allowed only as a G4 dwell time".into()),
+            'Z' => return Err("Z moves aren't allowed in a laser job".into()),
+            c => return Err(format!("the word `{c}` isn't allowed in a laser job")),
+        }
+    }
+    Ok(())
+}
+
+/// The work-coordinate box every move of `text` reaches (mm), arcs as their whole circle. A line's
+/// modal words (`G20`/`G21`, `G90`/`G91`, the motion mode) apply before its coordinates, wherever
+/// they stand on the line, as GRBL applies them. Refused (the reason) when the file moves in ways
+/// that can't be checked against the bed: machine coordinates (`G53`), returns to stored positions
+/// (`G28`, `G30`), coordinate offsets (`G92`, `G10`), other work coordinate systems (`G54`–`G59`
+/// other than `G54`), relative moves (`G91`) from a position the file never set, or nothing that
+/// moves.
 pub fn gcode_bounds(text: &str) -> std::result::Result<Rect, String> {
     let mut pos = (0.0f64, 0.0f64);
     let mut abs = true;
@@ -249,34 +293,39 @@ pub fn gcode_bounds(text: &str) -> std::result::Result<Rect, String> {
     for (i, raw) in text.lines().enumerate() {
         let line = strip_comments(raw).to_ascii_uppercase();
         let words = words(&line).map_err(|w| format!("line {}: {w}", i + 1))?;
-        let (mut x, mut y, mut ci, mut cj, mut r) = (None, None, None, None, None);
-        for (letter, value) in words {
-            match letter {
-                'G' => {
-                    let g = (value * 10.0).round() as i64;
-                    match g {
-                        0 | 10 | 20 | 30 => motion = (g / 10) as u8,
-                        900 => abs = true,
-                        910 => abs = false,
-                        200 => scale = 25.4,
-                        210 => scale = 1.0,
-                        530 | 280 | 281 | 300 | 301 | 920 | 921 | 922 | 923 | 100 => {
-                            return Err(format!(
-                                "line {}: G{} moves or offsets in a way Picabia can't check against the bed; export the G-code from Picabia instead",
-                                i + 1,
-                                trim_num(value)
-                            ));
-                        }
-                        550..=593 => {
-                            return Err(format!(
-                                "line {}: G{} picks another work coordinate system, which Picabia can't check against the bed",
-                                i + 1,
-                                trim_num(value)
-                            ));
-                        }
-                        _ => {}
-                    }
+        // The line's modal G-words first.
+        for (letter, value) in &words {
+            if *letter != 'G' {
+                continue;
+            }
+            let g = (value * 10.0).round() as i64;
+            match g {
+                0 | 10 | 20 | 30 => motion = (g / 10) as u8,
+                900 => abs = true,
+                910 => abs = false,
+                200 => scale = 25.4,
+                210 => scale = 1.0,
+                530 | 280 | 281 | 300 | 301 | 920 | 921 | 922 | 923 | 100 => {
+                    return Err(format!(
+                        "line {}: G{} moves or offsets in a way Picabia can't check against the bed; export the G-code from Picabia instead",
+                        i + 1,
+                        trim_num(*value)
+                    ));
                 }
+                550..=593 => {
+                    return Err(format!(
+                        "line {}: G{} picks another work coordinate system, which Picabia can't check against the bed",
+                        i + 1,
+                        trim_num(*value)
+                    ));
+                }
+                _ => {}
+            }
+        }
+        // Then its coordinates, in the units and mode the line set.
+        let (mut x, mut y, mut ci, mut cj, mut r) = (None, None, None, None, None);
+        for (letter, value) in &words {
+            match letter {
                 'X' => x = Some(value * scale),
                 'Y' => y = Some(value * scale),
                 'I' => ci = Some(value * scale),
@@ -311,19 +360,21 @@ pub fn gcode_bounds(text: &str) -> std::result::Result<Rect, String> {
         // Where the head starts isn't the file's: only where it moves to (arcs below).
         grow(&mut b, pos.0, pos.1);
         if motion == 2 || motion == 3 {
-            // The whole circle: an arc can bulge past its end points.
-            let rad = match (ci, cj, r) {
-                (_, _, Some(r)) => r.abs(),
-                (i, j, None) => i.unwrap_or(0.0).hypot(j.unwrap_or(0.0)),
+            // The whole circle: an arc can bulge past its end points. With I/J the centre is the
+            // start plus the offset (GRBL's incremental arc centres); with R the centre is within
+            // R of the start, so every point is within 2R of it.
+            let (cx, cy, rad) = match r {
+                Some(r) => (start.0, start.1, r.abs() * 2.0),
+                None => {
+                    let (i, j) = (ci.unwrap_or(0.0), cj.unwrap_or(0.0));
+                    (start.0 + i, start.1 + j, i.hypot(j))
+                }
             };
-            let (cx, cy) = match r {
-                Some(_) => (start.0, start.1),
-                None => (start.0 + ci.unwrap_or(0.0), start.1 + cj.unwrap_or(0.0)),
-            };
-            let rad = if r.is_some() { rad * 2.0 } else { rad };
-            if rad.is_finite() {
+            if rad.is_finite() && cx.is_finite() && cy.is_finite() {
                 grow(&mut b, cx - rad, cy - rad);
                 grow(&mut b, cx + rad, cy + rad);
+            } else {
+                return Err(format!("line {}: an arc out of range", i + 1));
             }
         }
     }

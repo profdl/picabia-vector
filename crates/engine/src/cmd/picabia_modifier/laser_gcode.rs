@@ -345,7 +345,7 @@ pub(super) fn stencil_gcode(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// The test card's or the ladder's G-code and a name for it.
-fn card_job(cmd: &str, s: &Session, setup: &CardSetup, p: &Value, ladder: bool) -> Result<(LaserSheet, Gcode, GcodeParams, String)> {
+pub(super) fn card_job(cmd: &str, s: &Session, setup: &CardSetup, p: &Value, ladder: bool) -> Result<(LaserSheet, Gcode, GcodeParams, String)> {
     let gp = job_params(s, setup.material, p);
     if ladder {
         let l = vectorcraft_stencil::power_ladder(&LadderParams::from_json(p));

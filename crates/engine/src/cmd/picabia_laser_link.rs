@@ -34,6 +34,8 @@
 mod job;
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
+#[cfg(not(target_arch = "wasm32"))]
+pub use native::LaserStopHandle;
 #[cfg(test)]
 mod tests;
 
@@ -41,7 +43,7 @@ use kurbo::Rect;
 use serde_json::{Value, json};
 
 use job::{LaserRun, bed_mm, build_run, rect_json};
-pub use job::{Machine, gcode_bounds};
+pub use job::{Machine, check_gcode, check_line, gcode_bounds};
 
 use super::{CommandSpec, always, bad, cmd};
 use crate::{EngineError, Result, Session};
@@ -71,6 +73,8 @@ const MAX_JOG_MM: f64 = 5000.0;
 #[derive(Clone, Debug, Default)]
 struct JobInfo {
     source: &'static str,
+    sheet: Option<String>,
+    layer: Option<vectorcraft_doc::NodeId>,
     estimated_sec: Option<f64>,
     bounds: Option<Rect>,
     warnings: Vec<String>,
@@ -150,6 +154,13 @@ impl Session {
     /// only.
     pub fn laser_enable_hardware(&mut self) {
         self.picabia.laser.hardware = true;
+    }
+
+    /// PICABIA: a handle that stops the open connection's job or motion from any thread, without
+    /// the session (the UI's always-visible Stop, a shortcut, a watchdog). `None`: not connected.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn laser_stop_handle(&self) -> Option<LaserStopHandle> {
+        self.picabia.laser.stop_handle()
     }
 
     /// PICABIA: something went wrong (a command panicked, the UI caught a panic): disarm and stop
@@ -323,7 +334,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Frame Laser Job",
             [],
             None,
-            "{gcode?, path?, testCard?, name?, material?, kerfMm?, sMax?, originXMm?, originYMm?, air?, cut?, score?, engrave?, powersPct?, speedsMmMin?, squareMm?, gapMm?, passes? (the job, as laser.start), beam? (false, the default: trace the job's bounding box with the beam off, as jogs at the profile's rapid speed; true: with the beam at 1% (M4 S = 1% of $30), which only the desktop app's Laser window can run (armed))} (the machine must be Idle and the box on the bed, as laser.start checks it) → laser.status + {boundsMm, beam, sent, warnings}",
+            "{ids?|id? (the objects to cut, default the selection: any objects, cut along their outlines as laser.gcode cuts them; a single stencil object: its sheet), sheet? (a stencil's sheet, 1-based; needed when it has several), mmPerUnit?, widthMm? (the objects' scale, as laser.gcode), overlapMm?, label? (a stencil's, as modifier.stencilGcode), gcode? (G-code text), path? (a .gcode, .nc, .ngc, .gc, .tap or .txt file), testCard? (card|powerLadder) (at most one of gcode, path and testCard; none: the objects), name? (the job's name), material? (paper|film|card|custom; the saved settings of which material; default the stencil's, else paper), kerfMm?, sMax?, originXMm?, originYMm?, air?, cut?, score?, engrave? ({enabled, speedMmMin, powerPct, passes}: as modifier.stencilGcode; sMax is always the connected machine's $30 when it reports one), powersPct?, speedsMmMin?, squareMm?, gapMm?, passes? (the job, as laser.start), beam? (false, the default: trace the job's bounding box with the beam off, as jogs at the profile's rapid speed; true: with the beam at 1% (M4 S = 1% of $30), which only the desktop app's Laser window can run (armed))} (the machine must be Idle and the box on the bed, as laser.start checks it) → laser.status + {boundsMm, beam, sent, warnings}",
             always,
             frame
         ),
@@ -332,11 +343,11 @@ pub fn specs() -> Vec<CommandSpec> {
             "Start Laser Job",
             [],
             None,
-            "{gcode? (G-code text), path? (a .gcode, .nc, .ngc, .gc, .tap or .txt file), testCard? (card|powerLadder) (exactly one of the three), name? (the job's name; default the file's, else \"G-code\"), material? (paper|film|card; the test card's and the ladder's settings; default paper), kerfMm? (the test card's), sMax?, originXMm?, originYMm?, air?, cut?, score?, engrave? ({enabled, speedMmMin, powerPct, passes}: the test card's and the ladder's settings; sMax is always the connected machine's $30 when it reports one), powersPct?, speedsMmMin?, squareMm?, gapMm?, passes? (the power ladder's)} (only the desktop app's Laser window can start a job (armed, after its safety checklist): from anywhere else it is refused; also refused unless the machine is ready and Idle, $32 = 1, and the job stays on the bed: with the profile's origin at the head (the default), the work offset plus the job's bounds must lie in the machine's travel (its sign convention taken from where the head is; when it can't be told, only what can be is checked, with a warning); with the origin at the machine's, the bounds in 0..bed; G-code that moves in ways that can't be checked against the bed (G53, G28, G30, G92, G10, G55-G59, a relative move from an unknown position) is refused) → laser.status + {started: {name, lines, estimatedSec, boundsMm, warnings}}",
+            "{ids?|id? (the objects to cut, default the selection: any objects, cut along their outlines as laser.gcode cuts them; a single stencil object: its sheet), sheet? (a stencil's sheet, 1-based; needed when it has several), mmPerUnit?, widthMm? (the objects' scale, as laser.gcode), overlapMm?, label? (a stencil's, as modifier.stencilGcode), gcode? (G-code text), path? (a .gcode, .nc, .ngc, .gc, .tap or .txt file), testCard? (card|powerLadder) (at most one of gcode, path and testCard; none: the objects), name? (the job's name), material? (paper|film|card|custom; the saved settings of which material; default the stencil's, else paper), kerfMm?, sMax?, originXMm?, originYMm?, air?, cut?, score?, engrave? ({enabled, speedMmMin, powerPct, passes}: as modifier.stencilGcode; sMax is always the connected machine's $30 when it reports one), powersPct?, speedsMmMin?, squareMm?, gapMm?, passes? (the power ladder's)} (only the desktop app's Laser window can start a job (armed, after its safety checklist): from anywhere else it is refused; also refused unless the machine is ready and Idle, $32 = 1, and the job stays on the bed: with the profile's origin at the head (the default), the work offset plus the job's bounds must lie in the machine's travel (its sign convention taken from where the head is; when it can't be told, only what can be is checked, with a warning); with the origin at the machine's, the bounds in 0..bed; every line of the G-code (given, read or written by Picabia) must pass the laser allow-list: no $ system commands (settings, homing, jogs, resets), no M3 (constant power), no Z or other axes, no tool, plane, unit (G20: export in mm) or coordinate-system changes (G10, G28, G30, G53, G55-G59, G92), only the G-codes G0-G4, G17, G21, G40, G49, G54, G61, G80, G90, G91, G91.1, G94 and the M-codes M2, M4, M5, M8, M9, M30; the refusal names the line) → laser.status + {started: {name, lines, estimatedSec, boundsMm, warnings}}",
             always,
             start
         ),
-        cmd!(query "laser.pause", "Pause Laser", [], None, "{} (feed hold, !: always allowed; nothing happens when not connected) → laser.status", always, pause),
+        cmd!(query "laser.pause", "Pause Laser", [], None, "{} (feed hold, !: always allowed; nothing happens when not connected; an error when the connected link doesn't confirm within a second: it keeps trying) → laser.status", always, pause),
         cmd!(
             query "laser.resume",
             "Resume Laser",
@@ -351,7 +362,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Stop Laser",
             [],
             None,
-            "{} (always allowed, from anywhere: feed hold, then a soft reset once the machine has stopped (at most 0.5 s), then M5; a running job ends stopped; nothing happens when not connected) → laser.status",
+            "{} (always allowed, from anywhere: feed hold, then a soft reset once the machine has stopped (at most 0.5 s), then M5; a running job ends stopped; nothing happens when not connected; an error when the connected link doesn't confirm within a second: it keeps trying) → laser.status",
             always,
             stop
         ),
@@ -580,16 +591,16 @@ fn jog_cancel(s: &mut Session, _p: &Value) -> Result<Value> {
 }
 
 fn pause(s: &mut Session, _p: &Value) -> Result<Value> {
-    // Not connected: nothing to pause, and that's fine.
+    // Not connected: nothing to pause, and that's fine. Unconfirmed: an error (the flag stays up).
     #[cfg(not(target_arch = "wasm32"))]
-    let _ = s.picabia.laser.act(native::Act::Pause);
+    s.picabia.laser.pause_confirmed().map_err(|why| EngineError::Other(format!("laser.pause: {why}")))?;
     Ok(status_json(s))
 }
 
 fn stop(s: &mut Session, _p: &Value) -> Result<Value> {
-    // Not connected: nothing to stop, and that's fine.
+    // Not connected: nothing to stop, and that's fine. Unconfirmed: an error (the flag stays up).
     #[cfg(not(target_arch = "wasm32"))]
-    let _ = s.picabia.laser.act(native::Act::Stop);
+    s.picabia.laser.stop_confirmed().map_err(|why| EngineError::Other(format!("laser.stop: {why}")))?;
     Ok(status_json(s))
 }
 
@@ -739,7 +750,14 @@ fn frame(s: &mut Session, p: &Value) -> Result<Value> {
             }
             lines.push("M5".into());
             s.picabia.laser.start_job(format!("Frame of {} (beam at 1%)", run.name), lines.clone()).map_err(|why| disabled(CMD, why))?;
-            s.picabia.laser.job = Some(JobInfo { source: "frame", estimated_sec: None, bounds: Some(b), warnings: Vec::new() });
+            s.picabia.laser.job = Some(JobInfo {
+                source: "frame",
+                sheet: run.sheet.clone(),
+                layer: run.layer,
+                estimated_sec: None,
+                bounds: Some(b),
+                warnings: Vec::new(),
+            });
             lines
         } else {
             let mut lines = vec!["M5".to_string()];
@@ -769,13 +787,20 @@ fn start(s: &mut Session, p: &Value) -> Result<Value> {
         let mut run: LaserRun = build_run(CMD, s, p)?;
         let placement = check_machine(CMD, s, run.bounds, true)?;
         run.warnings.extend(placement);
-        let lines: Vec<String> = run.text.lines().map(str::to_string).collect();
+        // The lines were cleaned and checked here, before the worker sees them.
+        let lines = std::mem::take(&mut run.lines);
         let count = lines.len();
         s.picabia.laser.start_job(run.name.clone(), lines).map_err(|why| disabled(CMD, why))?;
         let started =
             json!({"name": run.name, "lines": count, "estimatedSec": run.estimated_sec, "boundsMm": rect_json(run.bounds), "warnings": run.warnings});
-        s.picabia.laser.job =
-            Some(JobInfo { source: run.source, estimated_sec: run.estimated_sec, bounds: Some(run.bounds), warnings: run.warnings });
+        s.picabia.laser.job = Some(JobInfo {
+            source: run.source,
+            sheet: run.sheet,
+            layer: run.layer,
+            estimated_sec: run.estimated_sec,
+            bounds: Some(run.bounds),
+            warnings: run.warnings,
+        });
         Ok(status_with(s, json!({"started": started})))
     }
 }

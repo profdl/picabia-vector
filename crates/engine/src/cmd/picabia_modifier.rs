@@ -491,6 +491,7 @@ mod apply;
 mod laser;
 mod laser_design;
 pub mod laser_gcode;
+pub(crate) mod laser_run;
 mod stencil;
 mod targets;
 pub use targets::{check_target, target_choices};

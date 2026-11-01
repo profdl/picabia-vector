@@ -34,16 +34,16 @@ const MAX_DEPTH: usize = 64;
 const MAX_POINTS: usize = 2_000_000;
 
 /// A design ready to cut.
-struct DesignSheet {
-    sheet: LaserSheet,
-    warnings: Vec<String>,
-    mm_per_unit: f64,
+pub(super) struct DesignSheet {
+    pub sheet: LaserSheet,
+    pub warnings: Vec<String>,
+    pub mm_per_unit: f64,
     /// A name for files and jobs.
-    base: String,
+    pub base: String,
 }
 
 /// The single stencil object `p` names, if that is what it names.
-fn single_stencil(s: &Session, p: &Value) -> Option<NodeId> {
+pub(super) fn single_stencil(s: &Session, p: &Value) -> Option<NodeId> {
     let ids = super::super::targets(s, p).ok()?;
     let [id] = ids.as_slice() else { return None };
     let n = s.doc().ok()?.doc.node(*id)?;
@@ -66,7 +66,7 @@ fn scale(cmd: &str, p: &Value, bounds: Rect) -> Result<f64> {
 }
 
 /// The objects `p` names (`ids`, default the selection) as one sheet.
-fn design_sheet(cmd: &str, s: &Session, p: &Value) -> Result<DesignSheet> {
+pub(super) fn design_sheet(cmd: &str, s: &Session, p: &Value) -> Result<DesignSheet> {
     let doc = &s.doc()?.doc;
     let ids = super::super::targets(s, p).map_err(|e| bad(cmd, e.to_string()))?;
     if ids.is_empty() {

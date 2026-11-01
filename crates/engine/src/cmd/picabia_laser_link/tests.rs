@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use kurbo::Rect;
 use serde_json::{Value, json};
 
-use super::{MachineFrame, NOT_ARMED, PortRow, check_placement, gcode_bounds};
+use super::{MachineFrame, NOT_ARMED, PortRow, check_gcode, check_line, check_placement, gcode_bounds};
 use crate::{EngineError, Session};
 
 /// Fast enough to finish a job in well under a second.
@@ -218,7 +218,6 @@ fn the_machine_commands() {
         ("laser.jog", json!({"dx": 1, "feed": 0})),
         ("laser.jog", json!({"dx": 1, "feed": "fast"})),
         ("laser.frame", json!({"beam": "yes"})),
-        ("laser.frame", json!({})),
         ("laser.frame", json!({"gcode": "G0 X1", "testCard": "card"})),
         ("laser.connect", json!({"port": 5})),
         ("laser.connect", json!({"port": ""})),
@@ -236,7 +235,7 @@ fn a_job_runs_to_done_with_the_beam_off_while_travelling() {
     let v = start(&mut s, job(2));
     let started = &v["started"];
     assert_eq!(started["name"], "Squares");
-    assert_eq!(started["lines"], 15);
+    assert_eq!(started["lines"], 14, "the comment line is dropped");
     assert_eq!(started["boundsMm"], json!({"x0": 0.0, "y0": 0.0, "x1": 60.0, "y1": 60.0}));
     assert_eq!(v["armed"], false, "the start used the arm up");
     let v = wait(&mut s, 30.0, "the job to finish", |v| job_state(v) == "done");
@@ -733,4 +732,235 @@ fn gcode_bounds_reads_moves_and_refuses_what_it_cant_check() {
         let e = gcode_bounds(g).unwrap_err();
         assert!(e.contains(why), "{g}: {e}");
     }
+}
+
+/// A document with a black and a white 40 pt square side by side.
+fn two_squares(s: &mut Session) -> (u64, u64) {
+    ex(s, "file.new", json!({"width": 300, "height": 300}));
+    let mut sq = |x: f64, hex: &str| {
+        let id = ex(s, "shape.rectangle", json!({"x": x, "y": 0, "width": 40, "height": 40}))["id"].as_u64().unwrap();
+        ex(s, "paint.setFill", json!({"ids": [id], "color": hex}));
+        id
+    };
+    (sq(0.0, "#000000"), sq(40.0, "#ffffff"))
+}
+
+fn decode_file(r: &Value) -> String {
+    String::from_utf8(vectorcraft_format::base64_decode(r["files"][0]["data"].as_str().unwrap()).unwrap()).unwrap()
+}
+
+#[test]
+fn job_files_are_checked_line_by_line_against_the_laser_allow_list() {
+    for (line, why) in [
+        ("$H", "`$` system commands"),
+        ("$J=G91 X10 F1000", "`$` system commands"),
+        ("$RST=*", "`$` system commands"),
+        ("$32=0", "`$` system commands"),
+        ("M3 S500", "M3 (constant power)"),
+        ("G1 X1 Z-1", "Z moves"),
+        ("G0 Z5", "Z moves"),
+        ("G18", "arc plane"),
+        ("G19 G2 X1 Y1 I1", "arc plane"),
+        ("G20", "G20 (inches)"),
+        ("G28", "can't be checked"),
+        ("G30", "can't be checked"),
+        ("G92 X0 Y0", "can't be checked"),
+        ("G10 L20 P1 X0", "can't be checked"),
+        ("G53 G0 X0", "can't be checked"),
+        ("G55", "isn't allowed"),
+        ("G38.2 X1", "isn't allowed"),
+        ("G93", "isn't allowed"),
+        ("M7", "M7 isn't allowed"),
+        ("M0", "M0 isn't allowed"),
+        ("M6 T1", "isn't allowed"),
+        ("T1", "`T`"),
+        ("G0 A5", "`A`"),
+        ("%", "`%`"),
+        ("G1 X1 S-1", "can't be negative"),
+        ("G1 X1 F0", "more than 0"),
+        ("G1 X1 P5", "G4 dwell"),
+    ] {
+        let e = check_line(&vectorcraft_grbl::clean_line(line).unwrap()).unwrap_err();
+        assert!(e.contains(why), "{line}: {e}");
+    }
+    for line in [
+        "G21",
+        "G90",
+        "G91",
+        "G91.1",
+        "G17",
+        "G94",
+        "G54",
+        "M5",
+        "M4 S100",
+        "M8",
+        "M9",
+        "M2",
+        "M30",
+        "G4 P0.5",
+        "N10 G1 X1 Y2 F600 S10",
+        "G2 X1 Y1 I1 J0",
+        "G3 X1 Y1 R5",
+    ] {
+        assert!(check_line(line).is_ok(), "{line}");
+    }
+    // The refusal names the line; nothing starts, even armed.
+    let mut s = connected(fast());
+    for (text, why) in [
+        ("G21 G90\nG0 X10 Y10\n$H\nM5\n", "line 3"),
+        ("G21 G90\nM3 S1000\nG1 X10 Y10 F600\n", "line 2 (`M3 S1000`)"),
+        ("G21 G90\nG1 X10 Y10 Z-2 F600\n", "Z moves"),
+        ("G20 G90\nG0 X1 Y1\n", "G20"),
+        ("G21 G90\nG0 X1 Y1 ; fine\nG0 X1 Y1 !\n", "realtime"),
+        ("; nothing\n(at all)\n", "no lines"),
+    ] {
+        let why2 = disabled(s.laser_execute_armed("laser.start", &json!({"gcode": text})));
+        assert!(why2.contains(why), "{text:?}: {why2}");
+        assert!(disabled(s.execute("laser.frame", &json!({"gcode": text}))).contains(why), "{text:?}");
+    }
+    assert_eq!(st(&mut s)["job"], Value::Null);
+    assert_eq!(st(&mut s)["simStats"]["gcodeLines"], 0, "nothing was sent");
+    // Picabia's own exports pass, every kind.
+    let mut s = Session::new();
+    let (a, b) = two_squares(&mut s);
+    let design = decode_file(&ex(&mut s, "laser.gcode", json!({"ids": [a], "data": true})));
+    check_gcode(&design).unwrap();
+    let card = decode_file(&ex(&mut s, "modifier.stencilTestCard", json!({"format": "gcode", "data": true, "material": "film"})));
+    check_gcode(&card).unwrap();
+    let ladder = decode_file(&ex(&mut s, "modifier.stencilTestCard", json!({"kind": "powerLadder", "data": true})));
+    check_gcode(&ladder).unwrap();
+    let g = ex(&mut s, "modifier.stencilFromSelection", json!({"ids": [a, b], "props": {"widthMm": 80, "hoshi": false}}))["id"].as_u64().unwrap();
+    ex(&mut s, "laser.profile", json!({"set": {"air": true}}));
+    let stencil = decode_file(&ex(&mut s, "modifier.stencilGcode", json!({"id": g, "data": true})));
+    assert!(stencil.contains("M8"), "air assist on");
+    check_gcode(&stencil).unwrap();
+}
+
+#[test]
+fn gcode_bounds_applies_a_lines_modal_words_before_its_coordinates() {
+    let b = gcode_bounds("X1 Y2 G20 G0\n").unwrap();
+    assert_eq!((b.x1, b.y1), (25.4, 50.8), "G20 later on the line still applies");
+    let b = gcode_bounds("G90 G0 X10 Y10\nX5 Y-5 G91\n").unwrap();
+    assert_eq!((b.x1, b.y0), (15.0, 5.0), "G91 later on the line still applies");
+    let b = gcode_bounds("G90 G0 X0 Y0\nX20 Y0 I10 J0 G2\n").unwrap();
+    assert_eq!((b.x0, b.y0, b.x1, b.y1), (0.0, -10.0, 20.0, 10.0), "the arc's circle, G2 after its words");
+    let b = gcode_bounds("G90 G0 X0 Y0\nG3 X10 Y0 R5\n").unwrap();
+    assert_eq!((b.x0, b.y0, b.x1, b.y1), (-10.0, -10.0, 10.0, 10.0), "R arcs: within 2R of the start");
+}
+
+#[test]
+fn any_objects_and_stencils_can_be_cut() {
+    let mut s = connected(fast());
+    let (a, b) = two_squares(&mut s);
+    // An object (the selection or `ids`), at a point a unit.
+    let v = start(&mut s, json!({"ids": [a]}));
+    let mm = 40.0 * 25.4 / 72.0;
+    let bounds = &v["started"]["boundsMm"];
+    assert!((bounds["x1"].as_f64().unwrap() - mm).abs() < 0.01 && (bounds["y1"].as_f64().unwrap() - mm).abs() < 0.01, "{v}");
+    let v = wait(&mut s, 20.0, "done", |v| job_state(v) == "done");
+    assert_eq!(v["job"]["source"], "design");
+    assert_eq!(v["job"]["layer"], a);
+    assert_eq!(v["simStats"]["beamOnTravelMm"], 0.0);
+    assert!(v["simStats"]["burnMm"].as_f64().unwrap() > 4.0 * mm, "{v}");
+    ex(&mut s, "laser.frame", json!({"ids": [a], "widthMm": 100}));
+    let v = wait(&mut s, 20.0, "the frame", |v| v["state"] == "Idle" && v["pos"]["x"] == 0.0 && v["simStats"]["movedMm"].as_f64().unwrap() > 400.0);
+    assert!(v["pos"]["y"] == 0.0, "{v}");
+    // A stencil object's sheet.
+    let g = ex(&mut s, "modifier.stencilFromSelection", json!({"ids": [a, b], "props": {"widthMm": 80, "hoshi": false}}))["id"].as_u64().unwrap();
+    let v = start(&mut s, json!({"id": g}));
+    assert!(v["started"]["lines"].as_u64().unwrap() > 10, "{v}");
+    let v = wait(&mut s, 30.0, "the stencil", |v| job_state(v) == "done");
+    assert_eq!((v["job"]["source"].as_str(), v["job"]["sheet"].as_str()), (Some("stencil"), Some("1 of 1")));
+    assert_eq!(v["job"]["layer"], g);
+    assert_eq!(v["simStats"]["beamOnTravelMm"], 0.0);
+    // Junk for objects.
+    let e = s.laser_execute_armed("laser.start", &json!({"id": g, "sheet": 9})).unwrap_err();
+    assert!(matches!(&e, EngineError::BadParams { msg, .. } if msg.contains("sheet")), "{e}");
+    assert!(s.laser_execute_armed("laser.start", &json!({"ids": [a], "sheet": 1})).is_err());
+    assert!(s.laser_execute_armed("laser.start", &json!({"gcode": squares(1), "ids": [a]})).is_err());
+    ex(&mut s, "select.set", json!({"ids": []}));
+    assert!(s.laser_execute_armed("laser.start", &json!({})).is_err(), "nothing selected");
+}
+
+#[test]
+fn the_test_card_uses_the_materials_saved_settings() {
+    let mut s = connected(fast());
+    let quick = start(&mut s, json!({"testCard": "card"}))["started"]["estimatedSec"].as_f64().unwrap();
+    wait(&mut s, 30.0, "the card", |v| job_state(v) == "done");
+    ex(&mut s, "laser.profile", json!({"set": {"materials": {"paper": {"cut": {"speedMmMin": 30, "passes": 1}}}}}));
+    let slow = start(&mut s, json!({"testCard": "card"}))["started"]["estimatedSec"].as_f64().unwrap();
+    assert!(slow > quick * 2.0, "the saved slower cut is used: {quick} s then {slow} s");
+    ex(&mut s, "laser.stop", json!({}));
+}
+
+#[test]
+fn a_start_seen_after_its_deadline_never_runs() {
+    let mut ctrl = vectorcraft_grbl::Controller::new();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let late = super::native::Msg::Start {
+        name: "late".into(),
+        lines: vec!["G0 X1".into()],
+        deadline: Instant::now() - Duration::from_millis(1),
+        reply: tx,
+    };
+    let (_, r) = super::native::handle(&mut ctrl, late).unwrap();
+    assert!(r.unwrap_err().contains("too late"));
+    assert!(ctrl.job().is_none(), "dropped, never started");
+    drop(rx);
+}
+
+#[test]
+fn a_stop_handle_stops_from_another_thread() {
+    let mut s = connected(slow());
+    assert!(Session::new().laser_stop_handle().is_none(), "nothing to stop when not connected");
+    let h = s.laser_stop_handle().unwrap();
+    start(&mut s, job(20));
+    wait(&mut s, 10.0, "burning", |v| v["simStats"]["burnMm"].as_f64().unwrap() > 1.0);
+    let before = h.stops_done();
+    std::thread::spawn(move || h.stop()).join().unwrap();
+    let v = wait(&mut s, 5.0, "the stop", |v| job_state(v) == "stopped" && v["stopping"] == false && v["state"] == "Idle");
+    assert!(v["simStats"]["resets"].as_u64().unwrap() >= 1, "{v}");
+    assert!(s.laser_stop_handle().unwrap().stops_done() > before);
+    // laser.stop and laser.pause report the worker's confirmation.
+    start(&mut s, job(20));
+    let v = ex(&mut s, "laser.pause", json!({}));
+    assert_eq!(job_state(&v), "paused");
+    let v = ex(&mut s, "laser.stop", json!({}));
+    assert_eq!(job_state(&v), "stopped");
+}
+
+#[test]
+fn a_write_timeout_mid_job_holds_and_stops_but_keeps_the_link() {
+    let mut s = connected(json!({"speedFactor": 1000, "timeScale": 100, "writeTimeoutAtLine": 20}));
+    start(&mut s, job(20));
+    let v = wait(&mut s, 20.0, "the stopped job", |v| {
+        job_state(v) == "stopped" && v["stopping"] == false && (v["state"] == "Alarm" || v["state"] == "Idle")
+    });
+    assert_eq!(v["connected"], true, "a timeout isn't a pulled cable: {v}");
+    assert!(v["lastError"].as_str().unwrap().contains("timed out"), "{v}");
+    assert!(v["simStats"]["resets"].as_u64().unwrap() >= 1, "the hold and reset went out: {v}");
+    assert_eq!(v["simStats"]["beamOnTravelMm"], 0.0);
+    // A reset while the head still moved locks GRBL (alarm 3) until it is unlocked or homed.
+    if v["state"] == "Alarm" {
+        assert_eq!(v["alarm"]["code"], 3, "{v}");
+        ex(&mut s, "laser.unlock", json!({}));
+        wait(&mut s, 5.0, "unlocked", |v| v["state"] == "Idle");
+    }
+    // The link still works.
+    start(&mut s, job(1));
+    wait(&mut s, 20.0, "the next job", |v| job_state(v) == "done");
+}
+
+#[test]
+fn a_worker_panic_closes_the_link_and_fails_the_job() {
+    let mut s = connected(json!({"speedFactor": 1000, "timeScale": 100, "panicAtLine": 15}));
+    start(&mut s, job(20));
+    let v = wait(&mut s, 20.0, "the failed link", |v| v["connected"] == false);
+    assert_eq!(job_state(&v), "failed", "{v}");
+    assert!(v["lastError"].as_str().unwrap().contains("internal error"), "{v}");
+    assert!(disabled(s.execute("laser.home", &json!({}))).contains("isn't connected"));
+    ex(&mut s, "laser.stop", json!({}));
+    // Connecting again works.
+    ex(&mut s, "laser.connect", json!({"port": "sim", "sim": fast()}));
+    wait(&mut s, 10.0, "ready again", |v| v["phase"] == "ready");
 }
