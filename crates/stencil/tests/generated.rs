@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use vectorcraft_color::{Color, Paint as Fill};
 use vectorcraft_doc::appearance::{AppearanceItem, FillLayer};
-use vectorcraft_doc::{Appearance, Node, NodeId};
+use vectorcraft_doc::{Appearance, Document, Node, NodeId};
 use vectorcraft_geom::kurbo::{BezPath, Point, Rect, Shape};
 use vectorcraft_modifiers::{Stencil, StencilTieMode};
 use vectorcraft_stencil::ops::split_subpaths;
@@ -82,7 +82,7 @@ fn traced() -> Vec<Paint> {
         })
         .collect();
     let group = Node::group(NodeId(1), kids);
-    let g = gather(&group, &[], None);
+    let g = gather(&Document::new(612.0, 792.0), &group, &[], None);
     assert!(g.warnings.is_empty(), "{:?}", g.warnings);
     assert_eq!(g.paints.len(), res.paths.len());
     g.paints

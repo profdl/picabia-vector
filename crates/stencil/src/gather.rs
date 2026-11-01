@@ -14,8 +14,10 @@
 //! - objects with a Picabia modifier stack of their own, at each of their copies.
 //!
 //! What isn't, said once each in [`Gathered::warnings`]: images (trace them first), patterns,
-//! symbol instances, effects; gradients cut as their mean colour; dashes,
-//! width profiles, brushes and arrowheads are cut as plain strokes. Hidden objects, guides and
+//! symbol instances, effects; opacity masks (the masked art is cut whole); gradients cut as their
+//! mean colour; dashes, width profiles, brushes and arrowheads are cut as plain strokes (weights
+//! capped at [`MAX_STROKE_WIDTH`]). A clip group's clipping path cuts as the renderer paints it:
+//! its fills behind the clipped art (clipped), its strokes over it (not clipped). Hidden objects, guides and
 //! template layers are left out silently, as is an Image Trace object's hidden source image.
 //!
 //! An Image Trace result (a group of filled paths and compound paths) gathers as its paths, which
@@ -24,7 +26,7 @@
 use vectorcraft_color::{Color, Paint as Fill};
 use vectorcraft_doc::appearance::{AppearanceItem, LineCap, LineJoin, StrokeAlign, StrokeLayer};
 use vectorcraft_doc::live::{Outliner, expand_deep, is_live};
-use vectorcraft_doc::{Node, NodeId, NodeKind};
+use vectorcraft_doc::{Document, Node, NodeId, NodeKind};
 use vectorcraft_geom::kurbo::{Affine, BezPath};
 use vectorcraft_geom::{FillRule, PathData};
 
@@ -35,6 +37,9 @@ use crate::{MAX_PAINTS, Paint};
 pub const MAX_GATHER_DEPTH: usize = 64;
 /// The most object visits (each copy counts once) one gather makes.
 pub const MAX_GATHER_VISITS: usize = 200_000;
+/// The widest stroke outlined, points (half of it is [`MAX_OFFSET_DISTANCE`](crate::MAX_OFFSET_DISTANCE));
+/// wider weights are clamped.
+pub const MAX_STROKE_WIDTH: f64 = 1.0e6;
 
 /// The painted outlines of a stencil's design.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -61,6 +66,7 @@ pub struct Source {
 }
 
 struct G<'a> {
+    doc: &'a Document,
     text: Outliner<'a>,
     out: Gathered,
     visits: usize,
@@ -70,9 +76,10 @@ struct G<'a> {
 /// The painted outlines of `node`'s design, placed by each of `copies` (maps of document space:
 /// the copies the modifier rows above a stencil make; empty: the object as it is), bottom first.
 /// The object's own modifier stack is not applied (it is the stencil's); stacks on objects inside
-/// it are. `text` outlines type (`None`: type is left out, with a warning).
-pub fn gather(node: &Node, copies: &[Affine], text: Outliner) -> Gathered {
-    let mut g = G { text, out: Gathered::default(), visits: 0, full: false };
+/// it are, with their copy-to-shape targets resolved in `doc` (the document `node` is in).
+/// `text` outlines type (`None`: type is left out, with a warning).
+pub fn gather<'a>(doc: &'a Document, node: &Node, copies: &[Affine], text: Outliner<'a>) -> Gathered {
+    let mut g = G { doc, text, out: Gathered::default(), visits: 0, full: false };
     if copies.is_empty() {
         g.once(node, Affine::IDENTITY, None, 0);
     } else {
@@ -95,7 +102,10 @@ impl G<'_> {
         if !n.visible || n.opacity <= 0.0 || n.is_template() || self.full {
             return;
         }
-        match vectorcraft_modifiers::node_instances(n) {
+        if n.extras().mask.is_some() {
+            self.warn("opacity masks aren't cut; the masked art is cut whole");
+        }
+        match vectorcraft_modifiers::node_instances_in_doc(self.doc, n) {
             Some(out) if !out.instances.is_empty() => {
                 if out.stencil.is_some() {
                     self.warn("a stencil inside the stencil is cut from its design");
@@ -160,7 +170,16 @@ impl G<'_> {
                 };
                 // A clipping path with no outline shows nothing.
                 let Some(inner) = inner else { return };
+                // As the renderer paints it (`Node::clip_paint`): the clipping path's fills behind
+                // the clipped art, inside the clip; its strokes over it, not clipped by it.
+                let paint = if first.visible && first.opacity > 0.0 { first.clip_paint() } else { Default::default() };
+                if let Some(fill) = &paint.fill {
+                    self.once(fill, xf, Some(&inner), depth + 1);
+                }
                 self.children(rest, xf, Some(&inner), depth);
+                if let Some(stroke) = &paint.stroke {
+                    self.once(stroke, xf, clip, depth + 1);
+                }
             }
             NodeKind::Group { .. } | NodeKind::Layer { .. } => {
                 self.group_paint(n);
@@ -241,9 +260,11 @@ impl G<'_> {
         }
         let mut spine = bp.clone();
         spine.apply_affine(xf);
-        // A stroke's weight scales with the copy (as the copy draws it).
+        // A stroke's weight scales with the copy (as the copy draws it). Capped before and after
+        // (a weight near 1e200 from a file would keep the stroker subdividing arcs).
         let scale = xf.determinant().abs().sqrt();
-        let width = s.width * if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+        let width = s.width.min(MAX_STROKE_WIDTH) * if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+        let width = width.min(MAX_STROKE_WIDTH);
         let align = if closed { s.align } else { StrokeAlign::Center };
         let full = if align == StrokeAlign::Center { width } else { 2.0 * width };
         let cap = match s.cap {
