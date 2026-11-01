@@ -109,6 +109,15 @@ pub fn specs() -> Vec<CommandSpec> {
             has_selection,
             remove_all
         ),
+        cmd!(
+            "modifier.apply",
+            "Apply Modifiers",
+            [],
+            None,
+            "{ids?|id?, upTo?: index (inclusive): bake only the rows down to it; the rows after it move onto the new group and stay live} replace each object by a group of real objects, one per modifier copy (named `Name 1…n` when the object has a name), in its place, as one undo step; a stencil row stays live on the group; objects whose stack makes no copies are left alone → {ids: the groups (selected), applied: [{id, group, copies}]}",
+            has_selection,
+            apply::apply
+        ),
     ]
 }
 
@@ -368,5 +377,8 @@ fn remove_all(s: &mut Session, p: &Value) -> Result<Value> {
     ok()
 }
 
+mod apply;
+#[cfg(test)]
+mod apply_tests;
 #[cfg(test)]
 mod tests;

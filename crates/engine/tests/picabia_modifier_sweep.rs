@@ -78,6 +78,8 @@ fn modifier_commands_undo_exactly() {
         ("modifier.toggle", json!({"index": 1})),
         ("modifier.paste", json!({"replace": true})),
         ("modifier.remove_all", json!({})),
+        ("modifier.apply", json!({})),
+        ("modifier.apply", json!({"upTo": 0})),
     ];
     for (id, p) in cases {
         let mut s = stacked(Fixture::Multi);
