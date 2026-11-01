@@ -23,6 +23,8 @@ pub fn object_items() -> Vec<Item> {
         add("Resample", "resample"),
         add("Trim", "trim"),
         add("Tidy", "tidy"),
+        add("Deform", "deform"),
+        add("Displace", "displace"),
         Item::Sep,
         Item::Cmd("Apply Modifiers", "modifier.apply", serde_json::Value::Null),
         Item::Cmd("Remove All Modifiers", "modifier.remove_all", serde_json::Value::Null),

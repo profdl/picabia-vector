@@ -489,13 +489,15 @@ fn make(doc: &Document, n: &Node, out: &Output) -> (Node, Vec<String>) {
     let copies = out
         .instances
         .iter()
-        .filter(|i| is_finite(i.transform))
-        .map(|i| {
+        .enumerate()
+        .filter(|(_, i)| is_finite(i.transform))
+        .map(|(k, i)| {
             let mut c = object.clone();
             if i.transform != Affine::IDENTITY {
                 c.transform(i.transform, sc);
             }
-            shaper.copy(&mut c);
+            // Which copy: a deform and a displace ramp across them (a deform bends each in its own frame).
+            shaper.copy_at(&mut c, k);
             Arc::new(c)
         })
         .collect();

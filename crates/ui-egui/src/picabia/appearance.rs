@@ -55,6 +55,8 @@ pub const KINDS: &[(&str, &str)] = &[
     ("resample", "Resample"),
     ("trim", "Trim"),
     ("tidy", "Tidy"),
+    ("deform", "Deform"),
+    ("displace", "Displace"),
 ];
 
 /// How a field is edited.
@@ -68,6 +70,8 @@ enum F {
     Pct(f64, f64),
     /// A whole number within `min..=max`.
     Int(f64, f64),
+    /// A plain number within `min..=max`, two decimals.
+    Num(f64, f64),
     Bool,
     /// One of `(value, label)`.
     Choice(&'static [(&'static str, &'static str)]),
@@ -108,6 +112,12 @@ const SORTS: &[(&str, &str)] = &[
     ("y", "Y position"),
     ("random", "Random"),
 ];
+const DEFORM_MODES: &[(&str, &str)] = &[("taper", "Taper"), ("twist", "Twist"), ("bend", "Bend"), ("shear", "Shear"), ("bulge", "Bulge/Pinch")];
+const DEFORM_AXES: &[(&str, &str)] = &[("horizontal", "Horizontal"), ("vertical", "Vertical")];
+const FALLOFFS: &[(&str, &str)] = &[("linear", "Linear"), ("easeIn", "Ease in"), ("easeOut", "Ease out"), ("smooth", "Smooth")];
+const SHEAR_ORIGINS: &[(&str, &str)] =
+    &[("center", "Centre"), ("topLeft", "Top left"), ("bottomLeft", "Bottom left"), ("topRight", "Top right"), ("bottomRight", "Bottom right")];
+const DISPLACE_MODES: &[(&str, &str)] = &[("spatial", "Spatial"), ("radial", "Radial")];
 /// A fraction of a path's length, shown as a percentage.
 const FRACTION: F = F::Pct(0.0, 1.0);
 
@@ -189,7 +199,55 @@ fn fields(kind: &str) -> &'static [(&'static str, &'static str, F)] {
             ("reverse", "Reverse", F::Bool),
             ("seed", "Seed", F::Int(0.0, 999_999.0)),
         ],
+        "deform" => &[
+            ("mode", "Mode", F::Choice(DEFORM_MODES)),
+            ("axis", "Axis", F::Choice(DEFORM_AXES)),
+            ("falloff", "Falloff", F::Choice(FALLOFFS)),
+            ("startScale", "Start scale", F::Pct(0.1, 3.0)),
+            ("endScale", "End scale", F::Pct(0.1, 3.0)),
+            ("angle", "Angle", F::Deg(-720.0, 720.0)),
+            ("bendAngle", "Angle", F::Deg(-360.0, 360.0)),
+            ("bendPoint", "Bend point", FRACTION),
+            ("shearX", "Shear X", F::Pct(-2.0, 2.0)),
+            ("shearY", "Shear Y", F::Pct(-2.0, 2.0)),
+            ("origin", "Origin", F::Choice(SHEAR_ORIGINS)),
+            ("strength", "Strength", F::Pct(-3.0, 3.0)),
+            ("radius", "Radius", F::Pct(0.01, 2.0)),
+            ("progressive", "Ramp copies", F::Bool),
+            ("progressiveAmount", "Ramp amount", FRACTION),
+            ("progressiveReverse", "Ramp reversed", F::Bool),
+        ],
+        // tlprocedural's Noise panel: its ranges, fields shown by mode and by the ramp (labelled
+        // as Deform's).
+        "displace" => &[
+            ("mode", "Mode", F::Choice(DISPLACE_MODES)),
+            ("amplitude", "Amplitude", F::Len(0.0, 100.0)),
+            ("scale", "Scale", F::Num(0.01, 1.0)),
+            ("octaves", "Octaves", F::Int(1.0, 6.0)),
+            ("rippleCount", "Ripple count", F::Int(2.0, 12.0)),
+            ("seed", "Seed", F::Int(0.0, 999_999.0)),
+            ("progressive", "Ramp copies", F::Bool),
+            ("progressiveAmount", "Ramp amount", FRACTION),
+            ("progressiveReverse", "Ramp reversed", F::Bool),
+        ],
         _ => &[],
+    }
+}
+
+/// Whether a deform in `d`'s mode uses field `key` (tlprocedural's fields per deformer; the ramp's
+/// amount and direction only with the ramp on).
+fn deform_applies(d: &vectorcraft_modifiers::Deform, key: &str) -> bool {
+    use vectorcraft_modifiers::DeformMode::{Bend, Bulge, Shear, Taper, Twist};
+    match key {
+        "axis" => matches!(d.mode, Taper | Twist | Bend),
+        "falloff" => matches!(d.mode, Taper | Twist | Bulge),
+        "startScale" | "endScale" => d.mode == Taper,
+        "angle" => d.mode == Twist,
+        "bendAngle" | "bendPoint" => d.mode == Bend,
+        "shearX" | "shearY" | "origin" => d.mode == Shear,
+        "strength" | "radius" => d.mode == Bulge,
+        "progressiveAmount" | "progressiveReverse" => d.progressive,
+        _ => true,
     }
 }
 
@@ -216,6 +274,16 @@ fn applies(m: &Modifier, key: &str) -> bool {
             "seed" => t.sort == SortBy::Random,
             _ => true,
         },
+        ModifierKind::Deform(d) => deform_applies(d, key),
+        ModifierKind::Displace(d) => {
+            let radial = d.mode == vectorcraft_modifiers::DisplaceMode::Radial;
+            match key {
+                "scale" | "octaves" => !radial,
+                "rippleCount" => radial,
+                "progressiveAmount" | "progressiveReverse" => d.progressive,
+                _ => true,
+            }
+        }
         _ => true,
     }
 }
@@ -567,6 +635,7 @@ fn editor(app: &mut VectorcraftApp, ui: &mut Ui, doc: &Document, ids: &[NodeId],
                             widgets::plain_field(ui, fid, x * 100.0, "%", 1, 70.0).and_then(|n| clamped(n / 100.0, lo, hi)).map(|n| json!(n))
                         }
                         F::Int(lo, hi) => widgets::plain_field(ui, fid, x, "", 0, 70.0).and_then(|n| clamped(n.round(), lo, hi)).map(|n| json!(n)),
+                        F::Num(lo, hi) => widgets::plain_field(ui, fid, x, "", 2, 70.0).and_then(|n| clamped(n, lo, hi)).map(|n| json!(n)),
                         F::Bool => {
                             let b = v.as_bool().unwrap_or(false);
                             widgets::check_box(ui, tl!(label), b, true).then(|| json!(!b))
