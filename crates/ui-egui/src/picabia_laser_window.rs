@@ -40,20 +40,44 @@ const COLUMN: f32 = 372.0;
 const GUTTER: f32 = 24.0;
 /// The window's content width.
 const WIDTH: f32 = COLUMN * 2.0 + GUTTER + 1.0;
-/// The environment variable that keeps real laser ports off in the desktop app (`0`, `off`,
-/// `false` or `no`): only the simulator then. Agents and screenshots run the app with it.
+/// The environment variable that turns real laser ports off (`0`, `off`, `false`, `no`: only the
+/// simulator) or on under automation (`1`, `on`, `true`, `yes`). Agents and screenshots run the app
+/// with `0`.
 pub const HARDWARE_ENV: &str = "PICABIA_LASER_HARDWARE";
 
-/// Whether the desktop app turns real laser ports on (seam in the app's `main`): yes, unless
-/// [`HARDWARE_ENV`] says no. The Laser window, with its always-visible Stop and Shift+Esc, is what
-/// makes them safe to offer.
-pub fn hardware_allowed() -> bool {
-    hardware_allowed_by(std::env::var(HARDWARE_ENV).ok().as_deref())
+/// Whether the desktop app turns real laser ports on (seam in the app's `main`). The Laser window,
+/// with its always-visible Stop and Shift+Esc, is what makes them safe to offer. Off when
+/// [`HARDWARE_ENV`] says no, and off whenever the app answers a control channel (`controlled`:
+/// `--control`, which agents and MCP drive) unless [`HARDWARE_ENV`] says yes explicitly.
+pub fn hardware_allowed(controlled: bool) -> bool {
+    hardware_allowed_by(std::env::var(HARDWARE_ENV).ok().as_deref(), controlled)
 }
 
 /// [`hardware_allowed`] for the variable's value `v`.
-pub fn hardware_allowed_by(v: Option<&str>) -> bool {
-    !v.map(|v| v.trim().to_ascii_lowercase()).is_some_and(|v| matches!(v.as_str(), "0" | "off" | "false" | "no"))
+pub fn hardware_allowed_by(v: Option<&str>, controlled: bool) -> bool {
+    match v.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+        Some("0" | "off" | "false" | "no") => false,
+        Some("1" | "on" | "true" | "yes") => true,
+        _ => !controlled,
+    }
+}
+
+/// Why a file dialog doesn't open while the laser works.
+pub const STOP_FIRST: &str = "Stop or finish the laser job first: a file dialog would cover the Stop button";
+
+/// Whether a file dialog must not open now: the laser is working (a job, a jog, homing, a frame),
+/// and a native file dialog would hold the window, its Stop button and Shift+Esc (seam in
+/// `picks::ask`, which every file dialog goes through). Says so in the status bar.
+pub fn refuse_file_dialog(app: &mut VectorcraftApp) -> bool {
+    if !link_open(app) {
+        return false;
+    }
+    let st = Status::from_json(&vectorcraft_engine::cmd::picabia_laser_link::status_json(&app.session));
+    if st.stoppable() {
+        app.status(tl!(STOP_FIRST));
+        return true;
+    }
+    false
 }
 
 /// The laser link is open (connected or connecting).
@@ -86,6 +110,8 @@ pub struct LaserPanel {
     pub checklist: Option<Checklist>,
     pub show_profile: bool,
     pub show_log: bool,
+    /// `laser.profile`'s reply while the profile section is open (asked again after a change).
+    profile: Option<Value>,
     /// The material the profile's table shows.
     pub profile_material: String,
     /// What the last action has to say (unlocking without homing, a frame's placement).
@@ -105,6 +131,7 @@ impl Default for LaserPanel {
             checklist: None,
             show_profile: false,
             show_log: false,
+            profile: None,
             profile_material: "paper".into(),
             notice: None,
         }
@@ -196,8 +223,10 @@ pub fn show(app: &mut VectorcraftApp, ctx: &Context) {
     let asked = std::mem::take(&mut app.picabia.laser).open;
     panel.open = open || asked;
     app.picabia.laser = panel;
+    // Where this frame's input came from: motion and arming on a real machine are a person's only.
+    let automated = run::automated_frame(app, ctx);
     for a in actions {
-        act(app, a, &st);
+        act(app, a, &st, automated);
     }
 }
 
@@ -248,10 +277,12 @@ fn machine_column(app: &mut VectorcraftApp, ui: &mut Ui, panel: &mut LaserPanel,
         panel.show_profile = !panel.show_profile;
     }
     if panel.show_profile {
-        let profile = app.session.execute("laser.profile", &json!({})).unwrap_or(Value::Null);
+        let profile = panel.profile.get_or_insert_with(|| app.session.execute("laser.profile", &json!({})).unwrap_or(Value::Null)).clone();
         if let Some(set) = profile::rows(ui, &profile, st, &mut panel.profile_material) {
             actions.push(Action::Profile(set));
         }
+    } else {
+        panel.profile = None;
     }
     if widgets::section_toggle(ui, "Log", panel.show_log) {
         panel.show_log = !panel.show_log;
@@ -271,7 +302,10 @@ fn job_column(app: &mut VectorcraftApp, ui: &mut Ui, panel: &mut LaserPanel, st:
     if std::mem::take(&mut panel.job.want_file) {
         actions.push(Action::OpenFile);
     }
-    job::refresh(app, ui.ctx(), &mut panel.job);
+    // Nothing changes under a running job: no dry runs meanwhile.
+    if !st.job_active() {
+        job::refresh(app, ui.ctx(), &mut panel.job);
+    }
     ui.add_space(4.0);
     job::summary(ui, &panel.job);
     ui.add_space(8.0);
@@ -498,6 +532,10 @@ fn jog(ui: &mut Ui, panel: &mut LaserPanel, st: &Status, actions: &mut Vec<Actio
         });
     });
     crate::picabia_ui::note(ui, tl!("Jog to the sheet's bottom-left corner, Set origin, Frame, then Start."));
+    crate::picabia_ui::note(
+        ui,
+        tl!("While a menu of the menu bar is open the app can't react, Shift+Esc and Stop included: use the machine's emergency stop."),
+    );
 }
 
 /// Frame, Start…, and why Start can't run when it can't.
@@ -567,7 +605,7 @@ fn warnings_of(r: &Result<Value, String>) -> Option<String> {
 }
 
 /// Run what the window asked for.
-fn act(app: &mut VectorcraftApp, a: Action, st: &Status) {
+fn act(app: &mut VectorcraftApp, a: Action, st: &Status, automated: bool) {
     let empty = json!({});
     match a {
         Action::RefreshPorts => app.picabia.laser.ports_loaded = false,
@@ -580,10 +618,10 @@ fn act(app: &mut VectorcraftApp, a: Action, st: &Status) {
         }
         Action::Home => {
             app.picabia.laser.notice = None;
-            let _ = app.run("laser.home", empty);
+            let _ = run::as_person(app, automated, "laser.home", empty);
         }
         Action::Unlock => {
-            let r = app.run("laser.unlock", empty);
+            let r = run::as_person(app, automated, "laser.unlock", empty);
             app.picabia.laser.notice = r.ok().and_then(|r| r.get("warning").and_then(Value::as_str).map(str::to_string));
         }
         Action::Jog(dx, dy) => {
@@ -597,20 +635,25 @@ fn act(app: &mut VectorcraftApp, a: Action, st: &Status) {
             if let Some(f) = app.picabia.laser.feed {
                 p["feed"] = json!(f);
             }
-            let _ = app.run("laser.jog", p);
+            let _ = run::as_person(app, automated, "laser.jog", p);
         }
         Action::JogCancel => {
             let _ = app.run("laser.jogCancel", empty);
         }
         Action::SetOrigin => {
             app.picabia.laser.notice = None;
-            let _ = app.run("laser.setOrigin", empty);
+            let _ = run::as_person(app, automated, "laser.setOrigin", empty);
         }
         Action::Frame(p) => {
-            let r = app.run("laser.frame", p);
+            let r = run::as_person(app, automated, "laser.frame", p);
             app.picabia.laser.notice = warnings_of(&r);
         }
-        Action::Start(p) => app.picabia.laser.checklist = Some(Checklist::new(Confirm::Start, p)),
+        Action::Start(p) => {
+            let job = &app.picabia.laser.job;
+            let mut list = Checklist::new(Confirm::Start, job.start_params(p));
+            list.summary = job.checklist_lines(&job::selection_name(app).unwrap_or_default());
+            app.picabia.laser.checklist = Some(list);
+        }
         Action::Pause => {
             let _ = app.run("laser.pause", empty);
         }
@@ -623,11 +666,16 @@ fn act(app: &mut VectorcraftApp, a: Action, st: &Status) {
             }
         }
         Action::Stop => run::stop_now(app),
-        Action::Profile(set) => profile::write(app, set),
+        Action::Profile(set) => {
+            profile::write(app, set);
+            app.picabia.laser.profile = None;
+        }
         Action::Export => {
             let ids: Vec<u64> = job::selection(app).iter().map(|id| id.0).collect();
             let _ = app.run("laser.gcode", json!({"ids": ids}));
         }
+        // A file dialog would hold the window, and its Stop, while it is open.
+        Action::OpenFile if st.stoppable() => app.status(tl!(STOP_FIRST)),
         Action::OpenFile => crate::picks::button(app, |app| {
             let pick = crate::FilePick {
                 name: String::new(),

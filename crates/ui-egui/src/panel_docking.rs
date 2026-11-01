@@ -1255,6 +1255,7 @@ impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
         let floating = ui.ctx().viewport_id() != egui::ViewportId::ROOT;
         if floating {
             crate::canvas::release_art_in_window(self.app, ui.ctx());
+            crate::picabia_laser_window::stop_shortcut(self.app, ui.ctx()); // PICABIA: Shift+Esc in a floating panel's own window
         }
         let field_had_keyboard = floating && ui.memory(|m| m.focused().is_some());
         let t = crate::theme::Tokens::get(ui.ctx());

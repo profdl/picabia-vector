@@ -486,9 +486,9 @@ fn arming_is_refused_from_every_channel_but_the_desktop_window() {
 }
 
 /// The one way to arm, [`Session::laser_execute_armed`], is called only by the engine's own laser
-/// code and its tests, and by the desktop app's Laser window when it lands
-/// (`crates/ui-egui/src/picabia_laser_panel*`): never by the control channel, MCP, the CLI or a
-/// plug-in host.
+/// code and its tests, and by the desktop app's Laser window's checklist
+/// (`crates/ui-egui/src/picabia_laser_window/run.rs`; its tests name it in strings): never by the
+/// control channel, MCP, the CLI or a plug-in host.
 #[test]
 fn only_the_laser_window_may_arm() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -507,10 +507,44 @@ fn only_the_laser_window_may_arm() {
             }
         }
     }
-    let allowed = |f: &str| f.starts_with("crates/engine/src/cmd/picabia_laser_link") || f.starts_with("crates/ui-egui/src/picabia_laser_panel");
+    let allowed = |f: &str| {
+        f.starts_with("crates/engine/src/cmd/picabia_laser_link")
+            || f == "crates/ui-egui/src/picabia_laser_window/run.rs"
+            || f == "crates/ui-egui/src/picabia_laser_window/tests.rs"
+    };
     let others: Vec<&String> = hits.iter().filter(|f| !allowed(f)).collect();
     assert!(others.is_empty(), "laser_execute_armed is called from {others:?}");
     assert!(hits.iter().any(|f| f.ends_with("picabia_laser_link/tests.rs")), "{hits:?}");
+}
+
+/// On a real machine the motion commands are the Laser window's person's only: every other channel
+/// gets a refusal, while the status, jog cancel, pause and stop stay open. The simulator takes them
+/// from anywhere.
+#[test]
+fn motion_on_a_real_machine_is_for_the_person_at_the_window() {
+    let mut s = connected(fast());
+    // The simulator: anything goes from any channel.
+    ex(&mut s, "laser.jog", json!({"dx": 1}));
+    wait(&mut s, 10.0, "idle", |v| v["state"] == "Idle");
+    s.picabia.laser.pretend_real = true;
+    for (cmd, p) in [
+        ("laser.home", json!({})),
+        ("laser.jog", json!({"dx": 1})),
+        ("laser.unlock", json!({})),
+        ("laser.setOrigin", json!({})),
+        ("laser.frame", json!({"gcode": squares(1)})),
+    ] {
+        assert_eq!(disabled(s.execute(cmd, &p)), super::NOT_A_PERSON, "{cmd}");
+    }
+    for cmd in ["laser.status", "laser.jogCancel", "laser.pause", "laser.stop"] {
+        assert!(s.execute(cmd, &json!({})).is_ok(), "{cmd}");
+    }
+    wait(&mut s, 10.0, "idle again", |v| v["state"] == "Idle" && v["stopping"] == false);
+    // The person's path takes them, once each, and doesn't leave the door open.
+    s.laser_execute_person("laser.jog", &json!({"dx": 1})).unwrap();
+    assert_eq!(disabled(s.execute("laser.jog", &json!({"dx": 1}))), super::NOT_A_PERSON);
+    assert!(s.laser_execute_person("laser.start", &json!({})).is_err(), "never a beam command");
+    ex(&mut s, "laser.disconnect", json!({}));
 }
 
 #[test]

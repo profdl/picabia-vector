@@ -386,8 +386,9 @@ fn main() -> std::process::ExitCode {
             Box::new(move |cc| {
                 VectorcraftApp::install_ime_reset_hooks(&cc.egui_ctx);
                 let mut session = Session::new();
-                // PICABIA: real laser ports on (the Laser window has its always-visible Stop and Shift+Esc), unless PICABIA_LASER_HARDWARE=0.
-                if vectorcraft_ui_egui::picabia_laser_window::hardware_allowed() {
+                // PICABIA: real laser ports on (the Laser window has its always-visible Stop and Shift+Esc); off with
+                // PICABIA_LASER_HARDWARE=0, and off under --control unless PICABIA_LASER_HARDWARE=1.
+                if vectorcraft_ui_egui::picabia_laser_window::hardware_allowed(control_port.is_some()) {
                     session.laser_enable_hardware();
                 }
                 // The profiles loaded before come back before the preferences name any of them.

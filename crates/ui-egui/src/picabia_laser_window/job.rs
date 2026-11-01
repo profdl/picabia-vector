@@ -112,6 +112,45 @@ impl JobState {
         Some(p)
     }
 
+    /// The params Start runs: `params` with the material and the operation table as the window
+    /// shows them, so the G-code built at confirm is the job the checklist shows (a G-code file runs
+    /// as it is).
+    pub fn start_params(&self, params: Value) -> Value {
+        let mut p = params;
+        if matches!(self.source, Source::File(_)) {
+            return p;
+        }
+        p["material"] = json!(self.material_shown());
+        self.ops.put(&mut p);
+        p
+    }
+
+    /// The job as the checklist shows it: what, its size and lines, and each operation's power and
+    /// speed.
+    pub fn checklist_lines(&self, selection: &str) -> Vec<String> {
+        let what = match &self.source {
+            Source::Selection => selection.to_string(),
+            Source::TestCard => tl!("Test card").to_string(),
+            Source::PowerLadder => tl!("Power ladder").to_string(),
+            Source::File(path) => std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+        };
+        let mut out = vec![what];
+        if let Some(s) = self.chosen_sheet() {
+            out.push(format!(
+                "{} · {}",
+                i18n::fmt(tl!("{w} × {h} mm"), &[("w", &num(s.w_mm)), ("h", &num(s.h_mm))]),
+                i18n::tn(s.lines, "{n} line", "{n} lines")
+            ));
+        }
+        if !matches!(self.source, Source::File(_)) {
+            out.push(format!("{}: {}", tl!("Material"), super::ops::material_label(self.material_shown())));
+            for (key, op) in super::ops::OP_KEYS.iter().zip(self.ops.0.iter()).filter(|(_, op)| op.enabled) {
+                out.push(format!("{}: {} %, {} mm/min, {}×", super::ops::op_label(key), num(op.power), num(op.speed), op.passes));
+            }
+        }
+        out
+    }
+
     /// The dry run: its command and params, or `None` when there's nothing to ask.
     pub fn dry_run(&self, sel: &[NodeId]) -> Option<(&'static str, Value)> {
         let (cmd, mut p) = match &self.source {

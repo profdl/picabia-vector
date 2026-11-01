@@ -71,7 +71,7 @@ pub struct Ops(pub [Op; 3]);
 pub const OP_KEYS: [&str; 3] = ["cut", "score", "engrave"];
 
 /// An operation's label, translated.
-fn op_label(key: &str) -> &'static str {
+pub(crate) fn op_label(key: &str) -> &'static str {
     match key {
         "cut" => tl!("Cut"),
         "score" => tl!("Score"),

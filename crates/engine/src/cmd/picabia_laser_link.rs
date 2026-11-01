@@ -60,6 +60,13 @@ pub const SIM_PORT: &str = "sim";
 pub const BEAM_COMMANDS: [&str; 3] = ["laser.start", "laser.frame", "laser.resume"];
 /// Why a beam command is refused without the arm.
 pub const NOT_ARMED: &str = "the laser isn't armed: in the desktop app's Laser window, go through the safety checklist and press Start (scripts, agents, MCP and the control channel can't arm)";
+/// The commands that move a real machine (or change where it thinks it is) without the beam, the
+/// ones [`Session::laser_execute_person`] runs: from anywhere else they are refused on a real
+/// machine (the simulator takes them from anywhere). Connecting, status, exports, `laser.jogCancel`,
+/// pause and stop stay open to every channel.
+pub const PERSON_COMMANDS: [&str; 5] = ["laser.home", "laser.jog", "laser.unlock", "laser.setOrigin", "laser.frame"];
+/// Why a motion command is refused on a real machine from a non-UI channel.
+pub const NOT_A_PERSON: &str = "on a real laser this is for the person at the desktop app's Laser window (scripts, agents, MCP and the control channel may connect, read the status, export, pause and stop)";
 /// Why a real port is refused before the desktop app enables them.
 pub const NO_HARDWARE: &str = "real laser ports are available only in the desktop app (this session can use the simulator, port \"sim\")";
 /// How long `laser.disconnect` waits for the stop sequence before it resets outright (ms).
@@ -95,6 +102,12 @@ pub type PortLister = fn() -> Vec<PortRow>;
 pub struct LaserLink {
     /// Armed for the command [`Session::laser_execute_armed`] is running.
     armed: bool,
+    /// A person in the desktop app's Laser window asked for the command running
+    /// ([`Session::laser_execute_person`], [`Session::laser_execute_armed`]).
+    person: bool,
+    /// Tests: the open simulator counts as a real machine.
+    #[cfg(test)]
+    pub(crate) pretend_real: bool,
     /// Real ports may be listed and opened ([`Session::laser_enable_hardware`]).
     hardware: bool,
     lister: PortLister,
@@ -107,6 +120,9 @@ impl Default for LaserLink {
     fn default() -> Self {
         LaserLink {
             armed: false,
+            person: false,
+            #[cfg(test)]
+            pretend_real: false,
             hardware: false,
             lister: real_ports,
             job: None,
@@ -144,8 +160,27 @@ impl Session {
             return Err(EngineError::Disabled(id.into(), "only laser.start, laser.frame and laser.resume are run armed".into()));
         }
         self.picabia.laser.armed = true;
+        self.picabia.laser.person = true;
         let r = self.execute(id, params);
         self.picabia.laser.armed = false;
+        self.picabia.laser.person = false;
+        r
+    }
+
+    /// PICABIA: run one motion command ([`PERSON_COMMANDS`]: home, jog, unlock, set origin, a
+    /// beam-off frame) for the person at the desktop app's Laser window. Like
+    /// [`Session::laser_execute_armed`] it is not a command, so no other channel can reach it; on a
+    /// real machine those commands are refused from anywhere else.
+    pub fn laser_execute_person(&mut self, id: &str, params: &Value) -> Result<Value> {
+        if !PERSON_COMMANDS.contains(&id) {
+            return Err(EngineError::Disabled(
+                id.into(),
+                "only laser.home, laser.jog, laser.unlock, laser.setOrigin and laser.frame are run for a person".into(),
+            ));
+        }
+        self.picabia.laser.person = true;
+        let r = self.execute(id, params);
+        self.picabia.laser.person = false;
         r
     }
 
@@ -179,6 +214,16 @@ impl Session {
     }
 }
 
+/// `cmd` moves the machine: refused on a real machine unless a person asked for it in the Laser
+/// window. The simulator, and a closed link (the command's own check says so), pass.
+fn person_or_sim(cmd: &str, s: &Session) -> Result<()> {
+    let link = &s.picabia.laser;
+    if link.on_real_machine() && !link.person {
+        return Err(disabled(cmd, NOT_A_PERSON));
+    }
+    Ok(())
+}
+
 /// Copy what the connected machine reports into `PicabiaState::laser_machine` (cleared once the
 /// link is closed or lost), for the G-code commands' defaults.
 fn sync_machine(s: &mut Session) {
@@ -210,6 +255,9 @@ impl LaserLink {
 #[cfg(target_arch = "wasm32")]
 impl LaserLink {
     pub fn is_open(&self) -> bool {
+        false
+    }
+    fn on_real_machine(&self) -> bool {
         false
     }
     fn stop(&mut self) {}
@@ -523,23 +571,27 @@ fn send_lines(cmd: &str, s: &mut Session, lines: &[String]) -> Result<Value> {
 }
 
 fn home(s: &mut Session, _p: &Value) -> Result<Value> {
+    person_or_sim("laser.home", s)?;
     let r = send_lines("laser.home", s, &["$H".into()])?;
     Ok(status_with(s, r))
 }
 
 fn unlock(s: &mut Session, _p: &Value) -> Result<Value> {
+    person_or_sim("laser.unlock", s)?;
     let mut r = send_lines("laser.unlock", s, &["$X".into()])?;
     r["warning"] = json!("Unlocked without homing: the machine no longer knows where it is. Home it, or check the head's position, before cutting.");
     Ok(status_with(s, r))
 }
 
 fn set_origin(s: &mut Session, _p: &Value) -> Result<Value> {
+    person_or_sim("laser.setOrigin", s)?;
     let r = send_lines("laser.setOrigin", s, &["G10 L20 P1 X0 Y0".into()])?;
     Ok(status_with(s, r))
 }
 
 fn jog(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "laser.jog";
+    person_or_sim(CMD, s)?;
     let axis = |k: &str| -> Result<Option<f64>> {
         match get(p, k) {
             None => Ok(None),
@@ -718,6 +770,7 @@ fn frame(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "laser.frame";
     // A frame uses the arm up whatever happens next.
     let armed = s.picabia.laser.take_arm();
+    person_or_sim(CMD, s)?;
     let beam = match get(p, "beam") {
         None | Some(Value::Bool(false)) => false,
         Some(Value::Bool(true)) => true,

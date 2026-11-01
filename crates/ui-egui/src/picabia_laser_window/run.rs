@@ -7,9 +7,17 @@
 //! [`vectorcraft_engine::Session::laser_execute_armed`] is called from [`confirm`] only, after every
 //! box of the checklist is ticked (a test checks that no other file of the app calls it). The
 //! checklist is UI state, not a dialog: `ui.dialog.confirm`, commands, MCP and scripts can't reach
-//! it. Clicks the control channel injects (`ui.click`, `ui.key`: a frame of synthetic input) or a
-//! control request being answered arm only the simulator: on a real machine they are refused, so
-//! scripts and agents can't fire the laser through the window either.
+//! it. Input from automation arms only the simulator: clicks and keys the control channel injects
+//! (`ui.click`, `ui.key`: a frame of synthetic input), a control request being answered, and
+//! accessibility clients' actions (AccessKit `Click`: any screen-reader or UI-automation client can
+//! send one). On a real machine the press must be a person's pointer press (where it came from is
+//! recorded when the button goes down, not when it is released) and every box a person's tick;
+//! boxes automation ticked are cleared. The motion commands (home, jog, unlock, set origin, frame)
+//! go through [`as_person`] the same way.
+//!
+//! An open native menu (macOS menu tracking) runs no frames: the window's Stop and Shift+Esc wait
+//! until it closes. The machine's own emergency stop is the one to reach for meanwhile (the
+//! checklist asks that one is in reach).
 //!
 //! # Stop
 //! Stop raises the link's stop flag through [`vectorcraft_engine::Session::laser_stop_handle`]
@@ -46,6 +54,7 @@ impl Confirm {
                 tl!("Extraction or ventilation is on"),
                 tl!("The material lies flat and is held down"),
                 tl!("Someone stays at the machine until the job ends"),
+                tl!("A hardware emergency stop is in reach"),
             ],
             Confirm::Resume => {
                 vec![tl!("The shielding is in place and safety glasses are on"), tl!("Nothing has moved and someone is at the machine")]
@@ -68,22 +77,54 @@ impl Confirm {
     }
 }
 
-/// The open checklist: what it confirms, the job's params (for Start) and the boxes ticked.
+/// The open checklist: what it confirms, the job's params (for Start) and what it is shown as, the
+/// boxes ticked and whether automation ticked each, and where the confirm button's press came from.
 #[derive(Clone, Debug)]
 pub struct Checklist {
     pub kind: Confirm,
     pub params: Value,
+    /// The job as the checklist shows it (name, size, power and speed): what Start runs.
+    pub summary: Vec<String>,
     pub ticks: Vec<bool>,
+    /// Box `i` was last ticked by automated input ([`automated_frame`]).
+    pub ticked_by_automation: Vec<bool>,
+    /// The confirm button's pointer press: `Some(automated)` from the frame it went down in; `None`
+    /// before one (an AccessKit or keyboard press has none and counts as automated).
+    pub press: Option<bool>,
 }
 
 impl Checklist {
     pub fn new(kind: Confirm, params: Value) -> Self {
-        Checklist { kind, params, ticks: vec![false; kind.checks().len()] }
+        let n = kind.checks().len();
+        Checklist { kind, params, summary: Vec::new(), ticks: vec![false; n], ticked_by_automation: vec![false; n], press: None }
     }
 
     /// Every box is ticked.
     pub fn complete(&self) -> bool {
         !self.ticks.is_empty() && self.ticks.iter().all(|t| *t)
+    }
+
+    /// Box `i` was clicked, in a frame of automated input or not.
+    pub fn toggle(&mut self, i: usize, automated: bool) {
+        if let (Some(t), Some(a)) = (self.ticks.get_mut(i), self.ticked_by_automation.get_mut(i)) {
+            *t = !*t;
+            *a = *t && automated;
+        }
+    }
+
+    /// Untick what automated input ticked (a real machine needs a person's ticks).
+    pub fn clear_automated_ticks(&mut self) {
+        for (t, a) in self.ticks.iter_mut().zip(self.ticked_by_automation.iter_mut()) {
+            if *a {
+                *t = false;
+                *a = false;
+            }
+        }
+    }
+
+    /// Some box was ticked by automated input.
+    pub fn automated_ticks(&self) -> bool {
+        self.ticks.iter().zip(&self.ticked_by_automation).any(|(t, a)| *t && *a)
     }
 }
 
@@ -92,29 +133,31 @@ impl Checklist {
 pub enum Refused {
     /// Not every box is ticked.
     Unticked,
-    /// The click came from the control channel (or a control request is being answered) and the
-    /// machine is a real one.
+    /// The press or a tick came from automation (the control channel, a control request, an
+    /// accessibility client) and the machine is a real one.
     NotAPerson,
     /// The link closed meanwhile.
     NotConnected,
 }
 
 /// Whether a confirmed checklist may arm the laser: always for a person's click, and for automated
-/// input (see [`automated`]) only on the simulator.
+/// input (see [`automated_frame`]) only on the simulator.
 pub fn may_arm(automated: bool, sim: bool) -> bool {
     !automated || sim
 }
 
-/// Whether the input acted on now came from automation: a frame carrying input the control
-/// channel injected, or a control request being answered.
-pub fn automated(app: &VectorcraftApp) -> bool {
-    app.synthetic_frame || app.ui.answering_control
+/// Whether the input this frame came from automation: a frame carrying input the control channel
+/// injected, a control request being answered, or an accessibility client's action (AccessKit's
+/// `Click` and the rest: any screen-reader or UI-automation client can send them).
+pub fn automated_frame(app: &VectorcraftApp, ctx: &Context) -> bool {
+    app.synthetic_frame || app.ui.answering_control || ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::AccessKitActionRequest(_))))
 }
 
 /// The checklist's Start (or Resume) was pressed: arm the laser for this one command and run it.
-/// The one place the app arms the laser (see the module docs). The command's own refusal (not
-/// Idle, off the bed, …) shows in the status bar.
-pub fn confirm(app: &mut VectorcraftApp, list: &Checklist) -> Result<Value, Refused> {
+/// The one place the app arms the laser (see the module docs). `automated`: the press (or a tick)
+/// came from automation. The command's own refusal (not Idle, off the bed, …) shows in the status
+/// bar.
+pub fn confirm(app: &mut VectorcraftApp, list: &mut Checklist, automated: bool) -> Result<Value, Refused> {
     if !list.complete() {
         return Err(Refused::Unticked);
     }
@@ -123,8 +166,10 @@ pub fn confirm(app: &mut VectorcraftApp, list: &Checklist) -> Result<Value, Refu
     if !st.connected {
         return Err(Refused::NotConnected);
     }
-    if !may_arm(automated(app), st.sim) {
-        app.status(tl!("Only a person at this computer can start the laser: scripts and agents can't."));
+    if !may_arm(automated || list.automated_ticks(), st.sim) {
+        list.clear_automated_ticks();
+        list.press = None;
+        app.status(tl!("Only a person at this computer can start the laser: scripts, agents and accessibility clients can't."));
         return Err(Refused::NotAPerson);
     }
     let (cmd, params) = match list.kind {
@@ -140,6 +185,23 @@ pub fn confirm(app: &mut VectorcraftApp, list: &Checklist) -> Result<Value, Refu
     }
 }
 
+/// Run motion command `id` (home, jog, unlock, set origin, a beam-off frame) for the person at the
+/// Laser window: the engine takes these on a real machine only through this path. Automated input
+/// gets them on the simulator only, as arming.
+pub fn as_person(app: &mut VectorcraftApp, automated: bool, id: &str, params: Value) -> Result<Value, String> {
+    let sim = Status::from_json(&vectorcraft_engine::cmd::picabia_laser_link::status_json(&app.session)).sim;
+    if !may_arm(automated, sim) {
+        let why = tl!("Only a person at this computer can move a real laser: scripts, agents and accessibility clients can't.");
+        app.status(why);
+        return Err(why.to_string());
+    }
+    let r = app.session.laser_execute_person(id, &params).map_err(|e| e.to_string());
+    if let Err(e) = &r {
+        app.status(e.clone());
+    }
+    r
+}
+
 /// Draw the open checklist (a window over the app, not modal: the Laser window's Stop stays
 /// clickable); closes it on Start, Cancel or Escape.
 pub fn checklist(app: &mut VectorcraftApp, ctx: &Context, st: &Status) {
@@ -148,6 +210,7 @@ pub fn checklist(app: &mut VectorcraftApp, ctx: &Context, st: &Status) {
     if !st.connected || (list.kind == Confirm::Resume && !st.paused()) {
         return;
     }
+    let auto_now = automated_frame(app, ctx);
     let t = Tokens::get(ctx);
     let (mut go, mut cancel) = (false, false);
     let mut open = true;
@@ -160,7 +223,13 @@ pub fn checklist(app: &mut VectorcraftApp, ctx: &Context, st: &Status) {
         .frame(egui::Frame::window(&ctx.global_style()).fill(t.panel).inner_margin(egui::Margin::same(18)))
         .open(&mut open)
         .show(ctx, |ui| {
-            ui.set_width(360.0);
+            ui.set_width(380.0);
+            for line in &list.summary {
+                ui.label(egui::RichText::new(line).size(12.0).color(t.text));
+            }
+            if !list.summary.is_empty() {
+                ui.add_space(6.0);
+            }
             let intro = match list.kind {
                 Confirm::Start => tl!("The laser can burn the material, the machine and eyes. Tick each box once it's true."),
                 Confirm::Resume => tl!("Resuming turns the beam back on."),
@@ -169,10 +238,8 @@ pub fn checklist(app: &mut VectorcraftApp, ctx: &Context, st: &Status) {
             ui.add_space(8.0);
             for (i, text) in list.kind.checks().into_iter().enumerate() {
                 let on = list.ticks.get(i).copied().unwrap_or(false);
-                if widgets::check(ui, text, on, true)
-                    && let Some(tick) = list.ticks.get_mut(i)
-                {
-                    *tick = !on;
+                if widgets::check(ui, text, on, true) {
+                    list.toggle(i, auto_now);
                 }
             }
             if !st.sim {
@@ -181,7 +248,13 @@ pub fn checklist(app: &mut VectorcraftApp, ctx: &Context, st: &Status) {
             }
             ui.add_space(12.0);
             ui.horizontal(|ui| {
-                go = button(ui, list.kind.button(), true, list.complete());
+                let resp = widgets::primary_button_enabled(ui, list.kind.button(), list.complete());
+                // Where the press came from, recorded when the button goes down: a press injected
+                // and released later (a lost release the app completes) stays automated.
+                if resp.hovered() && ui.input(|i| i.pointer.primary_pressed()) {
+                    list.press = Some(auto_now);
+                }
+                go = resp.clicked() && list.complete();
                 cancel = button(ui, tl!("Cancel"), false, true);
             });
         });
@@ -189,10 +262,12 @@ pub fn checklist(app: &mut VectorcraftApp, ctx: &Context, st: &Status) {
     if !open || cancel || escape {
         return;
     }
-    if go && list.complete() {
-        // A refusal says why in the status bar (or the box isn't ticked).
-        let _ = confirm(app, &list);
-        return;
+    if go {
+        let automated = list.press.unwrap_or(true) || auto_now;
+        // A refusal says why in the status bar; the list stays open for a person's ticks.
+        if confirm(app, &mut list, automated) != Err(Refused::NotAPerson) {
+            return;
+        }
     }
     app.picabia.laser.checklist = Some(list);
 }
@@ -303,15 +378,15 @@ pub fn bar(app: &mut VectorcraftApp, ctx: &Context, st: &Status) {
     }
 }
 
-/// Shift+Esc: the emergency stop, anywhere in the app (a field, a menu, a dialog, the Laser window
-/// closed), whenever a job runs or the machine moves. Runs before the shortcuts and dialogs see the
-/// key (seam in `handle_input_once`). Esc alone never stops a job.
+/// Shift+Esc: the emergency stop, anywhere in the app (a field, a menu, a dialog, a floating
+/// panel's own window, the Laser window closed), whenever the link is open, whatever its status
+/// says. Runs before the shortcuts and dialogs see the key (seams in `handle_input_once` and the
+/// floating panels' body). Esc alone never stops a job.
 pub fn stop_shortcut(app: &mut VectorcraftApp, ctx: &Context) {
     if !super::link_open(app) {
         return;
     }
-    let st = Status::from_json(&vectorcraft_engine::cmd::picabia_laser_link::status_json(&app.session));
-    if st.stoppable() && ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::Escape)) {
+    if ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::Escape)) {
         stop_now(app);
         app.status(tl!("Laser stopped"));
     }
