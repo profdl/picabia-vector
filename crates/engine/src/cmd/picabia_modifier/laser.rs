@@ -3,7 +3,7 @@
 //!
 //! The geometry is `vectorcraft_stencil`'s ([`vectorcraft_stencil::laser_job`],
 //! [`vectorcraft_stencil::test_card`], [`vectorcraft_stencil::laser_svg`]); here the settings are
-//! layered (the remembered ones in `Prefs::picabia.laser`, then the material's kerf, then the
+//! layered (the remembered ones in `Prefs::picabia_laser`, then the material's kerf, then the
 //! command's params), the stencil is brought up to date, and the sheets are written to files
 //! through the engine's file access (automation roots apply), or returned as base64.
 //!
@@ -35,18 +35,27 @@ fn disabled(cmd: &str, why: impl Into<String>) -> EngineError {
     EngineError::Disabled(cmd.into(), why.into())
 }
 
-/// Picabia's remembered setting `key` (`laser`, `machine`); null when there is none.
-pub(super) fn pref(s: &Session, key: &str) -> Value {
-    s.prefs.picabia.get(key).cloned().unwrap_or(Value::Null)
+/// Which remembered Picabia setting: the laser export's (`Prefs::picabia_laser`) or the machine
+/// profile (`Prefs::picabia_machine`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Pref {
+    Laser,
+    Machine,
 }
 
-/// Remember Picabia setting `key`.
-pub(super) fn set_pref(s: &mut Session, key: &str, v: Value) {
-    if !s.prefs.picabia.is_object() {
-        s.prefs.picabia = json!({});
+/// A remembered Picabia setting; null when there is none.
+pub(super) fn pref(s: &Session, key: Pref) -> Value {
+    match key {
+        Pref::Laser => s.prefs.picabia_laser.clone(),
+        Pref::Machine => s.prefs.picabia_machine.clone(),
     }
-    if let Some(o) = s.prefs.picabia.as_object_mut() {
-        o.insert(key.into(), v);
+}
+
+/// Remember a Picabia setting.
+pub(super) fn set_pref(s: &mut Session, key: Pref, v: Value) {
+    match key {
+        Pref::Laser => s.prefs.picabia_laser = v,
+        Pref::Machine => s.prefs.picabia_machine = v,
     }
 }
 
@@ -83,7 +92,7 @@ pub(super) fn out_of(cmd: &str, p: &Value) -> Result<Out> {
 /// `None` keeps the remembered kerf), then the command's own params. Clamped.
 pub(super) fn settings(s: &Session, kerf: Option<f64>, p: &Value) -> LaserParams {
     let mut lp = LaserParams::default();
-    lp.apply_json(&pref(s, "laser"));
+    lp.apply_json(&pref(s, Pref::Laser));
     if let Some(k) = kerf {
         lp.apply_json(&json!({"kerfMm": k}));
     }
@@ -267,7 +276,7 @@ pub(super) fn export(s: &mut Session, p: &Value) -> Result<Value> {
     let params = lp.to_json();
     // Remembered for the next export; a dry run (the dialog's summary) changes nothing.
     if out != Out::Summary {
-        set_pref(s, "laser", params.clone());
+        set_pref(s, Pref::Laser, params.clone());
     }
     Ok(json!({"id": id.0, "files": files, "sheets": job.sheets.len(), "warnings": job.warnings, "params": params}))
 }
@@ -388,7 +397,7 @@ pub(super) fn test_card(s: &mut Session, p: &Value) -> Result<Value> {
     let params = setup.lp.to_json();
     // Remembered for the next export; a dry run (the dialog's summary) changes nothing.
     if out != Out::Summary {
-        set_pref(s, "laser", params.clone());
+        set_pref(s, Pref::Laser, params.clone());
     }
     Ok(json!({"files": files, "sheets": 1, "warnings": [], "material": setup.material.id(), "params": params}))
 }

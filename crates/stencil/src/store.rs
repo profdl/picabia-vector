@@ -33,7 +33,7 @@ use vectorcraft_modifiers::{Repeat, Stencil, StencilOutput, StencilPreview, Sten
 use crate::{ColourInfo, Gathered, Island, Problem, Stats};
 
 /// The most results kept (one per object and design; the oldest dropped first).
-const MAX_ENTRIES: usize = 128;
+pub const MAX_ENTRIES: usize = 128;
 /// The most objects an [`Inputs`] snapshot walks when it is taken.
 const MAX_INPUT_NODES: usize = 200_000;
 
@@ -247,9 +247,11 @@ impl Inputs {
 }
 
 /// The geometry key of a stencil: its params (the preview colours left out: they don't change
-/// the sheet), its frame and the gathered outlines.
+/// the sheet), the stencil row's id (a kept result reports it), its frame and the gathered
+/// outlines.
 pub fn geometry_key(frame: &Frame, gathered: &Gathered) -> u64 {
     let mut h = DefaultHasher::new();
+    frame.modifier.hash(&mut h);
     let d = Stencil::default();
     let params = Stencil {
         preview: d.preview,
@@ -388,19 +390,33 @@ pub fn rekey(id: NodeId, key: u64, inputs: Inputs) -> Option<Arc<Sheet>> {
 
 /// Object `n`'s stencil in `doc`: the result computed from what `doc` holds now (`true`: fresh)
 /// or its latest one (`false`: stale, being recomputed). `None` when none was ever computed.
+/// The result found is marked newest, so an object that is drawn keeps its result while another
+/// one being edited fills the store.
 pub fn lookup(doc: &Document, n: &Node) -> Option<(Arc<Sheet>, bool)> {
-    let g = lock();
-    let s = g.as_ref()?;
-    let mut latest: Option<&Entry> = None;
-    for e in s.entries.iter().filter(|e| e.id == n.id) {
+    let mut g = lock();
+    let s = g.as_mut()?;
+    let mut fresh: Option<usize> = None;
+    let mut latest: Option<usize> = None;
+    for (i, e) in s.entries.iter().enumerate().filter(|(_, e)| e.id == n.id) {
         if e.inputs.matches(doc, n) {
-            return Some((e.sheet.clone(), true));
+            fresh = Some(i);
+            break;
         }
-        if latest.is_none_or(|l| e.stamp > l.stamp) {
-            latest = Some(e);
+        if latest.and_then(|l| s.entries.get(l)).is_none_or(|l| e.stamp > l.stamp) {
+            latest = Some(i);
         }
     }
-    latest.map(|e| (e.sheet.clone(), false))
+    let (at, is_fresh) = match (fresh, latest) {
+        (Some(i), _) => (i, true),
+        (None, Some(i)) => (i, false),
+        (None, None) => return None,
+    };
+    s.stamp += 1;
+    let stamp = s.stamp;
+    // A stale hit is already the object's newest result, so renewing it keeps that order.
+    let e = s.entries.get_mut(at)?;
+    e.stamp = stamp;
+    Some((e.sheet.clone(), is_fresh))
 }
 
 /// Whether object `n` has a result computed from what `doc` holds now.

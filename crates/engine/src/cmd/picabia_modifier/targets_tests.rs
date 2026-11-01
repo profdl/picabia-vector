@@ -157,6 +157,32 @@ fn duplicating_source_and_target_together_points_the_copy_at_the_copied_target()
 }
 
 #[test]
+fn duplicating_a_group_and_a_target_inside_it_keeps_each_copy_pointing_inside_itself() {
+    let (mut s, src, tgt) = along();
+    let g = id_of(&ex(&mut s, "object.group", json!({"ids": [src.0, tgt.0]}))["id"]);
+    // Duplicate itself copies the outermost objects only; other callers of `copy_above` (and a
+    // command batch) can hand it an object and one inside it, copied one after the other.
+    let copies = s.edit("Copy", |d, _| crate::cmd::edit::copy_above(d, &[g, tgt], |_, _, _| {})).unwrap();
+    assert_eq!(copies.len(), 2);
+    let doc = &s.doc().unwrap().doc;
+    let g2 = copies.iter().copied().find(|c| matches!(doc.node(*c).unwrap().kind, vectorcraft_doc::NodeKind::Group { .. })).unwrap();
+    let kids: Vec<NodeId> = doc.node(g2).unwrap().children().unwrap().iter().map(|c| c.id).collect();
+    let (k_src, k_tgt) = if data(&s, kids[0]).is_some() { (kids[0], kids[1]) } else { (kids[1], kids[0]) };
+    assert_eq!(target_of(&s, k_src), t(k_tgt), "the group's copy copies onto its own copy of the target");
+    assert_eq!(target_of(&s, src), t(tgt), "the original is unchanged");
+    assert_eq!(ex(&mut s, "modifier.list", json!({"id": k_src.0}))["instances"], 12);
+}
+
+#[test]
+fn copying_objects_without_targets_clones_nothing_for_the_remap() {
+    let mut s = session();
+    let r = shape(&mut s, "shape.rectangle", 0.0, 0.0, 10.0, 10.0);
+    ex(&mut s, "modifier.add", json!({"ids": [r.0], "kind": "linearArray"}));
+    let doc = &s.doc().unwrap().doc;
+    assert!(super::targets::snapshot(doc, &[r]).is_empty(), "no copy-to-shape row: nothing to remap");
+}
+
+#[test]
 fn copy_paste_of_source_and_target_points_the_paste_at_the_pasted_target() {
     let (mut s, src, tgt) = along();
     ex(&mut s, "select.set", json!({"ids": [src.0, tgt.0]}));

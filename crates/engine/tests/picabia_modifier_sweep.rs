@@ -133,6 +133,7 @@ fn stencil_and_laser_commands_with_junk_params() {
     }
     let mut failures = vec![];
     let mut calls = 0usize;
+    let mut gcode_files = 0usize;
     for fx in Fixture::ALL {
         for id in &ids {
             let spec = command_specs().iter().find(|c| c.id == *id).unwrap();
@@ -140,21 +141,41 @@ fn stencil_and_laser_commands_with_junk_params() {
             cases.push(json!({}));
             cases.push(json!({"dryRun": true}));
             cases.push(json!({"data": true, "kind": "powerLadder"}));
+            cases.push(json!({"data": true, "format": "gcode"}));
+            // Each junk value again with `data: true`, so the junk reaches the G-code writer.
+            let with_data: Vec<Value> = cases
+                .iter()
+                .filter_map(|p| {
+                    let mut o = p.as_object()?.clone();
+                    if o.contains_key("path") || o.contains_key("dryRun") || o.contains_key("data") {
+                        return None;
+                    }
+                    o.insert("data".into(), json!(true));
+                    Some(Value::Object(o))
+                })
+                .collect();
+            cases.extend(with_data);
             for p in &cases {
                 calls += 1;
+                let _ = std::fs::remove_file(&path);
                 let mut s = stenciled(fx);
                 let r = catch_quiet(|| s.execute(id, p));
                 let fail = match r {
                     Err(msg) => Some(format!("PANIC {id} {p} [{fx:?}]: {msg}")),
                     Ok(Err(vectorcraft_engine::EngineError::Internal { msg, .. })) => Some(format!("PANIC {id} {p} [{fx:?}]: {msg}")),
                     Ok(_) if s.in_interaction() => Some(format!("{id} {p} [{fx:?}]: left an interaction open")),
-                    Ok(_) => check_session(&s).err().map(|e| format!("{id} {p} [{fx:?}]: {e}")),
+                    Ok(Ok(v)) => gcode_checks(&v, &mut gcode_files)
+                        .err()
+                        .map(|e| format!("UNSAFE G-code {id} {p} [{fx:?}]: {e}"))
+                        .or_else(|| check_session(&s).err().map(|e| format!("{id} {p} [{fx:?}]: {e}"))),
+                    Ok(Err(_)) => check_session(&s).err().map(|e| format!("{id} {p} [{fx:?}]: {e}")),
                 };
                 failures.extend(fail);
             }
         }
     }
     assert!(calls > 100, "only {calls} calls");
+    assert!(gcode_files > 20, "only {gcode_files} G-code files checked");
     failures.sort();
     failures.dedup();
     assert!(
@@ -163,6 +184,66 @@ fn stencil_and_laser_commands_with_junk_params() {
         failures.len(),
         failures.iter().take(60).cloned().collect::<Vec<_>>().join("\n")
     );
+}
+
+/// The X and Y of a motion line (`G0`/`G1`).
+fn xy(line: &str) -> Option<(f64, f64)> {
+    if !(line.starts_with("G0 ") || line.starts_with("G1 ")) {
+        return None;
+    }
+    let word = |c: char| line.split_whitespace().find_map(|w| w.strip_prefix(c)).and_then(|v| v.parse::<f64>().ok());
+    Some((word('X')?, word('Y')?))
+}
+
+/// The writer's safety rules on one G-code text: laser mode with dynamic power only (`M4`, never
+/// `M3`), mm and absolute, beam off before the first motion and at the end, first and last
+/// motions travels, beam off before the park, every coordinate finite.
+fn gcode_safe(text: &str) -> Result<(), String> {
+    let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.starts_with(';') && !l.is_empty()).collect();
+    if lines.iter().any(|l| l.starts_with("M3")) {
+        return Err("M3 (constant power)".into());
+    }
+    if !(lines.contains(&"G21") && lines.contains(&"G90")) {
+        return Err("no G21/G90".into());
+    }
+    if lines.iter().any(|l| l.contains("NaN") || l.contains("inf")) {
+        return Err("a non-finite number".into());
+    }
+    let Some(first) = lines.iter().position(|l| xy(l).is_some()) else { return Err("no motion".into()) };
+    if !lines.get(..first).is_some_and(|b| b.contains(&"M5")) {
+        return Err("beam not off before the first motion".into());
+    }
+    let last = lines.iter().rposition(|l| xy(l).is_some()).unwrap_or(first);
+    if !(lines[first].starts_with("G0") && lines[last].starts_with("G0")) {
+        return Err("the first or last motion burns".into());
+    }
+    if lines.last() != Some(&"M5") {
+        return Err("beam not off at the end".into());
+    }
+    if let Some(burn) = lines.iter().rposition(|l| l.starts_with("G1"))
+        && !lines.get(burn..last).is_some_and(|b| b.contains(&"M5"))
+    {
+        return Err("beam not off before the park".into());
+    }
+    Ok(())
+}
+
+/// Every G-code file a command's result carries (base64 `data` or a written `path`) is safe.
+fn gcode_checks(v: &Value, count: &mut usize) -> Result<(), String> {
+    for f in v["files"].as_array().into_iter().flatten() {
+        let text = if let Some(d) = f["data"].as_str() {
+            String::from_utf8(vectorcraft_format::base64_decode(d).ok_or("bad base64")?).map_err(|e| e.to_string())?
+        } else if let Some(p) = f["path"].as_str() {
+            std::fs::read_to_string(p).map_err(|e| e.to_string())?
+        } else {
+            continue;
+        };
+        if text.contains("\nG21\n") || text.starts_with("G21") {
+            *count += 1;
+            gcode_safe(&text)?;
+        }
+    }
+    Ok(())
 }
 
 /// `modifier.stencilFromSelection` undoes exactly (the group and the row in one step).

@@ -139,4 +139,6 @@ mod problems_tests;
 #[cfg(test)]
 mod repeat_tests;
 #[cfg(test)]
+mod store_tests;
+#[cfg(test)]
 mod visible_tests;

@@ -1,3 +1,14 @@
+Picabia
+Copyright (c) 2026 the Picabia contributors.
+Picabia is a fork of VectorCraft (https://github.com/storytold/vectorcraft), under the same licence:
+the MIT License or the Apache License, Version 2.0, at your option (LICENSE-MIT, LICENSE-APACHE).
+Picabia's own files (docs/picabia/, assets/picabia/ and the files named picabia*) are original work
+by the Picabia contributors under that licence. The Picabia app icon (assets/picabia/app-icon/) is
+original artwork by the Picabia contributors, MIT OR Apache-2.0 (assets/picabia/app-icon/LICENSE.txt).
+Picabia does not use the ArtCraft name or logos as its own.
+
+The VectorCraft notice follows, with Picabia's additions marked PICABIA.
+
 VectorCraft
 Copyright (c) 2026 ArtCraft Team and the VectorCraft contributors.
 Licensed under the MIT License or the Apache License, Version 2.0, at your option

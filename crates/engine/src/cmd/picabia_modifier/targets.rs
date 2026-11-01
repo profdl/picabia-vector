@@ -194,11 +194,24 @@ pub(super) fn remap_copy(orig: &Node, copy: &mut Node) {
     rewrite(copy, &map, true, 0);
 }
 
-/// Called by `copy_above` (duplicate, copying moves and transforms): `copies` are the copies of
-/// the `roots` still in `d`, in order. Targets copied together with their source point at the
-/// copies.
-pub(crate) fn remap_copies(d: &mut Document, roots: &[NodeId], copies: &[NodeId]) {
-    let pairs: Vec<(Node, NodeId)> = roots.iter().filter_map(|r| d.node(*r).cloned()).zip(copies.iter().copied()).collect();
+/// Called by `copy_above` before it copies `roots`: the originals it will copy, as they are now,
+/// in order (the roots in the document; a root inside another is copied after the outer one
+/// changed). Empty, and nothing cloned, when none of them holds a stack that may copy onto
+/// another object (the common case: the copy then needs no remapping).
+pub(crate) fn snapshot(d: &Document, roots: &[NodeId]) -> Vec<Node> {
+    if !roots.iter().any(|r| d.node(*r).is_some_and(subtree_may_target)) {
+        return Vec::new();
+    }
+    roots.iter().filter_map(|r| d.node(*r).cloned()).collect()
+}
+
+/// Called by `copy_above` after copying: `copies` are the copies of `originals` ([`snapshot`]), in
+/// order. Targets copied together with their source point at the copies.
+pub(crate) fn remap_copies(d: &mut Document, originals: Vec<Node>, copies: &[NodeId]) {
+    if originals.is_empty() {
+        return;
+    }
+    let pairs: Vec<(Node, NodeId)> = originals.into_iter().zip(copies.iter().copied()).collect();
     remap(d, &pairs, true);
 }
 
@@ -226,11 +239,17 @@ fn remap(d: &mut Document, pairs: &[(Node, NodeId)], keep_outside: bool) {
             id_map(orig, c, &mut map, 0);
         }
     }
-    for (_, copy) in pairs {
+    for (orig, copy) in pairs {
         if d.node(*copy).is_some_and(subtree_may_target)
             && let Some(c) = d.node_mut(*copy)
         {
-            rewrite(c, &map, keep_outside, 0);
+            // Inside one copy, a target copied along in the same copy wins over a copy of it made
+            // as another root (Duplicate of a group and of an object inside it).
+            let mut own = BTreeMap::new();
+            id_map(orig, c, &mut own, 0);
+            let mut combined = map.clone();
+            combined.extend(own);
+            rewrite(c, &combined, keep_outside, 0);
         }
     }
 }

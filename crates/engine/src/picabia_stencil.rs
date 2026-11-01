@@ -35,7 +35,7 @@ const MAX_STENCILS: usize = 256;
 /// in place of the design ([`fills`] paints it as the preview params say); [`generation`] moves
 /// whenever a result lands.
 pub fn stencil_sheet(doc: &Document, n: &Node) -> Option<Arc<Sheet>> {
-    if !is_stencil(n) {
+    if !is_stencil(n) || frame(doc, n).is_none() {
         return None;
     }
     store::lookup(doc, n).map(|(s, _)| s)
@@ -59,20 +59,62 @@ pub fn stencil_objects(doc: &Document) -> Vec<NodeId> {
     out
 }
 
+/// The key of a result that says the object has no size to cut.
+const NO_SIZE_KEY: u64 = 0x6e6f_7369_7a65;
+/// The key of a result whose compute failed (a bug in the geometry).
+const FAILED_KEY: u64 = 0x6661_696c_6564;
+
+/// Test hook: the compute of an object with this name panics.
+#[cfg(test)]
+pub(crate) const PANIC_NAME: &str = "__picabia_stencil_panic_test__";
+
 /// Compute object `id`'s stencil now (or re-key a kept result for the same design) and keep it.
-/// `None`: not a stencil object, or no size to cut.
+/// `None`: not a stencil object, or no size to cut. Whatever happens a result keyed by what the
+/// document holds now is kept (an object with no size, or whose compute fails, keeps an empty
+/// one), so the object counts as fresh and the background refresh rests until it changes.
 pub fn compute_now(doc: &Document, id: NodeId) -> Option<Arc<Sheet>> {
     let node = doc.node_arc(id)?;
-    let frame = frame(doc, node)?;
+    if !is_stencil(node) {
+        return None;
+    }
     let inputs = Inputs::take(doc, node);
+    let Some(frame) = frame(doc, node) else {
+        let info = Info { warnings: vec!["the object has no size to cut".into()], ..Info::default() };
+        store::store(id, inputs, NO_SIZE_KEY, Sheet { info, ..Sheet::default() });
+        return None;
+    };
+    let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| compute_keyed(doc, node, &frame, inputs.clone())));
+    match run {
+        Ok(sheet) => Some(sheet),
+        Err(_) => {
+            let info = Info {
+                modifier: frame.modifier.clone(),
+                warnings: vec!["the stencil couldn't be computed (an internal error); change the design or its settings to try again".into()],
+                ..Info::default()
+            };
+            let sheet = Sheet { cut: BezPath::new(), paper: frame.sheet.to_path(0.1), sheet: frame.sheet, info };
+            Some(store::store(id, inputs, FAILED_KEY, sheet))
+        }
+    }
+}
+
+/// Gather, then re-key a kept result with the same geometry, or compute and keep a new one.
+fn compute_keyed(doc: &Document, node: &Node, frame: &Frame, inputs: Inputs) -> Arc<Sheet> {
+    #[cfg(test)]
+    if node.name.as_deref() == Some(PANIC_NAME) {
+        #[allow(clippy::panic)]
+        {
+            panic!("injected stencil compute panic");
+        }
+    }
     let text = vectorcraft_render::effects::text_outliner();
     let g = vectorcraft_stencil::gather(doc, node, &frame.copies, text);
-    let key = store::geometry_key(&frame, &g);
-    if let Some(kept) = store::rekey(id, key, inputs.clone()) {
-        return Some(kept);
+    let key = store::geometry_key(frame, &g);
+    if let Some(kept) = store::rekey(node.id, key, inputs.clone()) {
+        return kept;
     }
-    let sheet = compute_sheet(&frame, g);
-    Some(store::store(id, inputs, key, sheet))
+    let sheet = compute_sheet(frame, g);
+    store::store(node.id, inputs, key, sheet)
 }
 
 /// The sheet of `frame` for the gathered design `g`; a failed compute is an uncut sheet with the
@@ -135,10 +177,17 @@ fn corners(p: &BezPath) -> Option<[Point; 4]> {
     }
 }
 
-/// Object `id`'s stencil, fresh: the kept one when it matches `doc`, else computed now.
+/// Object `id`'s stencil, fresh: the kept one when it matches `doc`, else computed now. `None`:
+/// not a stencil, or no size to cut (a "no size" result is still kept, so it counts as fresh).
 pub fn ensure_one(doc: &Document, id: NodeId) -> Option<Arc<Sheet>> {
     let n = doc.node(id)?;
     if !is_stencil(n) {
+        return None;
+    }
+    if frame(doc, n).is_none() {
+        if !store::is_fresh(doc, n) {
+            compute_now(doc, id);
+        }
         return None;
     }
     match store::lookup(doc, n) {

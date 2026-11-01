@@ -24,6 +24,8 @@ pub(super) const LASER_GCODE: &str = "laser.gcode";
 
 /// Millimetres per document unit by default: a point (1/72 in), VectorCraft's unit.
 pub const DEFAULT_MM_PER_UNIT: f64 = 25.4 / 72.0;
+/// The biggest design `laser.gcode` cuts, mm a side.
+pub const MAX_DESIGN_MM: f64 = 20_000.0;
 /// Curves are flattened to within this (mm).
 const FLATTEN_MM: f64 = 0.01;
 /// Objects visited at most.
@@ -84,18 +86,25 @@ pub(super) fn design_sheet(cmd: &str, s: &Session, p: &Value) -> Result<DesignSh
     for n in &roots {
         g.node(n, Affine::IDENTITY, 0, &mut paths);
     }
-    let bounds = paths
-        .iter()
-        .filter_map(|p| {
-            let b = vectorcraft_geom::kurbo::Shape::bounding_box(p);
-            [b.x0, b.y0, b.x1, b.y1].iter().all(|v| v.is_finite()).then_some(b)
-        })
-        .reduce(|a, b| a.union(b));
+    // Outlines that aren't finite everywhere are left out.
+    paths.retain(|p| {
+        let b = vectorcraft_geom::kurbo::Shape::bounding_box(p);
+        [b.x0, b.y0, b.x1, b.y1].iter().all(|v| v.is_finite())
+    });
+    let bounds = paths.iter().map(vectorcraft_geom::kurbo::Shape::bounding_box).reduce(|a, b| a.union(b));
     let Some(bounds) = bounds else {
         let why = g.warnings.first().map(|w| format!(" ({w})")).unwrap_or_default();
         return Err(EngineError::Disabled(cmd.into(), format!("the objects have no outlines to cut{why}")));
     };
     let mpu = scale(cmd, p, bounds)?;
+    // Refused before flattening: a huge design would flatten into an enormous number of points.
+    let (w_mm, h_mm) = (bounds.width() * mpu, bounds.height() * mpu);
+    if !(w_mm.is_finite() && h_mm.is_finite() && w_mm <= MAX_DESIGN_MM && h_mm <= MAX_DESIGN_MM) {
+        return Err(EngineError::Disabled(
+            cmd.into(),
+            format!("the design would be {w_mm:.0} × {h_mm:.0} mm; at most {MAX_DESIGN_MM:.0} mm a side is cut (scale it with widthMm or mmPerUnit)"),
+        ));
+    }
     g.tol = (FLATTEN_MM / mpu).max(1e-6);
     for path in &paths {
         g.flatten(path);

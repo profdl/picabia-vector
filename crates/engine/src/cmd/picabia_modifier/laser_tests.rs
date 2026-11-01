@@ -22,7 +22,15 @@ fn close(a: &Value, b: f64) -> bool {
 }
 
 fn pref(s: &Session, key: &str) -> Value {
-    s.prefs.picabia.get(key).cloned().unwrap_or(Value::Null)
+    match key {
+        "laser" => s.prefs.picabia_laser.clone(),
+        _ => s.prefs.picabia_machine.clone(),
+    }
+}
+
+/// Nothing Picabia remembered.
+fn nothing_remembered(s: &Session) -> bool {
+    s.prefs.picabia_laser.is_null() && s.prefs.picabia_machine.is_null()
 }
 
 /// The X and Y of a motion line (`G0`/`G1`).
@@ -103,7 +111,7 @@ fn a_dry_run_describes_the_sheets_and_remembers_nothing() {
         assert!(f.get("data").is_none() && f.get("path").is_none(), "{cmd}: {r}");
         assert_eq!(r["params"]["kerfMm"], 0.3, "{cmd}");
     }
-    assert_eq!(s.prefs.picabia, Value::Null, "dry runs leave the remembered settings alone");
+    assert!(nothing_remembered(&s), "dry runs leave the remembered settings alone");
     assert!(s.execute("modifier.stencilExport", &json!({"id": g.0, "dryRun": 1})).is_err());
 }
 
@@ -123,7 +131,7 @@ fn without_path_data_or_dry_run_it_returns_what_the_dialog_opens_with() {
     let r = ex(&mut s, "modifier.stencilGcode", json!({}));
     assert_eq!((r["dialog"].as_str(), r["format"].as_str()), (Some("stencilExport"), Some("gcode")));
     assert!(r["gcode"]["cut"]["speedMmMin"].is_number(), "{r}");
-    assert_eq!(s.prefs.picabia, Value::Null, "nothing exported, nothing remembered");
+    assert!(nothing_remembered(&s), "nothing exported, nothing remembered");
 }
 
 #[test]
@@ -183,7 +191,7 @@ fn what_cannot_be_exported_is_an_error_not_a_panic() {
         )
         .unwrap_err();
     assert!(matches!(e, EngineError::Disabled(..)), "{e}");
-    assert_eq!(s.prefs.picabia, Value::Null);
+    assert!(nothing_remembered(&s));
     // Junk settings are clamped, not refused.
     let r = ex(
         &mut s,
@@ -230,7 +238,7 @@ fn stencil_gcode_is_true_size_flipped_and_beam_off_at_both_ends() {
     assert!(!hole.is_empty());
     assert!(hole.iter().all(|&(_, y)| y > 74.0), "{hole:?}");
     // Remembered per material.
-    assert!(pref(&s, "machine")["materials"]["paper"]["cut"].is_object(), "{}", s.prefs.picabia);
+    assert!(pref(&s, "machine")["materials"]["paper"]["cut"].is_object(), "{}", s.prefs.picabia_machine);
     assert_eq!(r["gcode"]["sMax"], 1000.0, "the profile's S max: {r}");
     assert_eq!(r["params"]["bedWidthMm"], 584.2, "the machine's bed: {r}");
 }
@@ -286,7 +294,7 @@ fn the_power_ladder_as_gcode() {
         assert!(text.contains(want), "{want}: {text}");
     }
     assert_eq!(r["ladder"]["powersPct"], json!([10.0, 50.0]));
-    assert_eq!(s.prefs.picabia.get("laser"), None, "the ladder's per-square settings aren't remembered");
+    assert_eq!(s.prefs.picabia_laser, Value::Null, "the ladder's per-square settings aren't remembered");
     let e = s.execute("modifier.stencilTestCard", &json!({"kind": "powerLadder", "format": "svg", "data": true})).unwrap_err();
     assert!(matches!(e, EngineError::Disabled(..)) && e.to_string().contains("G-code"), "{e}");
     for p in [json!({"kind": "ladder", "data": true}), json!({"format": "pdf", "data": true}), json!({"format": 1, "data": true})] {
@@ -313,7 +321,7 @@ fn the_machine_profile() {
     assert_eq!(r["sMaxUsed"], 1000.0);
     assert_eq!(r["sMaxMachine"], Value::Null);
     assert!(r["materialDefaults"]["film"]["cut"].is_object());
-    assert_eq!(s.prefs.picabia, Value::Null, "reading writes nothing");
+    assert!(nothing_remembered(&s), "reading writes nothing");
     let r = ex(
         &mut s,
         "laser.profile",
@@ -334,12 +342,14 @@ fn the_machine_profile() {
     assert_eq!(MachineProfile::from_json(&MachineProfile::default().to_json()), MachineProfile::default());
     // The preferences: null isn't written, older files read as none, and the value survives a
     // round trip and a preferences reset.
-    assert!(Prefs::default().to_json().get("picabia").is_none());
-    assert_eq!(serde_json::from_value::<Prefs>(json!({"keyboardIncrement": 2})).unwrap().picabia, Value::Null);
+    let none = Prefs::default().to_json();
+    assert!(none.get("picabiaLaser").is_none() && none.get("picabiaMachine").is_none());
+    let old = serde_json::from_value::<Prefs>(json!({"keyboardIncrement": 2})).unwrap();
+    assert!(old.picabia_laser.is_null() && old.picabia_machine.is_null());
     let saved = s.prefs.to_json();
-    assert!(saved["picabia"]["machine"].is_object());
+    assert!(saved["picabiaMachine"].is_object());
     let back: Prefs = serde_json::from_value(saved).unwrap();
-    assert_eq!(back.picabia, s.prefs.picabia);
+    assert_eq!(back.picabia_machine, s.prefs.picabia_machine);
     ex(&mut s, "prefs.reset", json!({}));
     assert!(pref(&s, "machine").is_object(), "a preferences reset keeps the machine profile");
 }
@@ -408,4 +418,108 @@ fn any_objects_export_as_gcode() {
     ex(&mut s, "object.hide", json!({}));
     let r5 = ex(&mut s, "laser.gcode", json!({"ids": [outer.0, inner.0], "data": true}));
     assert!(op_moves(&decode(&r5["files"][0]), 1000).iter().all(|&(x, _)| (x - 18.0 * mpu).abs() > 0.01));
+}
+
+#[test]
+fn the_other_remembered_settings_carry_over() {
+    let mut s = session();
+    let g = two_tone(&mut s, json!({}));
+    ex(
+        &mut s,
+        "modifier.stencilExport",
+        json!({"id": g.0, "data": true, "bedWidthMm": 0, "bedHeightMm": 0, "scoreColour": "#123456", "overlapMm": 4}),
+    );
+    let r = ex(&mut s, "modifier.stencilExport", json!({"id": g.0, "data": true}));
+    assert_eq!(r["params"]["bedWidthMm"], 0.0);
+    assert_eq!(r["params"]["scoreColour"], "#123456");
+    assert_eq!(r["params"]["overlapMm"], 4.0);
+    // Prefs written and read back keep them.
+    let back: Prefs = serde_json::from_str(&serde_json::to_string(&s.prefs).unwrap()).unwrap();
+    assert_eq!(back.picabia_laser, s.prefs.picabia_laser);
+}
+
+#[test]
+fn several_sheets_are_numbered_gcode_files() {
+    let mut s = session();
+    let g = two_tone(&mut s, json!({}));
+    let dir = tmp("gsplit");
+    let path = dir.join("big.gcode");
+    let r = ex(&mut s, "modifier.stencilGcode", json!({"id": g.0, "path": path.to_string_lossy(), "bedWidthMm": 200, "bedHeightMm": 200}));
+    let n = r["sheets"].as_u64().unwrap() as usize;
+    assert!(n >= 2, "{r}");
+    for (k, f) in r["files"].as_array().unwrap().iter().enumerate() {
+        let want = dir.join(format!("big {}.gcode", k + 1));
+        assert_eq!(f["path"], json!(want.to_string_lossy()));
+        assert_eq!(f["sheet"], format!("{} of {n}", k + 1));
+        assert!(f["boundsMm"]["x1"].as_f64().unwrap() <= 200.0 + 1e-6, "{f}");
+        assert_safe(&std::fs::read_to_string(&want).unwrap());
+    }
+    assert!(!path.exists());
+    let r = ex(&mut s, "modifier.stencilGcode", json!({"id": g.0, "data": true, "bedWidthMm": 200, "bedHeightMm": 200}));
+    assert_eq!(r["files"][1]["name"], "Stencil laser 2.gcode");
+}
+
+#[test]
+fn op_settings_are_remembered_per_material() {
+    let mut s = session();
+    let g = two_tone(&mut s, json!({"material": "film"}));
+    let r = ex(&mut s, "modifier.stencilGcode", json!({"id": g.0, "data": true}));
+    assert_eq!(r["material"], "film");
+    let film_start = r["gcode"]["cut"]["speedMmMin"].as_f64().unwrap();
+    let faster = film_start + 50.0;
+    ex(&mut s, "modifier.stencilGcode", json!({"id": g.0, "data": true, "cut": {"speedMmMin": faster, "passes": 4}, "air": true}));
+    let r = ex(&mut s, "modifier.stencilGcode", json!({"id": g.0, "data": true}));
+    assert_eq!(r["gcode"]["cut"]["speedMmMin"], faster);
+    assert_eq!(r["gcode"]["cut"]["passes"], 4);
+    assert_eq!(r["gcode"]["air"], false, "air is the profile's, not remembered per export");
+    assert!(decode(&r["files"][0]).contains(&format!("F{faster}")), "F{faster}");
+    // Paper's are its own.
+    let r = ex(&mut s, "modifier.stencilGcode", json!({"id": g.0, "data": true, "material": "paper"}));
+    let paper_start = vectorcraft_stencil::GcodeParams::for_material("paper").to_json()["cut"]["speedMmMin"].clone();
+    assert_eq!(r["gcode"]["cut"]["speedMmMin"], paper_start);
+    assert_eq!(s.prefs.picabia_machine["materials"]["film"]["cut"]["speedMmMin"], faster);
+    // The profile's S max and air reach the G-code.
+    ex(&mut s, "laser.profile", json!({"set": {"sMax": 255, "air": true}}));
+    let r = ex(&mut s, "modifier.stencilGcode", json!({"id": g.0, "data": true}));
+    let text = decode(&r["files"][0]);
+    assert!(text.contains("M4 S255") && text.contains("\nM8\n") && text.contains("\nM9\n"), "{text}");
+    assert_safe(&text);
+    let back: Prefs = serde_json::from_str(&serde_json::to_string(&s.prefs).unwrap()).unwrap();
+    assert_eq!(back.picabia_machine, s.prefs.picabia_machine);
+}
+
+#[test]
+fn laser_and_machine_settings_are_separate_preferences() {
+    // The app merges two windows' preferences key by key: the laser export's settings and the
+    // machine profile are two keys, so one window's export and another's profile edit both stay.
+    let mut s = session();
+    let g = two_tone(&mut s, json!({}));
+    let before = s.prefs.to_json();
+    ex(&mut s, "modifier.stencilExport", json!({"id": g.0, "data": true}));
+    let after_export = s.prefs.to_json();
+    ex(&mut s, "laser.profile", json!({"set": {"name": "Shop"}}));
+    let after_profile = s.prefs.to_json();
+    let changed = |a: &Value, b: &Value| -> Vec<String> {
+        let (a, b) = (a.as_object().unwrap(), b.as_object().unwrap());
+        let mut keys: Vec<String> = a.keys().chain(b.keys()).filter(|k| a.get(*k) != b.get(*k)).cloned().collect();
+        keys.sort();
+        keys.dedup();
+        keys
+    };
+    assert_eq!(changed(&before, &after_export), ["picabiaLaser"]);
+    assert_eq!(changed(&after_export, &after_profile), ["picabiaMachine"]);
+}
+
+#[test]
+fn a_huge_design_is_refused_before_it_is_flattened() {
+    let mut s = session();
+    // The canvas caps coordinates, so the size comes from the scale: 1500 points at 100 mm each, and
+    // a circle (curves flattened to 0.01 mm would be millions of points) beside it.
+    let a = rect(&mut s, 0.0, 0.0, 1500.0, 1500.0, BLACK);
+    let c = id_of(&ex(&mut s, "shape.ellipse", json!({"x": 0, "y": 0, "width": 1500, "height": 1500}))["id"]);
+    let e = s.execute("laser.gcode", &json!({"ids": [a.0, c.0], "data": true, "mmPerUnit": 100})).unwrap_err();
+    assert!(matches!(e, EngineError::Disabled(..)) && e.to_string().contains("at most"), "{e}");
+    // Scaled down to a width, it cuts.
+    let r = ex(&mut s, "laser.gcode", json!({"ids": [a.0], "dryRun": true, "widthMm": 100}));
+    assert!(close(&r["files"][0]["wMm"], 100.0), "{r}");
 }
