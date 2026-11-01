@@ -21,10 +21,12 @@ use crate::{EngineError, Result, Session};
 const KIND_LIST: &str = "linearArray|circularArray|gridArray|mirror|transformEach|randomize|wallpaper|copyToShape|stencil";
 
 /// Picabia's state in a [`Session`] (its `picabia` field), not saved.
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub(crate) struct PicabiaState {
     /// The modifier rows `modifier.copy` copied (each one modifier object), for `modifier.paste`.
     pub(crate) copied_modifiers: Vec<Value>,
+    /// The laser link (`laser.*`, [`super::picabia_laser_link`]); dropping it stops a running job.
+    pub(crate) laser: super::picabia_laser_link::LaserLink,
     /// What the connected laser machine reports, for the G-code commands' defaults (the laser
     /// link fills it while connected; empty: the machine profile's values are used).
     pub(crate) laser_machine: LaserMachine,
@@ -39,6 +41,15 @@ pub struct LaserMachine {
     /// GRBL `$130` / `$131`: the X and Y travel, mm.
     pub travel_x_mm: Option<f64>,
     pub travel_y_mm: Option<f64>,
+}
+
+impl PicabiaState {
+    /// What the connected laser machine reports: read live from the laser link while it is open
+    /// (its settings arrive after `laser.connect`, between commands), else
+    /// [`PicabiaState::laser_machine`] (the link's last copy, cleared when it closes).
+    pub(crate) fn machine_reports(&self) -> LaserMachine {
+        self.laser.reports().unwrap_or_else(|| self.laser_machine.clone())
+    }
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -480,6 +491,7 @@ mod apply;
 mod laser;
 mod laser_design;
 pub mod laser_gcode;
+pub(crate) mod laser_run;
 mod stencil;
 mod targets;
 pub use targets::{check_target, target_choices};

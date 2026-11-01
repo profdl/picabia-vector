@@ -199,7 +199,7 @@ pub(super) fn material_param(cmd: &str, p: &Value) -> Result<Option<StencilMater
 /// travel is smaller.
 pub(super) fn bed_mm(s: &Session) -> (f64, f64) {
     let prof = MachineProfile::of(s);
-    let m = &s.picabia.laser_machine;
+    let m = s.picabia.machine_reports();
     let pick = |bed: f64, travel: Option<f64>| match travel {
         Some(t) if t.is_finite() && t > 0.0 => bed.min(t),
         _ => bed,
@@ -209,7 +209,7 @@ pub(super) fn bed_mm(s: &Session) -> (f64, f64) {
 
 /// The connected machine's `$30` (`None`: no machine connected, or it didn't say).
 fn machine_s_max(s: &Session) -> Option<f64> {
-    s.picabia.laser_machine.s_max.filter(|v| v.is_finite() && *v > 0.0)
+    s.picabia.machine_reports().s_max.filter(|v| v.is_finite() && *v > 0.0)
 }
 
 /// The G-code settings for `material`: its starting values, the remembered operations, the
@@ -345,7 +345,7 @@ pub(super) fn stencil_gcode(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// The test card's or the ladder's G-code and a name for it.
-fn card_job(cmd: &str, s: &Session, setup: &CardSetup, p: &Value, ladder: bool) -> Result<(LaserSheet, Gcode, GcodeParams, String)> {
+pub(super) fn card_job(cmd: &str, s: &Session, setup: &CardSetup, p: &Value, ladder: bool) -> Result<(LaserSheet, Gcode, GcodeParams, String)> {
     let gp = job_params(s, setup.material, p);
     if ladder {
         let l = vectorcraft_stencil::power_ladder(&LadderParams::from_json(p));

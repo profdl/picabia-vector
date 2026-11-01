@@ -209,6 +209,7 @@ impl Session {
         let r = match guard::catch_panic(|| self.run_nested(f)) {
             Ok(r) => r,
             Err(msg) => {
+                self.laser_emergency_stop(); // PICABIA: a panicking command stops a running laser job.
                 self.depth = 0;
                 self.journal_note.clear();
                 for (uid, doc, selection, interaction, history) in snapshot {
