@@ -60,6 +60,8 @@ jobs:
           PY
 
   release:
+    # PICABIA: needs storytold-only secrets/runners; the fork runs only the gate, nix and packaging lint.
+    if: github.repository == 'storytold/vectorcraft'
     needs: git-sources
     permissions:
       contents: write

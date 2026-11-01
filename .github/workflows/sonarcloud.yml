@@ -16,6 +16,8 @@ concurrency:
 
 jobs:
   sonarcloud:
+    # PICABIA: needs storytold-only secrets/runners; the fork runs only the gate, nix and packaging lint.
+    if: github.repository == 'storytold/vectorcraft'
     # Tracked at @main so org-wide CI improvements propagate without PR churn.
     uses: storytold/craft-common-actions/.github/workflows/sonarcloud.yml@main
     secrets: inherit

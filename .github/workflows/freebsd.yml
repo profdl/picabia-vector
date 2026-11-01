@@ -25,6 +25,8 @@ permissions:
 
 jobs:
   freebsd:
+    # PICABIA: needs storytold-only secrets/runners; the fork runs only the gate, nix and packaging lint.
+    if: github.repository == 'storytold/vectorcraft'
     # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
     uses: storytold/craft-common-actions/.github/workflows/freebsd.yml@main
     with:
