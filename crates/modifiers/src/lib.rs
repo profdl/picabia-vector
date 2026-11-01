@@ -79,8 +79,8 @@ pub use model::{
     MIN_PATTERN_SPACING_MM, MIN_TIE_WIDTH_MM, STENCIL_CLOTH, STENCIL_PAPER, STENCIL_PASTE,
 };
 pub use node::{
-    evaluate_node, evaluate_node_in, evaluate_node_in_doc, evaluate_node_with, has_modifiers, node_bounds, node_instances, node_instances_in_doc,
-    node_source, node_stack, set_node_source,
+    evaluate_node, evaluate_node_in, evaluate_node_in_doc, evaluate_node_with, has_modifiers, node_bounds, node_bounds_in_doc, node_instances,
+    node_instances_in_doc, node_source, node_stack, set_node_source,
 };
 pub use parse::{parse, parse_cached, stack_from_value, stack_to_value, to_json};
 pub use target::{

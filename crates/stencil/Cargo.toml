@@ -1,0 +1,21 @@
+[package]
+name = "vectorcraft-stencil"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Picabia stencil geometry: an object's painted outlines to a laser-cut katagami sheet (visible regions by paint order, colour selection, clean-up at physical size, islands and ties, checks), and its laser export (SVG, G-code, test card, power ladder)"
+
+[lints]
+workspace = true
+
+[dependencies]
+vectorcraft-geom = { workspace = true }
+vectorcraft-color = { workspace = true }
+vectorcraft-doc = { workspace = true }
+vectorcraft-pathops = { workspace = true }
+vectorcraft-modifiers = { workspace = true }
+linesweeper = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+vectorcraft-trace = { workspace = true }

@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use vectorcraft_doc::{Document, Node, NodeId, NodeKind};
 use vectorcraft_geom::BezPath;
-use vectorcraft_geom::kurbo::PathEl;
+use vectorcraft_geom::kurbo::{PathEl, Shape};
 
 use crate::cache;
 use crate::node::node_source;
@@ -173,11 +173,22 @@ fn target_outline(doc: &Document, _source: NodeId, target: NodeId) -> Result<Bez
     Ok(out)
 }
 
-/// `n`'s outline in document space: its path, or for a group, compound path or sublayer its
-/// visible members' outlines.
+/// `n`'s outline in document space: its path; for a clip group or clipped sublayer its clipping
+/// path; for a group, compound path or sublayer its visible members' outlines; for any other
+/// object (text, an image, a symbol instance, a placed document, a mesh…) its geometric box, as
+/// picabia-craft read a text or frame target.
 fn local_outline(n: &Node, depth: usize) -> Option<BezPath> {
-    if let NodeKind::Path { path, .. } = &n.kind {
-        return Some(path.to_bezpath());
+    match &n.kind {
+        NodeKind::Path { path, .. } => return Some(path.to_bezpath()),
+        NodeKind::Group { children, clip: true } | NodeKind::Layer { children, clip: true, .. } => {
+            return if depth >= MAX_GROUP_DEPTH { None } else { children.first().and_then(|c| local_outline(c, depth + 1)) };
+        }
+        NodeKind::Group { .. } | NodeKind::Layer { .. } | NodeKind::Compound { .. } => {}
+        _ => {
+            let r = n.geometric_bounds()?;
+            let finite = r.x0.is_finite() && r.y0.is_finite() && r.x1.is_finite() && r.y1.is_finite();
+            return (finite && (r.width() > 0.0 || r.height() > 0.0)).then(|| r.to_path(0.1));
+        }
     }
     if depth >= MAX_GROUP_DEPTH {
         return None;
