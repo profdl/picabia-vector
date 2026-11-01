@@ -91,3 +91,87 @@ fn modifier_commands_undo_exactly() {
         assert!(before == after, "{id}: {}", vectorcraft_testkit::invariants::first_diff(&before, &after, "$"));
     }
 }
+
+/// `fx` with a stencil: a black and a white square (and the fixture's selection) under one
+/// stencil row, selected, plus a plain square: the stencil and laser commands find something to
+/// compute and cut.
+fn stenciled(fx: Fixture) -> Session {
+    let mut s = fx.session();
+    if s.active().is_none() {
+        return s;
+    }
+    let square = |s: &mut Session, x: f64, hex: &str| {
+        let id = s.execute("shape.rectangle", &json!({"x": x, "y": 0, "width": 40, "height": 40})).unwrap()["id"].as_u64().unwrap();
+        s.execute("paint.setFill", &json!({"ids": [id], "color": hex})).unwrap();
+        id
+    };
+    let a = square(&mut s, 0.0, "#000000");
+    let b = square(&mut s, 40.0, "#ffffff");
+    square(&mut s, 200.0, "#808080");
+    s.execute("modifier.stencilFromSelection", &json!({"ids": [a, b], "props": {"widthMm": 80}})).unwrap();
+    s
+}
+
+/// Every stencil and laser command with junk params, on a document with a stencil (and on the
+/// plain fixtures): Ok or Err, never a panic, an open interaction or a corrupt tree. File params
+/// get a path in a temporary folder. Nothing here opens a port: these commands only write text.
+#[test]
+fn stencil_and_laser_commands_with_junk_params() {
+    let dir = vectorcraft_testkit::temp_dir("picabia-laser-sweep");
+    let path = dir.join("out.gcode").to_string_lossy().to_string();
+    let ids: Vec<&str> = command_specs().iter().map(|c| c.id).filter(|id| id.starts_with("modifier.stencil") || id.starts_with("laser.")).collect();
+    for want in [
+        "modifier.stencilInfo",
+        "modifier.stencilFromSelection",
+        "modifier.stencilExport",
+        "modifier.stencilTestCard",
+        "modifier.stencilGcode",
+        "laser.gcode",
+        "laser.profile",
+    ] {
+        assert!(ids.contains(&want), "{want} registered: {ids:?}");
+    }
+    let mut failures = vec![];
+    let mut calls = 0usize;
+    for fx in Fixture::ALL {
+        for id in &ids {
+            let spec = command_specs().iter().find(|c| c.id == *id).unwrap();
+            let mut cases = junk_params(spec.params, &path);
+            cases.push(json!({}));
+            cases.push(json!({"dryRun": true}));
+            cases.push(json!({"data": true, "kind": "powerLadder"}));
+            for p in &cases {
+                calls += 1;
+                let mut s = stenciled(fx);
+                let r = catch_quiet(|| s.execute(id, p));
+                let fail = match r {
+                    Err(msg) => Some(format!("PANIC {id} {p} [{fx:?}]: {msg}")),
+                    Ok(Err(vectorcraft_engine::EngineError::Internal { msg, .. })) => Some(format!("PANIC {id} {p} [{fx:?}]: {msg}")),
+                    Ok(_) if s.in_interaction() => Some(format!("{id} {p} [{fx:?}]: left an interaction open")),
+                    Ok(_) => check_session(&s).err().map(|e| format!("{id} {p} [{fx:?}]: {e}")),
+                };
+                failures.extend(fail);
+            }
+        }
+    }
+    assert!(calls > 100, "only {calls} calls");
+    failures.sort();
+    failures.dedup();
+    assert!(
+        failures.is_empty(),
+        "{} failures (of {calls} calls):\n{}",
+        failures.len(),
+        failures.iter().take(60).cloned().collect::<Vec<_>>().join("\n")
+    );
+}
+
+/// `modifier.stencilFromSelection` undoes exactly (the group and the row in one step).
+#[test]
+fn stencil_from_selection_undoes_exactly() {
+    let mut s = Fixture::Multi.session();
+    let before = vectorcraft_testkit::invariants::doc_json(&s.active().unwrap().doc);
+    s.execute("modifier.stencilFromSelection", &json!({})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    let after = vectorcraft_testkit::invariants::doc_json(&s.active().unwrap().doc);
+    assert!(before == after, "{}", vectorcraft_testkit::invariants::first_diff(&before, &after, "$"));
+}
