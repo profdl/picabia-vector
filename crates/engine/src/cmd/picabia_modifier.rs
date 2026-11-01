@@ -20,10 +20,11 @@ use crate::{EngineError, Result, Session};
 /// The kinds `modifier.add` takes, for messages.
 const KIND_LIST: &str = "linearArray|circularArray|gridArray|mirror|transformEach|randomize|wallpaper|copyToShape|stencil";
 
-/// The modifier rows `modifier.copy` copied (each one modifier object), for `modifier.paste`.
+/// Picabia's state in a [`Session`] (its `picabia` field), not saved.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Copied {
-    pub(crate) rows: Vec<Value>,
+pub(crate) struct PicabiaState {
+    /// The modifier rows `modifier.copy` copied (each one modifier object), for `modifier.paste`.
+    pub(crate) copied_modifiers: Vec<Value>,
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -302,16 +303,16 @@ fn copy(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(EngineError::Disabled(CMD.into(), format!("object {} has no modifiers", id.0)));
     }
     let copied = rows.len();
-    s.picabia_modifiers.rows = rows;
+    s.picabia.copied_modifiers = rows;
     Ok(json!({"copied": copied}))
 }
 
 fn paste(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "modifier.paste";
-    if s.picabia_modifiers.rows.is_empty() {
+    if s.picabia.copied_modifiers.is_empty() {
         return Err(EngineError::Disabled(CMD.into(), "no copied modifiers".into()));
     }
-    let rows = s.picabia_modifiers.rows.iter().map(Modifier::from_value).collect::<std::result::Result<Vec<_>, _>>();
+    let rows = s.picabia.copied_modifiers.iter().map(Modifier::from_value).collect::<std::result::Result<Vec<_>, _>>();
     let rows = rows.map_err(|e| super::bad(CMD, e.to_string()))?;
     let replace = super::switch_or(p, "replace", false, CMD)?;
     edit(CMD, "Paste Modifiers", s, p, |stack, id| {

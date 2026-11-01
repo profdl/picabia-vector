@@ -95,7 +95,7 @@ impl Session {
             link_stamps: Default::default(),
             link_scan: None,
             global_edit_options: Default::default(),
-            picabia_modifiers: Default::default(), // PICABIA: copied modifier rows.
+            picabia: Default::default(), // PICABIA: Picabia session state.
         }
     }
 
