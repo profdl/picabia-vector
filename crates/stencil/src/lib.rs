@@ -29,7 +29,11 @@
 //! Laser export (millimetres): [`laser_job`] turns the drawn cut into kerf-compensated, cleaned,
 //! ordered sheets (split to the bed, labelled in a single-stroke font, [`text_polylines`]),
 //! [`laser_svg`] writes one as an SVG for laser software, [`test_card`] makes the card that
-//! measures a material's kerf and limits.
+//! measures a material's kerf and limits. [`laser_gcode`] writes a sheet as GRBL 1.1 G-code
+//! (`GcodeParams`: the machine's S max, per-operation speed, power and passes; beam off at both
+//! ends, travel by `G0` under `M4`), [`estimate_sec`] its run time; [`power_ladder`] and
+//! [`ladder_gcode`] make the grid of squares that finds a material's power and speed. This crate
+//! only writes text: it never opens a port or talks to a machine.
 //!
 //! Path operations: [`ops`] (booleans on `linesweeper`'s raw contours, see its docs for why not
 //! VectorCraft's tidied booleans) and [`offset`] (region offset, opening, closing).
@@ -48,6 +52,8 @@ mod laser;
 mod laser_bed;
 mod laser_card;
 mod laser_font;
+mod laser_gcode;
+mod laser_ladder;
 mod laser_svg;
 pub mod offset;
 pub mod ops;
@@ -67,6 +73,8 @@ pub use laser::{
 };
 pub use laser_card::{BRIDGES_MM, CARD_H_MM, CARD_W_MM, CORNERS_DEG, GAUGE_MM, HOLES_MM, SLITS_MM, test_card};
 pub use laser_font::{MAX_TEXT_CHARS, font_has, text_polylines};
+pub use laser_gcode::{Gcode, GcodeParams, MAX_GCODE_LINES, MAX_HEADER_LINES, OpSettings, estimate_sec, laser_gcode};
+pub use laser_ladder::{Ladder, LadderCell, LadderParams, MAX_LADDER_STEPS, ladder_gcode, power_ladder};
 pub use laser_svg::laser_svg;
 pub use offset::{MAX_OFFSET_DISTANCE, MAX_OFFSET_ELEMENTS, OFFSET_MITER_LIMIT, close, offset, open};
 pub use problems::{MAX_PROBLEMS, Problem, ProblemCounts, ProblemKind};
@@ -113,6 +121,10 @@ mod hoshi_tests;
 mod laser_card_tests;
 #[cfg(test)]
 mod laser_font_tests;
+#[cfg(test)]
+mod laser_gcode_tests;
+#[cfg(test)]
+mod laser_ladder_tests;
 #[cfg(test)]
 mod laser_tests;
 #[cfg(test)]
