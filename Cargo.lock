@@ -6303,6 +6303,7 @@ dependencies = [
  "vectorcraft-plugins",
  "vectorcraft-render",
  "vectorcraft-scriptcheck",
+ "vectorcraft-stencil",
  "vectorcraft-svg",
  "vectorcraft-testkit",
  "vectorcraft-text",
