@@ -126,6 +126,23 @@ fn geometry_rows_are_set_and_listed_like_any_row() {
     assert!(s.execute("modifier.add", &json!({"ids": [r.0], "kind": "resample", "props": {"mode": "wobble"}})).is_err());
 }
 
+/// A row skipped over the anchor cap isn't baked silently: Apply says so.
+#[test]
+fn apply_warns_when_a_row_was_skipped_over_the_cap() {
+    let mut s = session();
+    let r = rect(&mut s, 0.0);
+    add(&mut s, r.0, "linearArray", json!({"count": 1000, "offsetX": 1}));
+    add(&mut s, r.0, "resample", json!({"count": 1024}));
+    let out = ex(&mut s, "modifier.apply", json!({"ids": [r.0]}));
+    let w = out["warnings"].as_array().unwrap();
+    assert!(w.iter().any(|w| w.as_str().unwrap().contains("anchors")), "{out}");
+    // Within the cap: no warnings.
+    let r = rect(&mut s, 0.0);
+    add(&mut s, r.0, "resample", json!({"count": 12}));
+    let out = ex(&mut s, "modifier.apply", json!({"ids": [r.0]}));
+    assert_eq!(out["warnings"], json!([]));
+}
+
 #[test]
 fn the_laser_cuts_the_trimmed_design() {
     let mut s = session();

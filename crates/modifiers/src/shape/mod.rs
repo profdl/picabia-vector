@@ -214,8 +214,9 @@ fn projected(n: &Node, op: &GeometryOp, depth: usize) -> usize {
             .iter()
             .map(|sp| match op {
                 GeometryOp::Resample(p) => resample::count(sp, p).unwrap_or(sp.anchors.len()),
-                // A cut adds at most an anchor at each end and drops the rest of the subpath:
-                // counted as what it was given, so it is never refused.
+                // A trim makes at most two more anchors than it was given (an anchor at each cut;
+                // through a closed path's start, its first anchor once more) and a tidy none:
+                // counted as what they were given, so they are never refused.
                 GeometryOp::Trim(_) | GeometryOp::Tidy(_) => sp.anchors.len(),
             })
             .fold(0usize, usize::saturating_add),

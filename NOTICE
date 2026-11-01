@@ -5,8 +5,9 @@ the MIT License or the Apache License, Version 2.0, at your option (LICENSE-MIT,
 Picabia's own files (docs/picabia/, assets/picabia/ and the files named picabia*) are original work
 by the Picabia contributors under that licence. The Picabia app icon (assets/picabia/app-icon/) is
 original artwork by the Picabia contributors, MIT OR Apache-2.0 (assets/picabia/app-icon/LICENSE.txt).
-Picabia includes code ported from tlprocedural, authored by Picabia's owner, Daniel Lefcourt, and
-used with the author's permission under Picabia's licence (MIT OR Apache-2.0).
+Picabia includes code ported from tlprocedural (https://github.com/profdl/tlprocedural), by
+Picabia's owner (GitHub: profdl), used with the owner's permission under Picabia's licence
+(MIT OR Apache-2.0).
 Picabia does not use the ArtCraft name or logos as its own.
 
 The VectorCraft notice follows, with Picabia's additions marked PICABIA.

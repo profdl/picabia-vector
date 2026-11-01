@@ -370,12 +370,16 @@ only a shape's outer ring).
 |---|---|---|---|---|
 | `start` | fraction of the length | 0 to 1 | 0.1 | Where the kept part starts (the panel shows a percentage) |
 | `end` | fraction | 0 to 1 | 0.9 | Where it ends |
-| `offset` | fraction | 0 to 1 | 0 | Added to both, then each is wrapped into 0..1 (never clamped, so the offset slides the window round a closed path) |
+| `offset` | fraction | 0 to 1 | 0 | Added to both. On a closed subpath each is then wrapped into 0..1 (so the offset slides the window round it); on an open one each is clamped to 0..1 |
 
 A closed subpath's window may run through its start point (end before start keeps the part through
-it); an open subpath never wraps (end before start keeps the part between them). The result is an
-open path; start = end keeps the whole subpath (closed if it was), and a window shorter than the
-precision drops the subpath. The cut is made on the true curve, so curves stay curves (tlprocedural
+it). An open subpath never wraps: start and end, offset added, are **clamped** to 0..1 (end 1 is its
+end), then put in order (end before start keeps the part between them); an offset that slides the
+window off the end leaves nothing. This differs from tlprocedural on purpose: tlprocedural wrapped
+an open path's fractions too, so `end: 1` read as 0 and kept the part *before* `start`, and an
+offset folded the window back to the start. The result is an open path; start = end (before the
+offset) keeps the whole subpath (closed if it was), and a window shorter than the precision drops
+the subpath. The cut is made on the true curve, so curves stay curves (tlprocedural
 trimmed a flattened outline). The object keeps its fill: an open path is filled as if closed by a
 straight line, as anywhere in VectorCraft (tlprocedural's trims drew no fill).
 
@@ -399,7 +403,11 @@ straight line, as anywhere in VectorCraft (tlprocedural's trims drew no fill).
   (`MAX_GEOMETRY_ANCHORS`): each copy may hold its share (200 000 ÷ copies). A row that would make
   more, and more than it was given, is skipped for that copy, with a note; so is a row that gives a
   point that isn't finite. Trim and Tidy never make more anchors than they are given (a cut adds
-  at most two), so they are never skipped.
+  at most two), so they are never skipped. Nesting doesn't multiply the cap: when the members of a
+  copied object have geometry rows whose anchors, times the object's copies, pass 200 000, the
+  members draw without their modifiers in each copy (with a note). `modifier.apply` returns what a
+  row couldn't do as `warnings` (a skipped row's reshape isn't in the baked copies). Catmull-Rom and
+  Chaikin leave alone a subpath with too few distinct points (an open one needs 2, a closed one 3).
 - The pivot of the copy rows stays the centre of the object's own bounds, even when a row above
   them reshapes it.
 

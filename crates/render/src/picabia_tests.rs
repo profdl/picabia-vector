@@ -474,3 +474,29 @@ fn the_anchor_cap_note_reaches_the_panel() {
     assert!(art(&d, n).is_some());
     assert!(notes(&d, n).iter().any(|s| s.contains("anchors")), "{:?}", notes(&d, n));
 }
+
+/// A group copied many times whose member resamples to many anchors: the cap is per object, so
+/// nesting can't multiply it; the members draw without their stacks in each copy, with a note.
+#[test]
+fn nested_geometry_rows_stay_under_the_anchor_cap() {
+    let member = r#"{"v":1,"stack":[{"id":"b","kind":"resample","mode":"count","count":1024}]}"#;
+    for (count, stripped) in [(1000, true), (3, false)] {
+        let mut d = Document::new(400.0, 100.0);
+        let l = d.layers[0].id;
+        let mut rect = red_rect(&mut d, Rect::new(10.0, 10.0, 30.0, 30.0));
+        vectorcraft_modifiers::set_node_source(&mut rect, Some(member.to_string()));
+        let g = Node::group(d.alloc_id(), vec![Arc::new(rect)]);
+        let g = d.insert(Some(l), 0, g).unwrap();
+        set_stack(&mut d, g, Some(&linear(count, 1.0)));
+        let n = d.node(g).unwrap();
+        assert_eq!(strips_nested(&d, n, count as usize), stripped, "{count} copies");
+        let a = art(&d, n).unwrap();
+        let members_stacked = a.children().unwrap().iter().any(|c| c.children().unwrap().iter().any(|m| vectorcraft_modifiers::has_modifiers(m)));
+        assert_eq!(members_stacked, !stripped, "{count} copies");
+        // What is drawn in all: the copies times the member's reshape (1024 anchors each), or the
+        // plain members.
+        let drawn = count as usize * if stripped { 4 } else { 1024 };
+        assert!(drawn <= vectorcraft_modifiers::MAX_GEOMETRY_ANCHORS);
+        assert_eq!(notes(&d, n).iter().any(|s| s.contains("members")), stripped, "{:?}", notes(&d, n));
+    }
+}

@@ -153,7 +153,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Apply Modifiers",
             [],
             None,
-            "{ids?|id?, upTo?: index (inclusive): bake only the rows down to it; the rows after it move onto the new group and stay live} replace each object by a group of real objects, one per modifier copy (named `Name 1…n` when the object has a name), in its place, as one undo step; a stencil row stays live on the group; objects whose stack makes no copies are left alone → {ids: the groups (selected), applied: [{id, group, copies}]}",
+            "{ids?|id?, upTo?: index (inclusive): bake only the rows down to it; the rows after it move onto the new group and stay live} replace each object by a group of real objects, one per modifier copy (named `Name 1…n` when the object has a name), in its place, as one undo step; a stencil row stays live on the group; objects whose stack makes no copies are left alone → {ids: the groups (selected), applied: [{id, group, copies}], warnings: [what a geometry row couldn't do, e.g. skipped over the anchor cap: its reshape is not in the copies]}",
             has_selection,
             apply::apply
         ),

@@ -34,7 +34,7 @@ fn line() -> SubPath {
 /// segment here, as tlprocedural's tests' points haven't).
 fn extract(sp: &SubPath, start: f64, end: f64, allow_wrap: bool) -> Vec<Point> {
     let m = Measured::new(pieces(sp));
-    let Some((s, e)) = trim::window(start, end, allow_wrap) else { return pts(sp) };
+    let Some((s, e)) = trim::window(start, end, 0.0, allow_wrap) else { return pts(sp) };
     let cut = if s < e {
         m.cut(s * m.total, e * m.total)
     } else {
@@ -102,6 +102,27 @@ fn extract_open_path_does_not_wrap() {
     // The row itself: an open path never wraps.
     let trim::Trimmed::Part(t) = trim::trim(&line(), &Trim { start: 0.8, end: 0.2, offset: 0.0 }) else { panic!() };
     assert_eq!(xs_of(&t), vec![8.0, 10.0, 20.0, 30.0, 32.0]);
+}
+
+/// A deliberate difference from tlprocedural: an open path's end of 1 is its end (tlprocedural
+/// wrapped it to 0 and kept `0..start`), and the offset clamps rather than wraps.
+#[test]
+fn open_path_end_one_is_the_end_and_offset_clamps() {
+    let part = |start, end, offset| match trim::trim(&line(), &Trim { start, end, offset }) {
+        trim::Trimmed::Part(t) => xs_of(&t),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(part(0.25, 1.0, 0.0), vec![10.0, 20.0, 30.0, 40.0]);
+    // start .2 end .9 offset .3 → .5..1 (not .2...5).
+    assert_eq!(part(0.2, 0.9, 0.3), vec![20.0, 30.0, 40.0]);
+    // Slid off the end entirely: nothing left.
+    assert_eq!(trim::trim(&line(), &Trim { start: 0.8, end: 1.0, offset: 0.5 }), trim::Trimmed::Gone);
+    // start = end before the offset still keeps the whole path.
+    assert_eq!(trim::trim(&line(), &Trim { start: 0.3, end: 0.3, offset: 0.5 }), trim::Trimmed::Whole);
+    // A closed path still wraps: end 1 is its start point.
+    let sq = shapes::rectangle(Rect::new(0.0, 0.0, 100.0, 100.0)).subpaths[0].clone();
+    let trim::Trimmed::Part(t) = trim::trim(&sq, &Trim { start: 0.25, end: 1.0, offset: 0.0 }) else { panic!() };
+    assert!((Measured::new(pieces(&t)).total - 300.0).abs() < 1e-6);
 }
 
 #[test]
@@ -188,6 +209,18 @@ fn linear_subdivision_inserts_midpoints_and_keeps_curves() {
     assert_eq!(r.anchors.len(), circle.anchors.len() * 4);
     let (a, b) = (Measured::new(pieces(&circle)).total, Measured::new(pieces(&r)).total);
     assert!((a - b).abs() < 1e-3, "same curve: {a} vs {b}");
+}
+
+#[test]
+fn polygon_methods_leave_a_degenerate_closed_subpath_alone() {
+    // Two anchors whose ends meet: one point as a polygon, nothing to split.
+    let sp = SubPath::polyline(&[Point::new(0.0, 0.0), Point::new(0.2, 0.0)], true);
+    for method in [SubdivideMethod::CatmullRom, SubdivideMethod::Chaikin] {
+        assert_eq!(resample::resample(&sp, &subdivide(method, 2)), None, "{method:?}");
+        assert_eq!(resample::count(&sp, &subdivide(method, 2)), None);
+        let p = super::shape_path(&PathData::new(vec![sp.clone()]), &GeometryOp::Resample(subdivide(method, 2)));
+        assert_eq!(p.subpaths[0].anchors.len(), 2, "never an empty closed subpath");
+    }
 }
 
 #[test]

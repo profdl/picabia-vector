@@ -28,6 +28,9 @@ pub(super) fn count(sp: &SubPath, p: &Resample) -> Option<usize> {
     match p.mode {
         ResampleMode::Subdivide => {
             let n = polygon_len(sp, p.method);
+            if p.method != SubdivideMethod::Linear && !polygon_ok(n, sp.closed) {
+                return None;
+            }
             let mut k = n;
             for _ in 0..p.iterations {
                 k = if sp.closed { k.saturating_mul(2) } else { k.saturating_mul(2).saturating_sub(1) };
@@ -66,13 +69,14 @@ pub(super) fn resample(sp: &SubPath, p: &Resample) -> Option<SubPath> {
         return None;
     }
     match p.mode {
-        ResampleMode::Subdivide => Some(subdivide(sp, p.method, p.iterations)),
+        ResampleMode::Subdivide => subdivide(sp, p.method, p.iterations),
         ResampleMode::Count => by_count(sp, p.count as usize),
         ResampleMode::Spacing => by_spacing(sp, p.spacing),
     }
 }
 
-fn subdivide(sp: &SubPath, method: SubdivideMethod, iterations: u32) -> SubPath {
+/// `None`: too few distinct points for the polygon methods (left as it is).
+fn subdivide(sp: &SubPath, method: SubdivideMethod, iterations: u32) -> Option<SubPath> {
     match method {
         SubdivideMethod::Linear => {
             let mut ps = pieces(sp);
@@ -85,16 +89,25 @@ fn subdivide(sp: &SubPath, method: SubdivideMethod, iterations: u32) -> SubPath 
                     })
                     .collect();
             }
-            from_pieces(&ps, sp.closed)
+            Some(from_pieces(&ps, sp.closed))
         }
         SubdivideMethod::CatmullRom | SubdivideMethod::Chaikin => {
             let mut pts = polygon(sp);
+            if !polygon_ok(pts.len(), sp.closed) {
+                return None;
+            }
             for _ in 0..iterations {
                 pts = if method == SubdivideMethod::Chaikin { chaikin(&pts, sp.closed) } else { catmull_rom(&pts, sp.closed) };
             }
-            SubPath::polyline(&pts, sp.closed)
+            Some(SubPath::polyline(&pts, sp.closed))
         }
     }
+}
+
+/// Whether a polygon of `n` points has a segment to split (a closed one needs three: two points
+/// whose ends meet are one point).
+fn polygon_ok(n: usize, closed: bool) -> bool {
+    n >= if closed { 3 } else { 2 }
 }
 
 /// `sp`'s anchor points as a polygon (a closed subpath's last point dropped when it repeats the

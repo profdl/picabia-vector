@@ -85,9 +85,17 @@ pub(super) fn apply(s: &mut Session, p: &Value) -> Result<Value> {
         let mut groups = Vec::with_capacity(plans.len());
         let mut copy_ids = Vec::new();
         let mut live = Vec::new();
+        let mut warnings: Vec<String> = Vec::new();
         for plan in plans {
             let (id, copies) = (plan.id, plan.copies.len());
-            let (group, ids) = bake(d, &plan)?;
+            let (group, ids, notes) = bake(d, &plan)?;
+            // What a geometry row couldn't do (skipped over the anchor cap…) is said, not lost.
+            for n in notes {
+                let w = format!("object {}: {n}", id.0);
+                if !warnings.contains(&w) {
+                    warnings.push(w);
+                }
+            }
             applied.push((id, group.id, copies));
             if !plan.rest.is_empty() {
                 live.push((group.id, plan.rest, plan.pivot));
@@ -107,11 +115,12 @@ pub(super) fn apply(s: &mut Session, p: &Value) -> Result<Value> {
             vectorcraft_modifiers::set_node_source(g, Some(vectorcraft_modifiers::to_json(&rest)));
         }
         sel.set(applied.iter().map(|a| a.1));
-        Ok(applied)
+        Ok((applied, warnings))
     })?;
+    let (applied, warnings) = applied;
     let groups: Vec<u64> = applied.iter().map(|a| a.1.0).collect();
     let rows: Vec<Value> = applied.iter().map(|(id, g, n)| json!({"id": id.0, "group": g.0, "copies": n})).collect();
-    Ok(json!({"ids": groups, "applied": rows}))
+    Ok(json!({"ids": groups, "applied": rows, "warnings": warnings}))
 }
 
 /// What applying object `id` makes, or `None` when its stack makes no copies.
@@ -168,8 +177,9 @@ fn replaceable(doc: &Document, node: &Node) -> Result<()> {
     }
 }
 
-/// The group of `plan.id`'s copies (not in the tree yet), and the copies' ids.
-fn bake(d: &mut Document, plan: &Plan) -> Result<(Node, Vec<NodeId>)> {
+/// The group of `plan.id`'s copies (not in the tree yet), the copies' ids, and what the geometry
+/// rows said (a row skipped over the anchor cap: its reshape isn't in the copies).
+fn bake(d: &mut Document, plan: &Plan) -> Result<(Node, Vec<NodeId>, Vec<String>)> {
     let mut node = d.node(plan.id).cloned().ok_or_else(|| super::super::bad(CMD, format!("no object with id {}", plan.id.0)))?;
     // The object's transparency and its own attributes go on the group, as the renderer draws
     // the copies (composited together, once): the copies are the object without them.
@@ -207,7 +217,7 @@ fn bake(d: &mut Document, plan: &Plan) -> Result<(Node, Vec<NodeId>)> {
     if let Some(ch) = group.children_mut() {
         *ch = kids;
     }
-    Ok((group, copy_ids))
+    Ok((group, copy_ids, shaper.notes))
 }
 
 /// Shift the pivot-relative params of `stack` by `d` (the old pivot minus the new one), so its

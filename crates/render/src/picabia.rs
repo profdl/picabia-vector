@@ -42,6 +42,10 @@ use vectorcraft_modifiers::Output;
 /// first): what a closed document's art can keep alive is bounded by it.
 const MAX_CACHED_NODES: usize = 100_000;
 
+/// The most path anchors the kept arts hold together (the least recently used go first): geometry
+/// rows can put many anchors in few nodes, so the cache is weighed by both.
+const MAX_CACHED_ANCHORS: usize = 4 * vectorcraft_modifiers::MAX_GEOMETRY_ANCHORS;
+
 /// The most copies an object's art may draw with the copies its members' own stacks make inside
 /// each of them (the product across nesting levels); past this the members draw once in each copy.
 pub const MAX_NESTED_COPIES: usize = vectorcraft_modifiers::MAX_INSTANCES_PER_NODE;
@@ -64,7 +68,21 @@ struct Kept {
     node: Node,
     art: Option<Arc<Node>>,
     nodes: usize,
+    /// The path anchors the art and the object hold.
+    anchors: usize,
     notes: Vec<String>,
+}
+
+/// The path anchors in `n` and everything in it.
+fn anchor_count(n: &Node) -> usize {
+    fn walk(n: &Node, depth: usize) -> usize {
+        if depth > vectorcraft_doc::MAX_DEPTH {
+            return 0;
+        }
+        let own = n.path_data().map_or(0, vectorcraft_geom::PathData::anchor_count);
+        n.children().into_iter().flatten().fold(own, |a, c| a.saturating_add(walk(c, depth + 1)))
+    }
+    walk(n, 0)
 }
 
 static CACHE: Mutex<Vec<Arc<Kept>>> = Mutex::new(Vec::new());
@@ -197,11 +215,16 @@ pub fn draws_copies(doc: &Document, n: &Node) -> bool {
     has_stack(n) && copies(doc, n).is_some_and(|out| node_count(n).saturating_mul(out.instances.len()) <= MAX_ART_NODES)
 }
 
-/// Whether `n`'s members draw once in each of its copies (their own copies over the budget), as
-/// [`make`] decides.
+/// Whether `n`'s members draw once in each of its copies, as [`make`] decides: their own copies
+/// over the budget, or the anchors their geometry rows make, across all of `n`'s copies, over the
+/// geometry cap (the cap is per object; nesting would multiply it).
 fn strips_nested(doc: &Document, n: &Node, instances: usize) -> bool {
     let nested = nested_copies(doc, n, 0);
-    nested > 0 && instances.saturating_mul(nested) > MAX_NESTED_COPIES
+    if nested == 0 {
+        return false;
+    }
+    instances.saturating_mul(nested) > MAX_NESTED_COPIES
+        || instances.saturating_mul(nested_anchors(doc, n, 0)) > vectorcraft_modifiers::MAX_GEOMETRY_ANCHORS
 }
 
 /// Why `n` draws once although its stack makes copies, for the panel's warnings: too many nodes.
@@ -234,7 +257,11 @@ pub fn notes(doc: &Document, n: &Node) -> Vec<String> {
 
 /// `n`'s kept art, made when it isn't kept (see [`art`]).
 fn kept(doc: &Document, n: &Node) -> Option<Arc<Kept>> {
-    let out = copies(doc, n)?;
+    Some(kept_for(doc, n, copies(doc, n)?))
+}
+
+/// [`kept`] for `n`'s evaluation `out` (from [`copies`]).
+fn kept_for(doc: &Document, n: &Node, out: Arc<Output>) -> Arc<Kept> {
     let at = std::ptr::from_ref(n) as usize;
     let candidate = {
         let cache = CACHE.lock().unwrap_or_else(PoisonError::into_inner);
@@ -242,7 +269,7 @@ fn kept(doc: &Document, n: &Node) -> Option<Arc<Kept>> {
     };
     // The object compared outside the lock (its address may have been reused).
     if let Some(k) = candidate.filter(|k| k.node == *n) {
-        return Some(k);
+        return k;
     }
     let nodes = node_count(n).saturating_mul(out.instances.len());
     let (art, notes) = if nodes <= MAX_ART_NODES {
@@ -252,16 +279,18 @@ fn kept(doc: &Document, n: &Node) -> Option<Arc<Kept>> {
         (None, Vec::new())
     };
     let held = node_count(n).saturating_add(if art.is_some() { nodes } else { 0 });
-    let kept = Arc::new(Kept { at, out, node: n.clone(), art, nodes: held, notes });
+    let anchors = anchor_count(n).saturating_add(art.as_deref().map_or(0, anchor_count));
+    let kept = Arc::new(Kept { at, out, node: n.clone(), art, nodes: held, anchors, notes });
     let mut cache = CACHE.lock().unwrap_or_else(PoisonError::into_inner);
     cache.retain(|k| !(k.at == at && k.node == *n));
     cache.insert(0, kept.clone());
-    let mut total = 0usize;
+    let (mut total, mut total_anchors) = (0usize, 0usize);
     cache.retain(|k| {
         total = total.saturating_add(k.nodes);
-        total <= MAX_CACHED_NODES
+        total_anchors = total_anchors.saturating_add(k.anchors);
+        total <= MAX_CACHED_NODES && total_anchors <= MAX_CACHED_ANCHORS
     });
-    Some(kept)
+    kept
 }
 
 /// [`art`] as an owned node, for the renderer's art chain and the exporters' bake.
@@ -337,11 +366,19 @@ fn make(doc: &Document, n: &Node, out: &Output) -> (Node, Vec<String>) {
     // be copied again when the file is read back).
     vectorcraft_modifiers::set_node_source(&mut g, None);
     // Members with stacks of their own copy inside every copy: within one budget.
+    let mut stripped = None;
     if strips_nested(doc, &object, out.instances.len()) {
+        if nested_anchors(doc, &object, 0) > 0 {
+            stripped = Some(format!(
+                "members' geometry rows would make more than {} anchors in all the copies: the members are drawn without their modifiers",
+                vectorcraft_modifiers::MAX_GEOMETRY_ANCHORS
+            ));
+        }
         strip_nested(&mut object, 0);
     }
     let sc = scaling();
     let mut shaper = vectorcraft_modifiers::Shaper::new(out);
+    shaper.notes.extend(stripped);
     shaper.source(&mut object);
     let copies = out
         .instances
@@ -381,6 +418,25 @@ fn nested_copies(doc: &Document, n: &Node, depth: usize) -> usize {
     total
 }
 
+/// The anchors the geometry rows of `n`'s members (not `n` itself) put in one copy of `n`: each
+/// reshaped member's art, times the copies of the members above it that copy it. Building a
+/// member's art is bounded by its own cap.
+fn nested_anchors(doc: &Document, n: &Node, depth: usize) -> usize {
+    if depth > vectorcraft_doc::MAX_DEPTH {
+        return 0;
+    }
+    let mut total = 0usize;
+    for c in n.children().into_iter().flatten() {
+        let here = match has_stack(c).then(|| copies(doc, c)).flatten() {
+            Some(o) if o.has_geometry() => art(doc, c).map_or(0, |a| anchor_count(&a)),
+            Some(o) => o.instances.len().saturating_mul(nested_anchors(doc, c, depth + 1)),
+            None => nested_anchors(doc, c, depth + 1),
+        };
+        total = total.saturating_add(here);
+    }
+    total
+}
+
 /// `n`'s members without their stacks.
 fn strip_nested(n: &mut Node, depth: usize) {
     if depth > vectorcraft_doc::MAX_DEPTH {
@@ -407,8 +463,9 @@ pub fn hit_hooks() -> vectorcraft_doc::hit::CopyHooks {
 /// `n`'s art when geometry rows reshape its copies (a transform of `n` isn't what is drawn).
 fn hit_shaped(symbols: &SymbolBoxes, n: &Node) -> Option<Arc<Node>> {
     let doc = symbols.document();
-    copies(doc, n).filter(|o| o.has_geometry())?;
-    art(doc, n)
+    // Plain copies are clicked by their transforms: no art is built for them.
+    let out = copies(doc, n).filter(|o| o.has_geometry())?;
+    kept_for(doc, n, out).art.clone()
 }
 
 /// The transforms of `n`'s copies, the front one last, and whether its members draw once in each

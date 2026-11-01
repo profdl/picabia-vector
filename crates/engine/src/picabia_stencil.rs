@@ -108,12 +108,17 @@ fn compute_keyed(doc: &Document, node: &Node, frame: &Frame, inputs: Inputs) -> 
         }
     }
     let text = vectorcraft_render::effects::text_outliner();
-    // Geometry rows above the stencil reshape what it cuts: the copies as drawn.
-    let g = match vectorcraft_modifiers::node_instances_in_doc(doc, node).filter(|o| o.has_geometry()) {
-        Some(out) => {
-            let (copies, notes) = vectorcraft_modifiers::shaped_copies(node, &out);
+    // Geometry rows above the stencil reshape what it cuts: the copies as drawn, taken from the
+    // renderer's kept art (reshaped once, shared with the canvas; the key below is computed from
+    // what is gathered, so they can't be skipped before it).
+    let shaped = vectorcraft_modifiers::node_instances_in_doc(doc, node)
+        .filter(|o| o.has_geometry())
+        .and_then(|_| vectorcraft_render::picabia::art(doc, node));
+    let g = match shaped {
+        Some(art) => {
+            let copies: Vec<Node> = art.children().into_iter().flatten().map(|c| Node::clone(c)).collect();
             let mut g = vectorcraft_stencil::gather_shaped(doc, &copies, text);
-            g.warnings.extend(notes);
+            g.warnings.extend(vectorcraft_render::picabia::notes(doc, node));
             g
         }
         None => vectorcraft_stencil::gather(doc, node, &frame.copies, text),
