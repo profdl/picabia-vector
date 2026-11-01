@@ -1,11 +1,25 @@
+<!-- PICABIA: Picabia's header replaces the ArtCraft logo block (a trademark, not Picabia's); VectorCraft's README follows. See docs/picabia/SEAMS.md -->
 <p align="center">
-  <a href="https://getartcraft.com/">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="docs/brand/artcraft-logo-white.svg">
-      <img alt="ArtCraft" src="docs/brand/artcraft-logo.svg" width="200">
-    </picture>
-  </a>
+  <img src="assets/picabia/app-icon/picabia-256.png" width="128" height="128" alt="Picabia icon: eight dots on a ring">
 </p>
+
+<h1 align="center">Picabia</h1>
+
+<p align="center">
+  <b>Vector illustration with a live modifier stack, built on VectorCraft.</b><br>
+  Everything VectorCraft does, plus non-destructive arrays, mirrors and randomised repeats that stay editable.<br>
+  Roadmap: <a href="docs/picabia/ROADMAP.md">docs/picabia/ROADMAP.md</a> &middot; Modifiers: <a href="docs/picabia/modifiers.md">docs/picabia/modifiers.md</a> &middot; Seams: <a href="docs/picabia/SEAMS.md">docs/picabia/SEAMS.md</a>
+</p>
+
+Picabia is a thin fork of [VectorCraft](https://github.com/storytold/vectorcraft) (upstream, by the
+ArtCraft team and community) and keeps its crate names, its file format (`.vectorcraft`) and its
+licence, MIT OR Apache-2.0, unchanged (see [`NOTICE`](NOTICE)). Picabia has its own name, app id
+(`org.picabia.Picabia`), settings folder (`Picabia`) and icon. The ArtCraft name and logos are
+trademarks of the ArtCraft Team and are not used by Picabia as its own. Picabia's code lives in new
+files; its edits to VectorCraft's files are short seams marked `PICABIA:` and listed in
+[`docs/picabia/SEAMS.md`](docs/picabia/SEAMS.md). The rest of this README is VectorCraft's own.
+
+---
 
 
 <p align="center">
