@@ -1,5 +1,6 @@
-//! Screen: a vector halftone, the computational core (PIC20.5a). A row, panel and command wire it
-//! later.
+//! Screen: a vector halftone, the computational core (PIC20.5a). The `screen` geometry row
+//! ([`crate::shape`], PIC20.5c) runs it on each path, clips the dots to the path's outline and fits
+//! curves to them.
 //!
 //! Written for Picabia: a spot-function field contoured by our own marching squares
 //! ([`crate::contour`]). Nothing here comes from the AGPL `marching-squares` package.
@@ -35,6 +36,8 @@
 //! ([`Screen::new`]); a non-finite tone counts as no ink. Images are capped at
 //! [`MAX_TONE_PIXELS`].
 
+use std::sync::{Arc, OnceLock};
+
 use vectorcraft_geom::{Point, Rect};
 
 use crate::contour::{self, ContourError, Grid, MAX_CELLS, Ring};
@@ -56,8 +59,9 @@ const TABLE_SIDE: usize = 128;
 /// How [`SpotShape::Ellipse`] stretches `b`.
 const ELLIPSE_STRETCH: f64 = 1.4;
 
-/// The spot drawn in each cell.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// The spot drawn in each cell (written camelCase in a `screen` row's `spot`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum SpotShape {
     #[default]
     Round,
@@ -101,11 +105,36 @@ pub struct Screen {
     lpi: f64,
     angle_deg: f64,
     quality: u32,
-    /// The shape's spot values over a quarter cell, sorted.
-    table: Vec<f64>,
+    /// The shape's spot values over a quarter cell, sorted (built once per shape: [`table_of`]).
+    table: Arc<[f64]>,
     /// cos and sin of `-angle` (into screen space).
     cos: f64,
     sin: f64,
+}
+
+/// Each shape's sorted spot values, built the first time a screen of that shape is made (a screen
+/// row makes one for every path of every copy).
+static TABLES: [OnceLock<Arc<[f64]>>; 6] = [const { OnceLock::new() }; 6];
+
+/// `shape`'s sorted spot values over a quarter cell.
+fn table_of(shape: SpotShape) -> Arc<[f64]> {
+    let build = || -> Arc<[f64]> {
+        let mut table = Vec::with_capacity(TABLE_SIDE * TABLE_SIDE);
+        for j in 0..TABLE_SIDE {
+            for i in 0..TABLE_SIDE {
+                let a = (i as f64 + 0.5) / TABLE_SIDE as f64;
+                let b = (j as f64 + 0.5) / TABLE_SIDE as f64;
+                table.push(shape.value(a, b));
+            }
+        }
+        table.sort_by(f64::total_cmp);
+        table.into()
+    };
+    let k = SpotShape::ALL.iter().position(|s| *s == shape).unwrap_or(0);
+    match TABLES.get(k) {
+        Some(cell) => cell.get_or_init(build).clone(),
+        None => build(),
+    }
 }
 
 /// `v` clamped to `lo..=hi`, or `default` when it isn't finite.
@@ -121,17 +150,8 @@ impl Screen {
         let lpi = clamp_f(lpi, MIN_LPI, MAX_LPI, DEFAULT_LPI);
         let angle_deg = clamp_f(angle_deg, -360.0, 360.0, 0.0);
         let quality = quality.clamp(MIN_QUALITY, MAX_QUALITY);
-        let mut table = Vec::with_capacity(TABLE_SIDE * TABLE_SIDE);
-        for j in 0..TABLE_SIDE {
-            for i in 0..TABLE_SIDE {
-                let a = (i as f64 + 0.5) / TABLE_SIDE as f64;
-                let b = (j as f64 + 0.5) / TABLE_SIDE as f64;
-                table.push(shape.value(a, b));
-            }
-        }
-        table.sort_by(f64::total_cmp);
         let r = angle_deg.to_radians();
-        Screen { shape, lpi, angle_deg, quality, table, cos: r.cos(), sin: -r.sin() }
+        Screen { shape, lpi, angle_deg, quality, table: table_of(shape), cos: r.cos(), sin: -r.sin() }
     }
 
     pub fn shape(&self) -> SpotShape {
@@ -304,6 +324,11 @@ impl ToneImage {
             })
             .collect();
         Some(ToneImage { width, height, darkness, place })
+    }
+
+    /// Its size in pixels.
+    pub fn size(&self) -> (usize, usize) {
+        (self.width, self.height)
     }
 
     fn checked(width: usize, height: usize, place: Rect) -> Option<usize> {

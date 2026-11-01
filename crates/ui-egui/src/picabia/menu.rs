@@ -5,8 +5,8 @@ use serde_json::json;
 
 use crate::menus::Item;
 
-/// The Object ▸ Modifiers submenu: add each kind to the selection, then Apply, Remove All, and
-/// copying and pasting rows between objects.
+/// The Object ▸ Modifiers submenu: add each kind to the selection (and the screen's presets), then
+/// Apply, Remove All, and copying and pasting rows between objects.
 pub fn object_items() -> Vec<Item> {
     let add = |label: &'static str, kind: &str| Item::Cmd(label, "modifier.add", json!({ "kind": kind }));
     vec![
@@ -25,6 +25,9 @@ pub fn object_items() -> Vec<Item> {
         add("Tidy", "tidy"),
         add("Deform", "deform"),
         add("Displace", "displace"),
+        add("Screen", "screen"),
+        Item::Cmd("Ben-Day Dots", "modifier.add", json!({ "kind": "screen", "preset": "benDay" })),
+        Item::Cmd("Line Fill", "modifier.add", json!({ "kind": "screen", "preset": "lineFill" })),
         Item::Sep,
         Item::Cmd("Apply Modifiers", "modifier.apply", serde_json::Value::Null),
         Item::Cmd("Remove All Modifiers", "modifier.remove_all", serde_json::Value::Null),

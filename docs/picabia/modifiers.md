@@ -59,7 +59,7 @@ differences:
   wherever their row sits in the stack: each copy gets its own values, and `i`/`n` count all the
   copies. (Their position among the arrays doesn't change the result; their order among
   themselves does.)
-- **Geometry steps** (resample, trim, tidy, deform, displace; PIC20) change paths instead of placing copies. A
+- **Geometry steps** (resample, trim, tidy, deform, displace, screen; PIC20) change paths instead of placing copies. A
   geometry step **above every copy step** (array or per-instance) changes the object itself before
   it is copied: every copy is a copy of the changed object. A geometry step **below a copy step**
   runs on **each finished copy, after its transform**, in document space, in stack order (whether
@@ -357,7 +357,7 @@ read too; they are written lowercase).
 Numbers outside their range are clamped when evaluating (a warning names the field); a colour that
 doesn't read takes its default. `cutColours` can't be bound to a variable.
 
-### Geometry rows: resample, trim, tidy, deform, displace (PIC20)
+### Geometry rows: resample, trim, tidy, deform, displace, screen (PIC20)
 
 Ported from tlprocedural (the owner's TypeScript app): its Subdivide and Rebuild Points become
 **Resample**, Trim Path becomes **Trim**, Close Path and Sort Points become **Tidy** (the owner's
@@ -552,6 +552,80 @@ Differences from tlprocedural, on purpose:
 - Stacked arrays ramp as one combined array (tlprocedural read the most recent array's own
   index), as Deform's ramp does.
 
+#### screen
+
+Picabia's own vector halftone (PIC20.5c). **Not ported**: tlprocedural has no Screen; the row, its
+contouring and its clipping were written for Picabia (the contouring is not derived from the AGPL
+`marching-squares` package, nor from any other GPL/AGPL code). Each path becomes the dots of a
+halftone screen laid over it, clipped to its outline.
+
+| Field | Unit | Range | Default | Meaning |
+|---|---|---|---|---|
+| `spot` | choice | `round`, `ellipse`, `line`, `square`, `diamond`, `cross` | `round` | The spot in each cell (see the core below): round dots meet at mid-grey (a checkerboard) and turn into round holes in the shadows; ellipses chain along the angle first; lines thicken; squares and diamonds meet corner to corner then become holes; crosses thicken their arms |
+| `lpi` | lines per inch | 1 to 300 | 20 | Cells `72 / lpi` pt apart |
+| `angle` | degrees | -360 to 360 | 45 | The screen's turn, clockwise on screen |
+| `quality` | samples a cell | 4 to 64 | 12 | How finely each cell is traced: higher follows thin lines and small dots more closely, and costs more |
+| `tone` | choice | `fill`, `fixed`, `image` | `fill` | Where the ink amount (0 none … 1 solid) comes from, below |
+| `amount` | % | 0 to 100 | 50 | `fixed` only: the tone everywhere |
+| `image` | object id | | empty | `image` only: the image object whose darkness gives the tone |
+| `invert` | on/off | | off | Ink the light parts: the tone becomes 1 − tone |
+
+**Presets.** `modifier.add {"kind": "screen", "preset": …}` (props apply over the preset), in
+Object ▸ Modifiers and Add New Effect ▸ Modifiers:
+- **Ben-Day Dots** (`benDay`): round dots at 45°, 10 lpi, a fixed 30% tone.
+- **Line Fill** (`lineFill`): lines at 45°, 12 lpi, a fixed 30% tone (a hatch).
+
+**Tone sources.**
+- `fill`: the darkness (1 − Rec. 709 luminance, times opacity) of the path's paint: its fill, else
+  its stroke's paint, else black (solid ink). A linear or radial gradient is read where each point
+  sits (its stops, midpoints and opacities; an unplaced gradient fitted to the path's box, as it
+  draws). A freeform gradient is read as the average of its colours, and a pattern as 50%, each
+  with a note.
+- `fixed`: `amount` everywhere.
+- `image`: an image object's darkness (straight-alpha RGBA, Rec. 709 luminance, transparent pixels
+  count as white) where each point sits, through the image's placement (rotated, skewed and
+  flipped images are read where they show), bilinear; no ink outside the image. The image is
+  found in the document by id, as a copy-to-shape target is: refused when set if it names nothing,
+  the object itself, its groups or contents, or a top-level layer; it follows copies (duplicating
+  the screened object with its image points the copy at the copied image); moving or editing the
+  image redraws the screen. An image over 16 million pixels is averaged down to fit. When the image
+  is gone, isn't an image, or can't be read, the row is skipped (the path draws as it is) with the
+  reason in the panel.
+
+**What it makes.** Each path's outline is screened on its own, with its own paint: paths, each
+compound path as one outline (its members become one member holding the dots), and every path in a
+group; guides and clipping paths are left alone; type, images, symbols and live objects pass through
+with a note. The dots replace the path (a live shape becomes a plain path), filled with the path's
+paint (its fill; its stroke's paint when it has no fill; black when it has neither; a gradient stays
+where it was), with **no stroke**, filled non-zero. With `tone: fill`, the dots carry the paint they
+read: a mid-grey fill gives grey dots over half the area, so the art reads lighter than the fill (use
+a black fill with an image or a fixed tone for true black-and-white halftones).
+
+**Method.** The field is sampled over the path's box (`quality` samples a cell, on a lattice fixed to
+the page), contoured by Picabia's marching squares, the rings fitted with curves (Simplify's
+least-squares fit within 0.15 of a sample step; round and elliptical dots smooth, the other spots
+keep their corners), then clipped to the outline: dots wholly inside are kept, dots wholly outside
+dropped, and only the dots that cross the outline's edge (or enclose it) go through Pathfinder's
+intersect. Measured: a fixed tone inks its share of a square within 3 percentage points for every
+spot (a cross under 20% needs a quality of about 48: its arms are thinner than a sample at 12).
+
+**Copies.** The screen is fixed to the page, not to the object: its cells sit at whole periods from
+the page origin. Below a copy row each copy is screened where it sits, so the copies' dots line up as
+one screen (copies a whole number of cells apart get the same dots, moved); a rotated copy is not
+screened in its own frame. Above every copy row the object is screened once and every copy is a copy
+of the dots.
+
+**Caps.** The sampled grid stays within 1,000,000 cells: a finer step is coarsened, with a note.
+Before tracing, the anchors are estimated as 4 per screen cell over the path's box and checked against
+the object's share of the 200 000-anchor geometry cap (each copy its share); after fitting and
+clipping, the real count is checked again. Over either, the path is left as it is, with a note (lower
+the `lpi` or shrink the art). An outline flattened into more than 1,000,000 pieces isn't screened; a
+failed clip at the edge drops those edge dots, with a note.
+
+**Stencil and laser.** The stencil and `laser.gcode` read the screened copies like any geometry row:
+each dot is a contour to cut (tested: a 30% screen above a stencil leaves each colour 30% of its
+area; the laser burns the dots' perimeters).
+
 #### What geometry rows change
 
 - Paths, the members of compound paths and the paths inside groups. A live shape (rectangle,
@@ -574,8 +648,8 @@ Differences from tlprocedural, on purpose:
 
 ## Screen: contouring core, written for Picabia; not derived from the AGPL marching-squares package
 
-Screen (PIC20.5, not yet a row) is a vector halftone, like a bitmap halftone screen followed by
-tracing. Its core landed in PIC20.5a; the row, its panel and command come with the geometry rows.
+Screen (PIC20.5) is a vector halftone, like a bitmap halftone screen followed by tracing. Its core
+landed in PIC20.5a; the `screen` geometry row (PIC20.5c, [screen](#screen) above) runs it.
 
 - **Contouring** (`vectorcraft_modifiers::contour`): marching squares written from the textbook
   algorithm. tlprocedural uses the `marching-squares` npm package, which is AGPL; its source was not
@@ -597,8 +671,8 @@ tracing. Its core landed in PIC20.5a; the row, its panel and command come with t
   2% traced). Round, Square and Diamond dots meet at mid-grey and turn into holes in the shadows.
   Art too big for the cell cap at the chosen quality is sampled more coarsely (`Traced::coarsened`).
   Ben-Day dots are Round at a fixed tone; Line Fill is Line at a fixed tone.
-- **Still to wire**: the row kind and its params, clipping the traced rings to the layer's
-  outline, fitting curves to the rings (they are polylines), the panel and the command.
+- **Wired** (PIC20.5c): the row clips the rings to each path's outline (Pathfinder's intersect, edge
+  dots only), fits curves to them (Simplify) and paints them; see [screen](#screen).
 
 ## Expressions
 

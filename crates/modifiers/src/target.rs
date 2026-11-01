@@ -13,14 +13,15 @@
 
 use std::collections::BTreeSet;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use vectorcraft_doc::{Document, Node, NodeId, NodeKind};
-use vectorcraft_geom::BezPath;
 use vectorcraft_geom::kurbo::{PathEl, Shape};
+use vectorcraft_geom::{Affine, BezPath};
 
 use crate::cache;
 use crate::node::node_source;
+use crate::screen::ToneImage;
 
 /// The most path elements a target outline may have (bigger outlines are refused).
 pub const MAX_TARGET_ELEMENTS: usize = 100_000;
@@ -47,9 +48,15 @@ impl TargetShape {
     }
 }
 
-/// Finds a `copyToShape` modifier's target. `Err` is the warning to show (no copies are placed).
+/// Finds a `copyToShape` modifier's target, and a `screen` row's image. `Err` is the warning to
+/// show (no copies are placed; the screen is skipped).
 pub trait TargetResolver {
     fn resolve(&self, target: &str) -> Result<Arc<TargetShape>, String>;
+
+    /// The darkness of image object `target`, for a `screen` row whose tone comes from an image.
+    fn tone(&self, _target: &str) -> Result<Arc<ToneTarget>, String> {
+        Err("a screen needs the document to find its image; it is skipped".into())
+    }
 }
 
 /// No document: every target is unresolved.
@@ -58,6 +65,41 @@ pub struct NoTargets;
 impl TargetResolver for NoTargets {
     fn resolve(&self, _target: &str) -> Result<Arc<TargetShape>, String> {
         Err("copy to shape needs the document to find its target; no copies".into())
+    }
+}
+
+/// A `screen` row's image, resolved: its darkness ([`ToneImage`], at most
+/// [`crate::screen::MAX_TONE_PIXELS`]: a bigger image is averaged down to fit) and the map from
+/// document space into its pixel space, so a rotated or skewed image is read where it shows.
+#[derive(Clone)]
+pub struct ToneTarget {
+    pub image: Arc<ToneImage>,
+    /// Document space → the image object's pixel space (`0..width × 0..height`).
+    pub to_pixels: Affine,
+    /// Identifies the pixels and the placement: part of the evaluation cache key.
+    pub key: u64,
+}
+
+impl ToneTarget {
+    /// The image's darkness at document point `p` (0 outside it, where transparent, or when `p`
+    /// isn't finite).
+    pub fn darkness_at(&self, p: vectorcraft_geom::Point) -> f64 {
+        self.image.darkness_at(self.to_pixels * p)
+    }
+}
+
+/// Compared by key: the pixels are never compared one by one.
+impl PartialEq for ToneTarget {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+
+/// The size and key, not the pixels.
+impl std::fmt::Debug for ToneTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (w, h) = self.image.size();
+        f.debug_struct("ToneTarget").field("size", &(w, h)).field("to_pixels", &self.to_pixels).field("key", &self.key).finish()
     }
 }
 
@@ -79,6 +121,93 @@ impl TargetResolver for DocTargets<'_> {
         check_target(self.doc, self.source, t)?;
         target_outline(self.doc, self.source, t).map(|o| Arc::new(TargetShape::new(o)))
     }
+
+    fn tone(&self, target: &str) -> Result<Arc<ToneTarget>, String> {
+        let t = parse_target(target)?;
+        check_target(self.doc, self.source, t)?;
+        image_tone(self.doc, t)
+    }
+}
+
+/// How many decoded images [`image_tone`] keeps.
+const KEPT_TONES: usize = 4;
+
+/// `(pixel bytes held, their address and length, decoded size, darkness)`: holding the bytes keeps
+/// their address from being reused by other pixels while the entry lives.
+type KeptTone = (Arc<Vec<u8>>, (usize, usize, u32, u32), Arc<ToneImage>);
+
+static TONES: Mutex<Vec<KeptTone>> = Mutex::new(Vec::new());
+
+/// Image object `id`'s darkness. Decoded once per distinct pixels (the last [`KEPT_TONES`] kept),
+/// so evaluating a stack every frame only looks the image up.
+fn image_tone(doc: &Document, id: NodeId) -> Result<Arc<ToneTarget>, String> {
+    let n = doc.node(id).ok_or("the screen's image is gone; it is skipped")?;
+    let NodeKind::Image(im) = &n.kind else {
+        return Err(format!("\"{}\" isn't an image; the screen is skipped", label(n)));
+    };
+    let det = im.xf.determinant();
+    if !(det.is_finite() && det.abs() > 1e-12 && im.xf.as_coeffs().iter().all(|c| c.is_finite())) {
+        return Err(format!("\"{}\" is placed flat or off the page; the screen is skipped", label(n)));
+    }
+    let blob = doc.image_blob(im).ok_or_else(|| format!("\"{}\" has no pixels; the screen is skipped", label(n)))?;
+    let id_of = (Arc::as_ptr(&blob.bytes) as usize, blob.bytes.len(), im.width, im.height);
+    let kept = {
+        let tones = TONES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        tones.iter().find(|(_, k, _)| *k == id_of).map(|(_, _, t)| t.clone())
+    };
+    let image = match kept {
+        Some(t) => t,
+        None => {
+            let place = vectorcraft_geom::Rect::new(0.0, 0.0, f64::from(im.width.max(1)), f64::from(im.height.max(1)));
+            let (w, h, cover) = blob.coverage().ok_or_else(|| format!("\"{}\" couldn't be read; the screen is skipped", label(n)))?;
+            let (w, h, luma) = fit_pixels(w as usize, h as usize, &cover);
+            let t = Arc::new(
+                ToneImage::from_luma8(w, h, &luma, place).ok_or_else(|| format!("\"{}\" has no pixels to read; the screen is skipped", label(n)))?,
+            );
+            let mut tones = TONES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            tones.retain(|(_, k, _)| *k != id_of);
+            tones.insert(0, (blob.bytes.clone(), id_of, t.clone()));
+            tones.truncate(KEPT_TONES);
+            t
+        }
+    };
+    let mut h = DefaultHasher::new();
+    id_of.hash(&mut h);
+    for c in im.xf.as_coeffs() {
+        c.to_bits().hash(&mut h);
+    }
+    Ok(Arc::new(ToneTarget { image, to_pixels: im.xf.inverse(), key: h.finish() }))
+}
+
+/// Coverage bytes (`w × h`, darkness 0..255) as grey levels (255 white) of at most
+/// [`crate::screen::MAX_TONE_PIXELS`]: averaged over `k × k` blocks when bigger.
+fn fit_pixels(w: usize, h: usize, cover: &[u8]) -> (usize, usize, Vec<u8>) {
+    let n = w.saturating_mul(h);
+    if n <= crate::screen::MAX_TONE_PIXELS && cover.len() == n {
+        return (w, h, cover.iter().map(|c| 255 - c).collect());
+    }
+    if w == 0 || h == 0 || cover.len() != n {
+        return (0, 0, Vec::new());
+    }
+    let mut k = ((n as f64 / crate::screen::MAX_TONE_PIXELS as f64).sqrt().ceil() as usize).max(2);
+    while w.div_ceil(k).saturating_mul(h.div_ceil(k)) > crate::screen::MAX_TONE_PIXELS {
+        k += 1;
+    }
+    let (sw, sh) = (w.div_ceil(k), h.div_ceil(k));
+    let mut out = Vec::with_capacity(sw * sh);
+    for by in 0..sh {
+        for bx in 0..sw {
+            let (mut sum, mut count) = (0u64, 0u64);
+            for y in by * k..((by + 1) * k).min(h) {
+                let row = cover.get(y * w + bx * k..y * w + ((bx + 1) * k).min(w)).unwrap_or_default();
+                sum += row.iter().map(|&c| u64::from(c)).sum::<u64>();
+                count += row.len() as u64;
+            }
+            let mean = sum.checked_div(count).unwrap_or(0);
+            out.push(255 - u8::try_from(mean.min(255)).unwrap_or(255));
+        }
+    }
+    (sw, sh, out)
 }
 
 /// The object id a `target` text names (`"12"`, or `"#12"` as VectorCraft prints ids).

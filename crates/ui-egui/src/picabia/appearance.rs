@@ -57,7 +57,12 @@ pub const KINDS: &[(&str, &str)] = &[
     ("tidy", "Tidy"),
     ("deform", "Deform"),
     ("displace", "Displace"),
+    ("screen", "Screen"),
 ];
+
+/// The presets the menus add after the kinds, as `(kind, preset, label)`: `modifier.add` with
+/// `preset`.
+pub const PRESETS: &[(&str, &str, &str)] = &[("screen", "benDay", "Ben-Day Dots"), ("screen", "lineFill", "Line Fill")];
 
 /// How a field is edited.
 #[derive(Clone, Copy)]
@@ -72,11 +77,15 @@ enum F {
     Int(f64, f64),
     /// A plain number within `min..=max`, two decimals.
     Num(f64, f64),
+    /// A percentage stored as one (0..100), within `min..=max`.
+    Percent(f64, f64),
     Bool,
     /// One of `(value, label)`.
     Choice(&'static [(&'static str, &'static str)]),
     /// Another object of the document (copy to shape).
     Target,
+    /// An image object of the document (a screen's tone).
+    Image,
 }
 
 const AXES: &[(&str, &str)] = &[("vertical", "Vertical axis"), ("horizontal", "Horizontal axis"), ("both", "Both axes")];
@@ -118,6 +127,9 @@ const FALLOFFS: &[(&str, &str)] = &[("linear", "Linear"), ("easeIn", "Ease in"),
 const SHEAR_ORIGINS: &[(&str, &str)] =
     &[("center", "Centre"), ("topLeft", "Top left"), ("bottomLeft", "Bottom left"), ("topRight", "Top right"), ("bottomRight", "Bottom right")];
 const DISPLACE_MODES: &[(&str, &str)] = &[("spatial", "Spatial"), ("radial", "Radial")];
+const SPOTS: &[(&str, &str)] =
+    &[("round", "Round"), ("ellipse", "Ellipse"), ("line", "Line"), ("square", "Square"), ("diamond", "Diamond"), ("cross", "Cross")];
+const TONES: &[(&str, &str)] = &[("fill", "Fill colour"), ("fixed", "Fixed"), ("image", "Image")];
 /// A fraction of a path's length, shown as a percentage.
 const FRACTION: F = F::Pct(0.0, 1.0);
 
@@ -230,6 +242,17 @@ fn fields(kind: &str) -> &'static [(&'static str, &'static str, F)] {
             ("progressiveAmount", "Ramp amount", FRACTION),
             ("progressiveReverse", "Ramp reversed", F::Bool),
         ],
+        // Picabia's own halftone: the tone's amount or image shown by the tone source.
+        "screen" => &[
+            ("spot", "Spot", F::Choice(SPOTS)),
+            ("lpi", "Lines/inch", F::Num(1.0, 300.0)),
+            ("angle", "Angle", F::Deg(-360.0, 360.0)),
+            ("quality", "Quality", F::Int(4.0, 64.0)),
+            ("tone", "Tone", F::Choice(TONES)),
+            ("amount", "Amount", F::Percent(0.0, 100.0)),
+            ("image", "Image", F::Image),
+            ("invert", "Invert", F::Bool),
+        ],
         _ => &[],
     }
 }
@@ -275,6 +298,11 @@ fn applies(m: &Modifier, key: &str) -> bool {
             _ => true,
         },
         ModifierKind::Deform(d) => deform_applies(d, key),
+        ModifierKind::Screen(s) => match key {
+            "amount" => s.tone == vectorcraft_modifiers::ToneSource::Fixed,
+            "image" => s.tone == vectorcraft_modifiers::ToneSource::Image,
+            _ => true,
+        },
         ModifierKind::Displace(d) => {
             let radial = d.mode == vectorcraft_modifiers::DisplaceMode::Radial;
             match key {
@@ -358,6 +386,9 @@ fn view(doc: &Document, ids: &[NodeId]) -> View {
             target_problem: match &m.kind {
                 ModifierKind::CopyToShape(c) if !c.target.is_empty() => {
                     vectorcraft_modifiers::parse_target(&c.target).and_then(|t| vectorcraft_modifiers::check_target(doc, *first_id, t)).err()
+                }
+                ModifierKind::Screen(s) if s.tone == vectorcraft_modifiers::ToneSource::Image && !s.image.is_empty() => {
+                    vectorcraft_modifiers::parse_target(&s.image).and_then(|t| vectorcraft_modifiers::check_target(doc, *first_id, t)).err()
                 }
                 _ => None,
             },
@@ -629,6 +660,7 @@ fn editor(app: &mut VectorcraftApp, ui: &mut Ui, doc: &Document, ids: &[NodeId],
                         }
                         F::Int(lo, hi) => widgets::plain_field(ui, fid, x, "", 0, 70.0).and_then(|n| clamped(n.round(), lo, hi)).map(|n| json!(n)),
                         F::Num(lo, hi) => widgets::plain_field(ui, fid, x, "", 2, 70.0).and_then(|n| clamped(n, lo, hi)).map(|n| json!(n)),
+                        F::Percent(lo, hi) => widgets::plain_field(ui, fid, x, "%", 1, 70.0).and_then(|n| clamped(n, lo, hi)).map(|n| json!(n)),
                         F::Bool => {
                             let b = v.as_bool().unwrap_or(false);
                             widgets::check_box(ui, tl!(label), b, true).then(|| json!(!b))
@@ -642,14 +674,21 @@ fn editor(app: &mut VectorcraftApp, ui: &mut Ui, doc: &Document, ids: &[NodeId],
                                 .filter(|(value, _)| *value != cur)
                                 .map(|(value, _)| json!(value))
                         }
-                        F::Target => target_picker(ui, doc, first, v.as_str().unwrap_or_default(), fid),
+                        F::Target => {
+                            let choices = vectorcraft_engine::cmd::picabia_modifier::target_choices(doc, first);
+                            object_picker(ui, choices, v.as_str().unwrap_or_default(), fid)
+                        }
+                        F::Image => {
+                            let choices = vectorcraft_engine::cmd::picabia_modifier::image_choices(doc, first);
+                            object_picker(ui, choices, v.as_str().unwrap_or_default(), fid)
+                        }
                     };
                     if let Some(new) = new {
                         change = Some((key.to_string(), new));
                     }
                 });
             });
-            if matches!(how, F::Target)
+            if matches!(how, F::Target | F::Image)
                 && let Some(why) = &r.target_problem
             {
                 ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Target: {reason}"), &[("reason", why)])).size(11.0).color(t.warning));
@@ -661,10 +700,11 @@ fn editor(app: &mut VectorcraftApp, ui: &mut Ui, doc: &Document, ids: &[NodeId],
     }
 }
 
-/// The copy-to-shape target dropdown: the objects `id` can copy onto
-/// (`cmd::picabia_modifier::target_choices`).
-fn target_picker(ui: &mut Ui, doc: &Document, id: NodeId, current: &str, fid: impl std::hash::Hash) -> Option<Value> {
-    let choices: Vec<(NodeId, String)> = vectorcraft_engine::cmd::picabia_modifier::target_choices(doc, id).into_iter().take(MAX_TARGETS).collect();
+/// An object dropdown: the copy-to-shape targets an object can copy onto
+/// (`cmd::picabia_modifier::target_choices`), or the images a screen can read
+/// (`cmd::picabia_modifier::image_choices`).
+fn object_picker(ui: &mut Ui, choices: Vec<(NodeId, String)>, current: &str, fid: impl std::hash::Hash) -> Option<Value> {
+    let choices: Vec<(NodeId, String)> = choices.into_iter().take(MAX_TARGETS).collect();
     let current_id = vectorcraft_modifiers::parse_target(current).ok();
     let shown = match current_id.and_then(|t| choices.iter().find(|(c, _)| *c == t)) {
         Some((_, name)) => name.clone(),
@@ -687,6 +727,12 @@ pub fn add_menu(app: &mut VectorcraftApp, ui: &mut Ui) {
             }
             if ui.button(tl!(label)).clicked() {
                 app.run("modifier.add", json!({"kind": kind})).ok();
+                ui.close();
+            }
+        }
+        for (kind, preset, label) in PRESETS {
+            if ui.button(tl!(label)).clicked() {
+                app.run("modifier.add", json!({"kind": kind, "preset": preset})).ok();
                 ui.close();
             }
         }

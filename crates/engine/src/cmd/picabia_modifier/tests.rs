@@ -247,7 +247,7 @@ fn the_stack_survives_save_and_reopen() {
 #[test]
 fn every_modifier_command_documents_its_params() {
     for (id, names) in [
-        ("modifier.add", vec!["ids", "id", "kind", "props", "index"]),
+        ("modifier.add", vec!["ids", "id", "kind", "preset", "props", "index"]),
         ("modifier.remove", vec!["ids", "id", "modifier", "index"]),
         ("modifier.move", vec!["ids", "id", "from", "to"]),
         ("modifier.set", vec!["ids", "id", "modifier", "index", "props"]),

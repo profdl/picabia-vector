@@ -12,14 +12,14 @@
 
 use serde_json::{Map, Value, json};
 use vectorcraft_doc::{Document, NodeId};
-use vectorcraft_modifiers::{Modifier, Stack};
+use vectorcraft_modifiers::{Modifier, ModifierKind, Stack};
 
 use super::{CommandSpec, always, cmd, has_doc, has_selection, ok, targets};
 use crate::{EngineError, Result, Session};
 
 /// The kinds `modifier.add` takes, for messages.
 const KIND_LIST: &str =
-    "linearArray|circularArray|gridArray|mirror|transformEach|randomize|wallpaper|copyToShape|stencil|resample|trim|tidy|deform|displace";
+    "linearArray|circularArray|gridArray|mirror|transformEach|randomize|wallpaper|copyToShape|stencil|resample|trim|tidy|deform|displace|screen";
 
 /// Picabia's state in a [`Session`] (its `picabia` field), not saved.
 #[derive(Debug, Default)]
@@ -73,7 +73,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Modifier",
             [],
             None,
-            "{ids?|id?: the objects (default: the selection), kind: linearArray|circularArray|gridArray|mirror|transformEach|randomize|wallpaper|copyToShape|stencil|resample|trim|tidy|deform|displace, props?: {…the kind's params, camelCase: points, degrees, scale factors (1 = 100%); copyToShape: target (an object id; refused: the object itself, its groups or its contents, a top-level layer, or an object copying back onto it), mode (points|alongPath|populate), count, scale, align, seed; stencil (ends the stack: rows below it are ignored): its params as docs/picabia/modifiers.md lists them; geometry rows (reshape the paths: above every copy row the object, below one each copy): resample: mode (subdivide|count|spacing), iterations (1-5), method (linear|catmullRom|chaikin), count (2-1024), spacing (1-5000 pt); trim: start, end, offset (fractions of the length, 0-1); tidy: close (off|straight|smooth), tolerance (0-500 pt), sort (none|angle|distance|x|y|random), reverse, seed; deform (each copy in its own box and frame): mode (taper|twist|bend|shear|bulge), axis (horizontal|vertical), falloff (linear|easeIn|easeOut|smooth), startScale, endScale (0.1-3), angle (twist, -720-720°), bendAngle (-360-360°), bendPoint (0-1), shearX, shearY (-2-2), origin (center|topLeft|bottomLeft|topRight|bottomRight), strength (-3-3), radius (0.01-2 of the extent), progressive (ramp across the array copies above; mirror, wallpaper and copy-to-shape copies share the ramp of the copy they came from), progressiveAmount (0-1), progressiveReverse; displace: mode (spatial|radial), amplitude (0-100 pt), scale (0.01-1, spatial), octaves (1-6, spatial), rippleCount (2-12, radial), seed (0-999999; radial: the phase per array position), progressive (ramp across the array copies above, as deform's), progressiveAmount (0-1), progressiveReverse}, index?: where in the stack (default: the end, which runs last)} add a modifier to each object's stack, as one undo step → {modifier: the new id on the first object, added: [{id, modifier}]}",
+            "{ids?|id?: the objects (default: the selection), kind: linearArray|circularArray|gridArray|mirror|transformEach|randomize|wallpaper|copyToShape|stencil|resample|trim|tidy|deform|displace|screen, preset?: a screen's preset (benDay: round dots at 45°, 10 lpi, a fixed 30% tone; lineFill: lines at 45°, 12 lpi, a fixed 30% tone; props apply over it), props?: {…the kind's params, camelCase: points, degrees, scale factors (1 = 100%); copyToShape: target (an object id; refused: the object itself, its groups or its contents, a top-level layer, or an object copying back onto it), mode (points|alongPath|populate), count, scale, align, seed; stencil (ends the stack: rows below it are ignored): its params as docs/picabia/modifiers.md lists them; geometry rows (reshape the paths: above every copy row the object, below one each copy): resample: mode (subdivide|count|spacing), iterations (1-5), method (linear|catmullRom|chaikin), count (2-1024), spacing (1-5000 pt); trim: start, end, offset (fractions of the length, 0-1); tidy: close (off|straight|smooth), tolerance (0-500 pt), sort (none|angle|distance|x|y|random), reverse, seed; deform (each copy in its own box and frame): mode (taper|twist|bend|shear|bulge), axis (horizontal|vertical), falloff (linear|easeIn|easeOut|smooth), startScale, endScale (0.1-3), angle (twist, -720-720°), bendAngle (-360-360°), bendPoint (0-1), shearX, shearY (-2-2), origin (center|topLeft|bottomLeft|topRight|bottomRight), strength (-3-3), radius (0.01-2 of the extent), progressive (ramp across the array copies above; mirror, wallpaper and copy-to-shape copies share the ramp of the copy they came from), progressiveAmount (0-1), progressiveReverse; displace: mode (spatial|radial), amplitude (0-100 pt), scale (0.01-1, spatial), octaves (1-6, spatial), rippleCount (2-12, radial), seed (0-999999; radial: the phase per array position), progressive (ramp across the array copies above, as deform's), progressiveAmount (0-1), progressiveReverse; screen (a vector halftone: each path becomes dots clipped to its outline, filled with its fill (its stroke's colour without one; black without either), no stroke; the screen is fixed to the page, so copies line up): spot (round|ellipse|line|square|diamond|cross), lpi (1-300, lines per inch), angle (-360-360°), quality (4-64 samples a cell), tone (fill: the darkness of its paint, gradients read where each point sits | fixed: amount (0-100 %) | image: image (an image object's id; its darkness where it sits, no ink outside it)), invert}, index?: where in the stack (default: the end, which runs last)} add a modifier to each object's stack, as one undo step → {modifier: the new id on the first object, added: [{id, modifier}]}",
             has_selection,
             add
         ),
@@ -344,6 +344,9 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "modifier.add";
     let kind = super::text_param(p, "kind", CMD)?.ok_or_else(|| super::bad(CMD, format!("`kind` required ({KIND_LIST})")))?;
     let mut template = Modifier::new("", kind).ok_or_else(|| super::bad(CMD, format!("unknown kind `{kind}` (one of {KIND_LIST})")))?;
+    if let Some(name) = super::text_param(p, "preset", CMD)? {
+        template.kind = preset(kind, name).ok_or_else(|| super::bad(CMD, format!("no preset `{name}` for `{kind}` ({})", preset_list(kind))))?;
+    }
     if let Some(props) = props_of(CMD, p, false)? {
         template.set_props(props).map_err(|e| super::bad(CMD, e.to_string()))?;
     }
@@ -356,6 +359,22 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
     })?;
     let first = added.first().and_then(|a| a.get("modifier")).cloned().unwrap_or(Value::Null);
     Ok(json!({"modifier": first, "added": added}))
+}
+
+/// Preset `name` of kind `kind` (the screen's `benDay`, `lineFill`).
+fn preset(kind: &str, name: &str) -> Option<ModifierKind> {
+    match kind {
+        "screen" => vectorcraft_modifiers::Screen::preset(name).map(ModifierKind::Screen),
+        _ => None,
+    }
+}
+
+/// The presets of `kind`, for messages.
+fn preset_list(kind: &str) -> String {
+    match kind {
+        "screen" => vectorcraft_modifiers::SCREEN_PRESETS.iter().map(|(id, _)| *id).collect::<Vec<_>>().join("|"),
+        _ => "it has none".into(),
+    }
 }
 
 fn remove(s: &mut Session, p: &Value) -> Result<Value> {
@@ -512,7 +531,7 @@ pub(crate) mod laser_run;
 mod stencil;
 mod targets;
 pub(crate) use export::{bake_copies, baked_export, export_warning};
-pub use targets::{check_target, target_choices};
+pub use targets::{check_target, image_choices, target_choices};
 pub(crate) use targets::{remap_copies, remap_pasted, snapshot};
 #[cfg(test)]
 mod apply_tests;
@@ -526,6 +545,8 @@ mod export_tests;
 mod geometry_tests;
 #[cfg(test)]
 mod laser_tests;
+#[cfg(test)]
+mod screen_tests;
 #[cfg(test)]
 mod stencil_render_tests;
 #[cfg(test)]

@@ -91,6 +91,8 @@ pub const INTRA_LAYER_ORDER: &[&[&str]] = &[
     &["pathops", "three-d"],
     // PICABIA: the renderer draws stencil sheets (render reads vectorcraft-stencil's store).
     &["stencil", "render"],
+    // PICABIA: the screen row clips its dots with Pathfinder's intersect and fits them with Simplify.
+    &["pathops", "modifiers"],
 ];
 
 fn intra_layer_allowed(from: &str, to: &str) -> bool {

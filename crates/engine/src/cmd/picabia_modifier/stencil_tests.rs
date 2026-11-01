@@ -427,7 +427,7 @@ fn ring_image() -> vectorcraft_trace::Raster {
     })
 }
 
-fn add_image(s: &mut Session, r: &vectorcraft_trace::Raster) -> NodeId {
+pub(super) fn add_image(s: &mut Session, r: &vectorcraft_trace::Raster) -> NodeId {
     let png = r.encode_png();
     let (w, h) = (r.width, r.height);
     s.edit("img", |d, sel| {

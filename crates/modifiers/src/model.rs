@@ -11,6 +11,7 @@ use serde_json::{Map, Value};
 
 pub use crate::model_deform::{Deform, DeformAxis, DeformMode, Falloff, ShearOrigin};
 pub use crate::model_displace::{Displace, DisplaceMode};
+pub use crate::model_screen::{SCREEN_PRESETS, Screen, SpotShape, ToneSource};
 pub use crate::model_shape::{CloseMethod, Resample, ResampleMode, SortBy, SubdivideMethod, Tidy, Trim};
 use crate::{MAX_STACK_LEN, ModError, STACK_VERSION, lenient};
 
@@ -30,6 +31,7 @@ pub const KINDS: &[(&str, &str)] = &[
     ("tidy", "Tidy"),
     ("deform", "Deform"),
     ("displace", "Displace"),
+    ("screen", "Screen"),
 ];
 
 /// The label of kind id `kind` ("Linear array"), or `None` for a kind this build doesn't know.
@@ -141,6 +143,7 @@ pub enum ModifierKind {
     Tidy(Tidy),
     Deform(Deform),
     Displace(Displace),
+    Screen(Screen),
     /// A kind this build doesn't know, or a known kind whose params don't read (`error` says
     /// why). Kept on a round trip, ignored when evaluating.
     Other {
@@ -873,7 +876,12 @@ impl ModifierKind {
     pub fn is_geometry(&self) -> bool {
         matches!(
             self,
-            ModifierKind::Resample(_) | ModifierKind::Trim(_) | ModifierKind::Tidy(_) | ModifierKind::Deform(_) | ModifierKind::Displace(_)
+            ModifierKind::Resample(_)
+                | ModifierKind::Trim(_)
+                | ModifierKind::Tidy(_)
+                | ModifierKind::Deform(_)
+                | ModifierKind::Displace(_)
+                | ModifierKind::Screen(_)
         )
     }
 
@@ -894,6 +902,7 @@ impl ModifierKind {
             ModifierKind::Tidy(_) => "tidy",
             ModifierKind::Deform(_) => "deform",
             ModifierKind::Displace(_) => "displace",
+            ModifierKind::Screen(_) => "screen",
             ModifierKind::Other { kind, .. } => kind,
         }
     }
@@ -915,6 +924,7 @@ impl ModifierKind {
             "tidy" => ModifierKind::Tidy(Tidy::default()),
             "deform" => ModifierKind::Deform(Deform::default()),
             "displace" => ModifierKind::Displace(Displace::default()),
+            "screen" => ModifierKind::Screen(Screen::default()),
             _ => return None,
         })
     }
@@ -936,6 +946,7 @@ impl ModifierKind {
             ModifierKind::Tidy(p) => params_of(p),
             ModifierKind::Deform(p) => params_of(p),
             ModifierKind::Displace(p) => params_of(p),
+            ModifierKind::Screen(p) => params_of(p),
             ModifierKind::Other { .. } => Map::new(),
         }
     }
@@ -961,6 +972,7 @@ impl ModifierKind {
             "tidy" => wrap(read(rest), ModifierKind::Tidy),
             "deform" => wrap(read(rest), ModifierKind::Deform),
             "displace" => wrap(read(rest), ModifierKind::Displace),
+            "screen" => wrap(read(rest), ModifierKind::Screen),
             _ => return (ModifierKind::Other { kind: kind.to_string(), error: None }, rest.clone()),
         };
         r.unwrap_or_else(|e| (ModifierKind::Other { kind: kind.to_string(), error: Some(e) }, rest.clone()))
@@ -978,11 +990,22 @@ impl Stack {
         })
     }
 
-    /// The targets of the enabled `copyToShape` modifiers, as `(modifier id, target)`, in stack
-    /// order (empty targets left out).
+    /// The objects the enabled rows read, as `(modifier id, target)`, in stack order (empty
+    /// targets left out): `copyToShape` targets, and the image of a `screen` row whose tone comes
+    /// from an image. The drawing follows them (moving or editing one redraws the object), and
+    /// edits and copies check and remap them alike.
     pub fn targets(&self) -> impl Iterator<Item = (&str, &str)> + '_ {
         self.modifiers.iter().filter(|m| m.enabled).filter_map(|m| match &m.kind {
             ModifierKind::CopyToShape(p) if !p.target.is_empty() => Some((m.id.as_str(), p.target.as_str())),
+            ModifierKind::Screen(p) if p.tone == ToneSource::Image && !p.image.is_empty() => Some((m.id.as_str(), p.image.as_str())),
+            _ => None,
+        })
+    }
+
+    /// The images the enabled `screen` rows read their tone from (empty ones left out).
+    pub fn screen_images(&self) -> impl Iterator<Item = &str> + '_ {
+        self.modifiers.iter().filter(|m| m.enabled).filter_map(|m| match &m.kind {
+            ModifierKind::Screen(p) if p.tone == ToneSource::Image && !p.image.is_empty() => Some(p.image.as_str()),
             _ => None,
         })
     }

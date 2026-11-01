@@ -6412,6 +6412,7 @@ dependencies = [
  "serde_json",
  "vectorcraft-doc",
  "vectorcraft-geom",
+ "vectorcraft-pathops",
 ]
 
 [[package]]

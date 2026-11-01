@@ -569,3 +569,46 @@ fn a_deform_alone_draws_the_deformed_object() {
     assert_eq!(px(&pix, 28, 11), WHITE, "and away from the right");
     assert_eq!(px(&pix, 32, 28), RED, "the bottom moved right");
 }
+
+/// PIC20.5c: a screen draws the object as dots in its fill, inside its outline: a fixed 50% round
+/// screen inks about half the square's pixels (red), none outside it, and the laser reads the same
+/// dots the canvas draws.
+#[test]
+fn a_screen_draws_dots_inside_the_outline_as_the_laser_reads_them() {
+    let mut d = Document::new(200.0, 200.0);
+    let l = d.layers[0].id;
+    let n = red_rect(&mut d, Rect::new(20.0, 20.0, 180.0, 180.0));
+    let r = d.insert(Some(l), 0, n).unwrap();
+    set_stack(&mut d, r, Some(r#"{"v":1,"stack":[{"id":"s","kind":"screen","spot":"round","lpi":9,"angle":0,"tone":"fixed","amount":50}]}"#));
+    let n = d.node(r).unwrap();
+    assert!(draws_copies(&d, n));
+    let pix = render(&d, Rect::new(0.0, 0.0, 200.0, 200.0));
+    let (mut red, mut inked_outside) = (0.0f64, 0usize);
+    for y in 0..200u32 {
+        for x in 0..200u32 {
+            let [r_, g, b, _] = px(&pix, x, y);
+            let inside = (20..180).contains(&x) && (20..180).contains(&y);
+            if inside {
+                // Red ink over white paper: green falls with the ink's coverage.
+                red += 1.0 - f64::from(g) / 255.0;
+            }
+            if !inside && (r_, g, b) != (255, 255, 255) && !(x == 19 || x == 180 || y == 19 || y == 180) {
+                inked_outside += 1;
+            }
+        }
+    }
+    let share = red / (160.0 * 160.0);
+    assert!((share - 0.5).abs() < 0.06, "{share}");
+    assert_eq!(inked_outside, 0);
+    // Not a solid square: at 50% the round dots are diamonds meeting at the middles of the cells' sides (8 pt at
+    // 9 lpi): a row a quarter cell off their centres alternates ink and paper.
+    let row: Vec<bool> = (20..180).map(|x| px(&pix, x, 97)[1] < 128).collect();
+    let flips = row.windows(2).filter(|w| w[0] != w[1]).count();
+    assert!(flips >= 20, "{flips} edges along a row");
+    let out = vectorcraft_modifiers::node_instances_in_doc(&d, n).unwrap();
+    let (copies, notes_) = vectorcraft_modifiers::shaped_copies(n, &out);
+    assert!(notes_.is_empty(), "{notes_:?}");
+    let a = art(&d, n).unwrap();
+    assert_eq!(a.children().unwrap()[0].path_data(), copies[0].path_data(), "the laser reads what is drawn");
+    assert!(notes(&d, n).is_empty());
+}
