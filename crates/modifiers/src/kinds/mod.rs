@@ -57,15 +57,16 @@ impl StageResult {
     }
 }
 
-/// The stage modifier `kind` makes in `ctx` (`targets` finds copy-to-shape targets).
-pub(crate) fn stage(kind: &ModifierKind, ctx: &Ctx, targets: &dyn TargetResolver) -> StageResult {
+/// The stage modifier `kind` makes in `ctx` (`targets` finds copy-to-shape targets; `per_copy`
+/// holds the row's bound per-copy expressions, [`crate::bind`]).
+pub(crate) fn stage(kind: &ModifierKind, ctx: &Ctx, targets: &dyn TargetResolver, per_copy: &crate::bind::PerCopy) -> StageResult {
     match kind {
         ModifierKind::LinearArray(p) => linear::stage(p, ctx),
         ModifierKind::CircularArray(p) => circular::stage(p, ctx),
         ModifierKind::GridArray(p) => grid::stage(p, ctx),
         ModifierKind::Mirror(p) => mirror::stage(p, ctx),
-        ModifierKind::TransformEach(p) => transform_each::stage(p, ctx),
-        ModifierKind::Randomize(p) => randomize::stage(p, ctx),
+        ModifierKind::TransformEach(p) => transform_each::stage(p, ctx, per_copy),
+        ModifierKind::Randomize(p) => randomize::stage(p, ctx, per_copy),
         ModifierKind::Wallpaper(p) => wallpaper::stage(p, ctx),
         ModifierKind::CopyToShape(p) => copy_to_shape::stage(p, ctx, targets),
         // Terminal: the evaluator stops before it; were it reached, it would add nothing.

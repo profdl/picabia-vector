@@ -124,10 +124,12 @@ pub fn has_stack(n: &Node) -> bool {
     vectorcraft_modifiers::has_modifiers(n) && matches!(vectorcraft_modifiers::node_stack(n), Some(Ok(s)) if s.is_active())
 }
 
-/// Whether `n`'s stack copies onto another object: its art then changes with that object, so
-/// caches kept by `n`'s identity alone don't hold it.
+/// Whether `n`'s stack copies onto another object or has bound fields: its art then changes with
+/// that object or with the document's parameters, so caches kept by `n`'s identity alone don't
+/// hold it.
 pub fn has_targets(n: &Node) -> bool {
-    vectorcraft_modifiers::has_modifiers(n) && matches!(vectorcraft_modifiers::node_stack(n), Some(Ok(s)) if s.targets().next().is_some())
+    vectorcraft_modifiers::has_modifiers(n)
+        && matches!(vectorcraft_modifiers::node_stack(n), Some(Ok(s)) if s.targets().next().is_some() || s.has_bindings())
 }
 
 /// `targets` also stands for a stencil: its drawing changes when its sheet arrives, not only with
@@ -680,8 +682,9 @@ fn bake_tree(doc: &Document, out: &mut Document, n: &Node, depth: usize) -> Opti
 }
 
 /// What may draw differently in `new` than in `old` because a copy-to-shape target changed while
-/// its source didn't: the sources' painted bounds before and after. Looks only into the containers
-/// that hold copy-to-shape sources ([`subtree_flags`]): nothing when the document has none.
+/// its source didn't, or a parameter a bound object reads did: those objects' painted bounds before
+/// and after. Looks only into the containers that hold such objects ([`subtree_flags`]): nothing
+/// when the document has none.
 pub(crate) fn dependents(old: &Document, new: &Document) -> Option<Rect> {
     if !doc_flags(new).targets {
         return None;
@@ -698,6 +701,10 @@ pub(crate) fn dependents(old: &Document, new: &Document) -> Option<Rect> {
             (None, None) => false,
             _ => true,
         });
+        // A bound object whose parameters changed (the object itself may not have).
+        let moved = moved
+            || (vectorcraft_modifiers::has_bindings(n)
+                && old.node_uncached(n.id).map(|o| vectorcraft_modifiers::bound_key(old, o)) != Some(vectorcraft_modifiers::bound_key(new, n)));
         if moved {
             area = vectorcraft_geom::union_opt(area, crate::brush_fx::cull_bounds(&ns, n));
             area = vectorcraft_geom::union_opt(area, old.node_uncached(n.id).and_then(|o| crate::brush_fx::cull_bounds(&os, o)));

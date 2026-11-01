@@ -12,27 +12,34 @@ use vectorcraft_geom::{Affine, Vec2};
 
 use super::rng::Stream;
 use super::{Clamp, Ctx, Stage, StageResult};
+use crate::bind::PerCopy;
 use crate::expr::{Env, compile};
 use crate::model::Randomize;
 use crate::{MAX_ANGLE, MAX_LENGTH, MAX_SCALE};
 
 const MIN_SCALE: f64 = 1.0e-6;
 
-pub(crate) fn stage(p: &Randomize, _ctx: &Ctx) -> StageResult {
+pub(crate) fn stage(p: &Randomize, _ctx: &Ctx, per_copy: &PerCopy) -> StageResult {
     let mut warnings = Vec::new();
     let mut c = Clamp { warnings: &mut warnings };
     let position = c.size("position", p.position);
     let rotation = c.within("rotation", p.rotation, 0.0, MAX_ANGLE, 0.0);
     let scale = c.within("scale", p.scale, 0.0, MAX_SCALE, 0.0);
+    // A bound per-copy expression ([`crate::bind`]) drives its amount in place of its own.
+    let mut driver = |field: &str, text: Option<&str>| match per_copy.get(field) {
+        Some(b) => Some(Err(b.clone())),
+        None => compile(text, &crate::expr_key(field), &mut warnings).map(Ok),
+    };
     let exprs = [
-        (position, compile(p.position_expr.as_deref(), "positionExpr", &mut warnings), MAX_LENGTH),
-        (rotation, compile(p.rotation_expr.as_deref(), "rotationExpr", &mut warnings), MAX_ANGLE),
-        (scale, compile(p.scale_expr.as_deref(), "scaleExpr", &mut warnings), MAX_SCALE),
+        (position, driver("position", p.position_expr.as_deref()), MAX_LENGTH),
+        (rotation, driver("rotation", p.rotation_expr.as_deref()), MAX_ANGLE),
+        (scale, driver("scale", p.scale_expr.as_deref()), MAX_SCALE),
     ];
     let seed = p.seed;
     let each = move |_: &crate::eval::Instance, i: usize, n: usize| {
         let [position, rotation, scale] = exprs.each_ref().map(|(value, e, hi)| match e {
-            Some(e) => e.eval_or(&Env::new(i, n, *value), *value).clamp(0.0, *hi),
+            Some(Ok(e)) => e.eval_or(&Env::new(i, n, *value), *value).clamp(0.0, *hi),
+            Some(Err(b)) => b.amount(i, n, *value, 0.0, *hi),
             None => *value,
         });
         let mut rng = Stream::new(seed, i);

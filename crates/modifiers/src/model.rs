@@ -6,8 +6,12 @@
 //! kinds this build doesn't know (or whose params don't read) become [`ModifierKind::Other`] with
 //! all their params in `extra`, so nothing is lost on a round trip.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+
+use crate::bind::Binding;
 
 pub use crate::model_deform::{Deform, DeformAxis, DeformMode, Falloff, ShearOrigin};
 pub use crate::model_displace::{Displace, DisplaceMode};
@@ -72,6 +76,17 @@ impl Stack {
         self.modifiers.iter().any(|m| m.enabled && !matches!(m.kind, ModifierKind::Other { .. }))
     }
 
+    /// Whether an enabled row has a binding: its evaluation then reads the document's parameters.
+    pub fn has_bindings(&self) -> bool {
+        self.modifiers.iter().any(|m| m.enabled && !m.bind.is_empty())
+    }
+
+    /// The parameters the enabled rows' bindings read (lowercase): what an evaluation's cache key
+    /// holds the values of.
+    pub fn bound_names(&self) -> BTreeSet<String> {
+        self.modifiers.iter().filter(|m| m.enabled).flat_map(|m| m.bind.values().flat_map(Binding::names)).collect()
+    }
+
     /// A fresh modifier id: `m<n>` with `n` one past the highest `m<number>` in the stack.
     pub fn next_id(&self) -> String {
         let max = self.modifiers.iter().filter_map(|m| m.id.strip_prefix('m')?.parse::<u64>().ok()).max().unwrap_or(0);
@@ -119,6 +134,8 @@ pub struct Modifier {
     pub kind: ModifierKind,
     /// Fields the kind's parameter struct doesn't know (all params for [`ModifierKind::Other`]).
     pub extra: Map<String, Value>,
+    /// Its fields' bindings, by field (`bind` in the file; [`crate::bind`]).
+    pub bind: BTreeMap<String, Binding>,
 }
 
 /// What a modifier does, with its parameters.
@@ -837,7 +854,7 @@ pub fn expr_field<'a>(kind: &str, key: &'a str) -> Option<&'a str> {
 }
 
 /// The fields every modifier has besides its params.
-const COMMON: [&str; 3] = ["id", "enabled", "kind"];
+const COMMON: [&str; 4] = ["id", "enabled", "kind", "bind"];
 
 fn params_of<T: Serialize>(p: &T) -> Map<String, Value> {
     match serde_json::to_value(p) {
@@ -965,6 +982,12 @@ impl ModifierKind {
         };
         r.unwrap_or_else(|e| (ModifierKind::Other { kind: kind.to_string(), error: Some(e) }, rest.clone()))
     }
+
+    /// Kind id `kind` read from `params` (what [`ModifierKind::params`] gives, changed): bindings
+    /// resolve this way.
+    pub(crate) fn read_params(kind: &str, params: &Map<String, Value>) -> ModifierKind {
+        ModifierKind::read(kind, params).0
+    }
 }
 
 impl Stack {
@@ -992,7 +1015,7 @@ impl Modifier {
     /// A new enabled modifier of kind id `kind` with default params, or `None` for a kind this
     /// build doesn't know. An empty `id` is replaced by [`Stack::insert`].
     pub fn new(id: impl Into<String>, kind: &str) -> Option<Modifier> {
-        Some(Modifier { id: id.into(), enabled: true, kind: ModifierKind::default_for(kind)?, extra: Map::new() })
+        Some(Modifier { id: id.into(), enabled: true, kind: ModifierKind::default_for(kind)?, extra: Map::new(), bind: BTreeMap::new() })
     }
 
     /// The label of this modifier's kind ("Linear array"; the kind id for unknown kinds).
@@ -1014,14 +1037,27 @@ impl Modifier {
         let enabled = !matches!(o.get("enabled"), Some(Value::Bool(false)));
         let kind = o.get("kind").and_then(Value::as_str).unwrap_or_default();
         let rest: Map<String, Value> = o.iter().filter(|(k, _)| !COMMON.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect();
-        let (kind, extra) = ModifierKind::read(kind, &rest);
-        Ok(Modifier { id, enabled, kind, extra })
+        let (kind, mut extra) = ModifierKind::read(kind, &rest);
+        // Bindings are an object of fields; anything else under `bind` is kept as it was.
+        let bind = match o.get("bind") {
+            Some(Value::Object(b)) => crate::bind::read_bindings(b),
+            Some(other) => {
+                extra.insert("bind".into(), other.clone());
+                BTreeMap::new()
+            }
+            None => BTreeMap::new(),
+        };
+        Ok(Modifier { id, enabled, kind, extra, bind })
     }
 
-    /// The modifier as one flat JSON object: `id`, `enabled`, `kind`, its params and its extras.
+    /// The modifier as one flat JSON object: `id`, `enabled`, `kind`, its params, its extras and
+    /// its bindings (`bind`, when it has any).
     pub fn to_value(&self) -> Value {
         let mut o = self.extra.clone();
         o.extend(self.kind.params());
+        if !self.bind.is_empty() {
+            o.insert("bind".into(), crate::bind::bindings_value(&self.bind));
+        }
         o.insert("id".into(), Value::String(self.id.clone()));
         o.insert("enabled".into(), Value::Bool(self.enabled));
         o.insert("kind".into(), Value::String(self.kind.id().to_string()));
@@ -1045,6 +1081,7 @@ impl Modifier {
             match k.as_str() {
                 "enabled" => enabled = v.as_bool().ok_or_else(|| ModError::Invalid(format!("`enabled` must be true or false, got {}", short(v))))?,
                 "id" | "kind" => return Err(ModError::Invalid(format!("`{k}` can't be changed"))),
+                "bind" => return Err(ModError::Invalid("bindings are set with modifier.bind and modifier.unbind".into())),
                 _ if expr_field(self.kind.id(), k).is_some() => set_expr(&mut params, k, v)?,
                 _ => {
                     let Some(cur) = params.get(k) else {
