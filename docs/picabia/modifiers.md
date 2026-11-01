@@ -38,11 +38,12 @@ differences:
   moves, duplicates, copies, pastes, removes it or applies the stack down to it; under the rows are
   the evaluation's warnings and Apply. Add New Effect (`fx`) ▸ Modifiers and Object ▸ Modifiers
   add each kind.
-- **No variable bindings.** picabia-craft's P6 bound modifier fields to FigCraft variables
-  (`Node.bound`, `variable.bind`); there is no `bind.rs` here. P6 is replaced by the **parameters**
-  design (number and text parameters in VectorCraft's Variables panel, with a parameter, expression
-  or ramp chip on every number field). The per-field expressions below (`<field>Expr`) stay in the
-  stack format.
+- **Parameters, not variable bindings.** picabia-craft's P6 bound modifier fields to FigCraft
+  variables (`Node.bound`, `variable.bind`). Here P6 is the **parameters** design (PIC6): number and
+  text parameters in VectorCraft's Variables panel (a data set can supply their values), and a chip
+  on every number field binding it to a parameter or an expression (ramps later), kept in the row's
+  `bind`. See [`parameters.md`](parameters.md). The per-field expressions below (`<field>Expr`) stay
+  in the stack format.
 - **No generator rows.** picabia-craft's `imageTrace` and `pathfinder` generator rows (its P13, P14)
   are not ported: VectorCraft's own Image Trace and live Pathfinder are used, and a stencil can sit
   on a traced image.
@@ -613,7 +614,7 @@ The amounts of `transformEach` (`offsetX`, `offsetY`, `rotate`, `scaleX`, `scale
 | `i` | The copy's index (0 = the original) |
 | `n` | The number of copies |
 | `t` | `i / (n - 1)`, 0 when `n = 1` |
-| `value` | The field's own value (a parameter's value once parameters drive the field) |
+| `value` | The field's own value |
 | `pi` | 3.14159… |
 
 Operators, loosest first: `+ -`, `* / %`, unary `-`, `^` (power, right-associative). Functions:
@@ -634,6 +635,10 @@ An expression gives that copy's full amount: it replaces the `progressive` ramp 
 result that isn't a number (`1 / 0`) falls back to the field's value. Expressions are at most 256
 characters and 32 levels deep, so they evaluate in bounded time; a damaged one in a file is ignored
 with a warning.
+
+The same language drives **field bindings** ([`parameters.md`](parameters.md)), with two
+differences: there `t` is the clock (0 for now) and any other name is a document parameter. A field
+bound with `modifier.bind` ignores its own `<field>Expr`.
 
 ## Canvas guides
 

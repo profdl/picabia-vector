@@ -9,7 +9,11 @@
 pub mod appearance;
 #[cfg(test)]
 mod appearance_tests;
+pub mod bind_chip;
+#[cfg(test)]
+mod bind_chip_tests;
 pub mod menu;
+pub mod params_panel;
 pub mod physics;
 #[cfg(test)]
 mod physics_tests;
