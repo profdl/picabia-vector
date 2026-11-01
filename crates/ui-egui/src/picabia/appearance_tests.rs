@@ -227,10 +227,14 @@ fn the_displace_row_shows_the_fields_its_mode_uses() {
     app.run("modifier.add", json!({"ids": [a], "kind": "displace"})).unwrap();
     set_pstate(&ctx, &format!("pc-open-{a}-m2"), true);
     let shown = texts(&mut app, &ctx);
-    for want in ["Displace", "Mode", "Amplitude", "Scale", "Octaves", "Seed", "Ramp copies", "Ramp amount", "Ramp reversed"] {
+    for want in
+        ["Displace", "Pattern", "Smooth noise", "Direction", "Amplitude", "Scale", "Octaves", "Seed", "Ramp copies", "Ramp amount", "Ramp reversed"]
+    {
         assert!(shown.iter().any(|s| s == want), "{want} in {shown:?}");
     }
-    assert!(!shown.iter().any(|s| s == "Ripple count"), "{shown:?}");
+    for hidden in ["Ripple count", "Angle", "Waveform", "Cycles", "Least move", "Steps"] {
+        assert!(!shown.iter().any(|s| s == hidden), "{hidden} hidden in {shown:?}");
+    }
     // Scale reads with two decimals.
     assert!(shown.iter().any(|s| s.starts_with("0.05")), "{shown:?}");
     app.run("modifier.set", json!({"ids": [a], "index": 1, "props": {"mode": "radial", "progressive": false}})).unwrap();
@@ -238,6 +242,46 @@ fn the_displace_row_shows_the_fields_its_mode_uses() {
     assert!(shown.iter().any(|s| s == "Ripple count"), "{shown:?}");
     for hidden in ["Scale", "Octaves", "Ramp amount", "Ramp reversed"] {
         assert!(!shown.iter().any(|s| s == hidden), "{hidden} hidden in {shown:?}");
+    }
+}
+
+/// PIC20.4c: the wave, jitter and fractal patterns show their own fields (tlprocedural's Wave,
+/// Randomize Points and Subdivision Growth); the angle only with direction angle.
+#[test]
+fn the_displace_row_shows_each_patterns_fields() {
+    let (mut app, ctx, a) = arrayed();
+    app.run("modifier.add", json!({"ids": [a], "kind": "displace"})).unwrap();
+    set_pstate(&ctx, &format!("pc-open-{a}-m2"), true);
+    let all = [
+        "Scale",
+        "Octaves",
+        "Ripple count",
+        "Waveform",
+        "Cycles",
+        "Phase",
+        "Least move",
+        "Steps",
+        "Decay",
+        "Wander",
+        "Edge variance",
+        "Normal bias",
+        "Inward",
+        "Seed",
+        "Angle",
+    ];
+    let cases: [(serde_json::Value, &[&str]); 4] = [
+        (json!({"mode": "wave"}), &["Waveform", "Cycles", "Phase"]),
+        (json!({"mode": "jitter"}), &["Least move", "Seed"]),
+        (json!({"mode": "fractal"}), &["Steps", "Decay", "Wander", "Edge variance", "Normal bias", "Inward", "Seed"]),
+        (json!({"mode": "wave", "direction": "angle"}), &["Waveform", "Cycles", "Phase", "Angle"]),
+    ];
+    for (props, want) in cases {
+        app.run("modifier.set", json!({"ids": [a], "index": 1, "props": props})).unwrap();
+        let shown = texts(&mut app, &ctx);
+        for key in all {
+            assert_eq!(shown.iter().any(|s| s == key), want.contains(&key), "{key} with {props}: {shown:?}");
+        }
+        assert!(shown.iter().any(|s| s == "Direction" || s == "Amplitude"), "{shown:?}");
     }
 }
 

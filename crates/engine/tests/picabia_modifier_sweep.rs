@@ -312,3 +312,50 @@ fn stencil_from_selection_undoes_exactly() {
     let after = vectorcraft_testkit::invariants::doc_json(&s.active().unwrap().doc);
     assert!(before == after, "{}", vectorcraft_testkit::invariants::first_diff(&before, &after, "$"));
 }
+
+/// PIC20.4c: each displace pattern with each of its params set to each junk value, added on top of
+/// stacked objects, listed and applied: Ok or Err, never a panic or a corrupt tree.
+#[test]
+fn displace_patterns_with_junk_props() {
+    let junk = vectorcraft_testkit::strategies::junk_values();
+    let keys = [
+        "direction",
+        "angle",
+        "amplitude",
+        "waveform",
+        "frequency",
+        "phase",
+        "jitterMin",
+        "steps",
+        "decay",
+        "wander",
+        "edgeVariance",
+        "normalBias",
+        "inward",
+        "seed",
+    ];
+    let mut failures = vec![];
+    let mut calls = 0usize;
+    for mode in ["wave", "jitter", "fractal"] {
+        for key in keys {
+            for v in &junk {
+                calls += 1;
+                let mut s = stacked(Fixture::Single);
+                let r = catch_quiet(|| {
+                    let _ =
+                        s.execute("modifier.add", &json!({"kind": "displace", "index": 0, "props": {"mode": mode, "direction": "normal", key: v}}));
+                    let _ = s.execute("modifier.list", &json!({}));
+                    s.execute("modifier.apply", &json!({}))
+                });
+                let fail = match r {
+                    Err(msg) => Some(format!("PANIC {mode}.{key} = {v}: {msg}")),
+                    Ok(Err(vectorcraft_engine::EngineError::Internal { msg, .. })) => Some(format!("PANIC {mode}.{key} = {v}: {msg}")),
+                    Ok(_) => check_session(&s).err().map(|e| format!("{mode}.{key} = {v}: {e}")),
+                };
+                failures.extend(fail);
+            }
+        }
+    }
+    assert!(calls > 100, "only {calls} calls");
+    assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.iter().take(40).cloned().collect::<Vec<_>>().join("\n"));
+}

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 pub use crate::model_deform::{Deform, DeformAxis, DeformMode, Falloff, ShearOrigin};
-pub use crate::model_displace::{Displace, DisplaceMode};
+pub use crate::model_displace::{Displace, DisplaceDirection, DisplaceMode, Waveform};
 pub use crate::model_screen::{SCREEN_PRESETS, Screen, SpotShape, ToneSource};
 pub use crate::model_shape::{CloseMethod, Resample, ResampleMode, SortBy, SubdivideMethod, Tidy, Trim};
 use crate::{MAX_STACK_LEN, ModError, STACK_VERSION, lenient};
