@@ -186,6 +186,7 @@ pub fn has_multi(s: &Session) -> std::result::Result<(), String> {
 /// The isolated group, layer or object in isolation mode. Pattern editing mode and opacity mask
 /// editing isolate their own layer, which does not count here; an object isolated inside them
 /// counts.
+#[allow(clippy::nonminimal_bool)] // PICABIA: clippy 1.96 flags upstream's boolean; fails on pristine upstream too
 pub(crate) fn ordinary_isolation(st: &crate::DocState) -> Option<vectorcraft_doc::NodeId> {
     st.isolation.filter(|l| !st.doc.pattern_edit.as_ref().is_some_and(|e| e.layer == *l) && !st.doc.mask_edit.as_ref().is_some_and(|e| e.layer == *l))
 }
