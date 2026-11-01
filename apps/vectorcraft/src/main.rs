@@ -386,7 +386,6 @@ fn main() -> std::process::ExitCode {
             Box::new(move |cc| {
                 VectorcraftApp::install_ime_reset_hooks(&cc.egui_ctx);
                 let mut session = Session::new();
-                session.laser_enable_hardware(); // PICABIA: the desktop app may list and open real laser ports.
                 // The profiles loaded before come back before the preferences name any of them.
                 prefs_dir::attach_profile_store(&mut session);
                 prefs_dir::attach_plugin_store(&mut session);
