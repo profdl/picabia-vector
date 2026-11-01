@@ -42,6 +42,9 @@ PICABIA: the desktop app's laser link uses the serialport crate
 (file-level copyleft: its source files stay under the MPL; nothing of it is copied into this
 repository); see its crate metadata. On Linux it pulls in unescaper, used under the MIT side of
 its MIT OR GPL-3.0-only dual licence.
+PICABIA: physics (crates/physics) uses the rapier2d crate (https://rapier.rs, Dimforge, Apache
+License 2.0) unmodified, with parry2d and nalgebra (Apache-2.0) and their dependencies (MIT,
+Apache-2.0, Zlib or dual licensed); see their crate metadata.
 
 JPEG export uses the jpeg-encoder crate (MIT OR Apache-2.0, and the IJG License): this software is
 based in part on the work of the Independent JPEG Group.

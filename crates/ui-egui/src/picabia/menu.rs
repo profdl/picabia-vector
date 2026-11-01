@@ -1,4 +1,4 @@
-//! PICABIA: Object ▸ Modifiers, in the menu tree (`menus::tree`), which also builds the macOS menu
+//! PICABIA: Object ▸ Modifiers and Object ▸ Physics, in the menu tree (`menus::tree`), which also builds the macOS menu
 //! bar and the command palette.
 
 use serde_json::json;
@@ -34,5 +34,20 @@ pub fn object_items() -> Vec<Item> {
         Item::Sep,
         Item::Cmd("Copy Modifiers", "modifier.copy", serde_json::Value::Null),
         Item::Cmd("Paste Modifiers", "modifier.paste", serde_json::Value::Null),
+    ]
+}
+
+/// The Object ▸ Physics submenu: Simulate (drop and settle, one undo step), settings for the
+/// selection (dynamic, static, or open them in the Appearance panel), and Clear.
+pub fn physics_items() -> Vec<Item> {
+    vec![
+        // `{}`, not null: the app adds the active artboard (the walls) to an object's params.
+        Item::Cmd("Simulate", "physics.simulate", json!({})),
+        Item::Sep,
+        Item::Cmd("Add Physics", "physics.set", json!({"props": {"enabled": true}})),
+        Item::Cmd("Make Static", "physics.set", json!({"props": {"bodyType": "static"}})),
+        Item::Cmd("Settings…", crate::picabia_ui::PHYSICS_SETTINGS, json!({})),
+        Item::Sep,
+        Item::Cmd("Clear Physics", "physics.clear", serde_json::Value::Null),
     ]
 }

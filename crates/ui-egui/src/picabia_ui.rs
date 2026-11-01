@@ -16,6 +16,9 @@ use crate::widgets;
 pub const LASER_PANEL: &str = "laser.panel";
 /// UI command: open the Stencil window (Window ▸ Stencil Settings…).
 pub const STENCIL_SETTINGS: &str = "ui.stencilSettings";
+/// UI command: Object ▸ Physics ▸ Settings…: give the selected objects physics settings when they
+/// have none and open them in the Appearance panel.
+pub const PHYSICS_SETTINGS: &str = "ui.physicsSettings";
 
 /// Picabia's UI state (not the document).
 #[derive(Default)]
@@ -24,6 +27,8 @@ pub struct PicabiaUi {
     pub laser: crate::picabia_laser_window::LaserPanel,
     /// The Stencil window is open.
     pub stencil_open: bool,
+    /// The Appearance panel's physics row is open (`picabia::physics`).
+    pub physics_open: bool,
 }
 
 /// Picabia's UI commands (seam in `menus::run_ui_command`); `None`: not one of them.
@@ -37,8 +42,18 @@ pub fn command(app: &mut VectorcraftApp, id: &str, _p: &Value) -> Option<Result<
             app.picabia.stencil_open = true;
             Some(Ok(serde_json::json!({"open": true})))
         }
+        PHYSICS_SETTINGS => Some(physics_settings(app)),
         _ => None,
     }
+}
+
+/// Object ▸ Physics ▸ Settings…: settings for the selected objects that have none (one undo step;
+/// those with settings keep theirs), then the Appearance panel with the physics row open.
+fn physics_settings(app: &mut VectorcraftApp) -> Result<Value, String> {
+    let added = app.run("physics.set", serde_json::json!({}))?;
+    app.picabia.physics_open = true;
+    app.run("window.panel", serde_json::json!({"panel": "appearance"}))?;
+    Ok(added)
 }
 
 /// After engine command `id` returned `v` (seam in `run_now`): a laser export run without a path
@@ -127,5 +142,12 @@ mod tests {
         assert!(app.picabia.laser.open);
         assert!(app.run(STENCIL_SETTINGS, serde_json::json!({})).is_ok());
         assert!(app.picabia.stencil_open);
+        // Physics Settings… needs a selection; with one it adds settings and opens the row.
+        assert!(app.run(PHYSICS_SETTINGS, serde_json::json!({})).is_err());
+        app.run("file.new", serde_json::json!({"width": 200, "height": 200})).unwrap();
+        let id = app.run("shape.rectangle", serde_json::json!({"x": 0, "y": 0, "width": 20, "height": 20})).unwrap()["id"].clone();
+        assert!(app.run(PHYSICS_SETTINGS, serde_json::json!({})).is_ok());
+        assert!(app.picabia.physics_open);
+        assert_eq!(app.run("physics.get", serde_json::json!({"id": id})).unwrap()["settings"]["bodyType"], "dynamic");
     }
 }

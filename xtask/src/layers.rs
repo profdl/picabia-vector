@@ -69,6 +69,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("stencil", Class::Layer(3)),
     // PICABIA: the GRBL laser link (protocol, simulator, serial port); no workspace deps.
     ("grbl", Class::Standalone),
+    // PICABIA: physics settings and the drop-and-settle simulation (geom, doc; rapier2d)
+    ("physics", Class::Layer(2)),
 ];
 
 /// Explicit orderings *within* a layer (earlier may be used by later).

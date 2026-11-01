@@ -32,6 +32,8 @@ vectorcraft-tools = { workspace = true }
 vectorcraft-engine = { workspace = true }
 # PICABIA: the Appearance panel reads modifier stacks (src/picabia/appearance.rs).
 vectorcraft-modifiers = { workspace = true }
+# PICABIA: the Appearance panel's physics row reads physics settings (src/picabia/physics.rs).
+vectorcraft-physics = { workspace = true }
 vectorcraft-svg = { workspace = true }
 vectorcraft-effects = { workspace = true }
 vectorcraft-three-d = { workspace = true }

@@ -57,6 +57,8 @@ vectorcraft-modifiers = { path = "crates/modifiers" }
 vectorcraft-stencil = { path = "crates/stencil" }
 # PICABIA: the GRBL laser link (standalone): protocol, streamer, simulator, serial transport.
 vectorcraft-grbl = { path = "crates/grbl" }
+# PICABIA: physics (L2): rigid-body settings and the drop-and-settle simulation (rapier2d).
+vectorcraft-physics = { path = "crates/physics" }
 
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }

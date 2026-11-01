@@ -66,6 +66,7 @@ pub mod pdfcmds;
 pub mod perspgrid;
 pub mod picabia_laser_link; // PICABIA: laser link commands (registered below).
 pub mod picabia_modifier; // PICABIA: modifier stack commands (registered below).
+pub mod picabia_physics; // PICABIA: physics commands (registered below).
 pub mod place;
 pub mod plugin;
 pub mod prefscmds;
@@ -334,6 +335,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(addons::specs());
         v.extend(picabia_modifier::specs()); // PICABIA: modifier stack commands.
         v.extend(picabia_laser_link::specs()); // PICABIA: laser link commands.
+        v.extend(picabia_physics::specs()); // PICABIA: physics commands.
         v
     })
 }
