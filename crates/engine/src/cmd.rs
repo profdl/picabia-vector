@@ -64,6 +64,7 @@ pub(crate) mod pathops;
 mod patterncmds;
 pub mod pdfcmds;
 pub mod perspgrid;
+pub(crate) mod picabia_modifier; // PICABIA: modifier stack commands (registered below).
 pub mod place;
 pub mod plugin;
 pub mod prefscmds;
@@ -330,6 +331,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(shortcutset::specs());
         v.extend(importmatches::specs());
         v.extend(addons::specs());
+        v.extend(picabia_modifier::specs()); // PICABIA: modifier stack commands.
         v
     })
 }

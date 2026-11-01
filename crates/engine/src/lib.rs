@@ -222,6 +222,8 @@ pub struct Session {
     /// The Global Edit Options Start Global Edit matches with (`select.globalEditOptions`); not
     /// saved.
     pub global_edit_options: cmd::globaledit::Options,
+    /// PICABIA: the modifier rows `modifier.copy` copied, for `modifier.paste`; not saved.
+    pub(crate) picabia_modifiers: cmd::picabia_modifier::Copied,
 }
 
 impl Default for Session {
