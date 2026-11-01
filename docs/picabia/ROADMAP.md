@@ -7,7 +7,7 @@ phase is being ported.
 Picabia is a thin fork of [VectorCraft](https://github.com/storytold/vectorcraft): everything
 VectorCraft does, plus a live, non-destructive **modifier stack** (arrays, mirrors, per-copy
 transforms, randomisation, wallpaper groups, copy to shape) and a laser-cut **katagami stencil** with
-laser export and a GRBL laser controller. New code lives in new crates and files; edits to
+laser export and a GRBL laser controller, and **physics** (drop-and-settle, from tlprocedural). New code lives in new crates and files; edits to
 VectorCraft's files are short seams marked `PICABIA:` and listed in [`SEAMS.md`](SEAMS.md)
 (`rg "PICABIA:"` finds them). Crate names, the `.vectorcraft` file format and the licence (MIT OR
 Apache-2.0) are unchanged.
@@ -35,6 +35,8 @@ they still apply.
 | PIC20.0 | Geometry rows: rows that reshape paths instead of placing copies | B | The mechanism (`crates/modifiers/src/shape`): rows above every copy row reshape the object before it is copied, rows below one reshape each copy after its transform ([`modifiers.md`](modifiers.md) › Evaluation order). Run by one builder (`Shaper`) inside the renderer's art, so the canvas, bounds, hit testing (reshaped copies are clicked as drawn), every export, `modifier.apply` (bakes the paths), the stencil and `laser.gcode` see the same paths. Paths, compound paths and paths in groups; type, images, symbols and live objects pass through with a note; 200 000-anchor cap per object (its copies share it), finite checks. Gaps: the pivot of copy rows stays the object's own bounds' centre after a row above reshapes it; a geometry row between two arrays runs on the final copies (not between them); the stencil's sheet is sized from the unreshaped design; no canvas handles for the rows; the copy count under the rows says "1 copy" for a stack of geometry rows alone |
 | PIC20.1 | Resample (from tlprocedural's Subdivide and Rebuild Points) | B | Modes subdivide (linear keeps curves exactly; Catmull-Rom; Chaikin; 1–5 times), by count (2–1024) and by spacing (1–5000 pt), by arc length on the true curve; tlprocedural's ranges and defaults (count default 20; its default `simplify` mode isn't ported). Panel fields by mode, Add New Effect ▸ Modifiers and Object ▸ Modifiers. tlprocedural's Rebuild Points `simplify`, `cull`, `existing`, smoothing and corner keeping are not ported. Differences from tlprocedural on purpose: listed in `modifiers.md` |
 | PIC20.2 | Trim and Tidy (from tlprocedural's Trim Path, Close Path, Sort Points) | B | Trim: start, end, offset as fractions (shown as %), wrapping through a closed path's start, an open path never wrapping, cut on the true curve. Tidy: close open subpaths (straight or smooth, ends within the tolerance joined), sort anchors by angle, distance, x, y or a seeded shuffle, reverse (direction kept as curves with no sort). tlprocedural's `extractSubPath` tests ported (8). Gaps: sorting the subpaths of a compound path among themselves isn't built (each subpath's anchors only); a trimmed filled path is filled as if closed (tlprocedural drew trims unfilled) |
+| PIC30.1 | Physics: settings and a deterministic drop-and-settle world (`crates/physics`, from tlprocedural's Physics modifier) | B | rapier2d 0.36.1, rigid bodies only, `enhanced-determinism` and the block solver; no threads, no `fem`. tlprocedural's settings, ranges and defaults (body type, collider fidelity, gravity scale, bounce, friction, extra mass, damping, sensor), stored as the `picabia.physics` foreign attribute and parsed leniently (clamps, warnings, unknown fields and body types kept for a later `soft`). Colliders from document geometry: box, fast (hull), auto (tlprocedural's vertex-count rule), precise (convex parts for dynamic bodies, edges for static ones); 2,000 points and 512 pieces per object; non-finite, empty, huge and degenerate geometry skipped with the reason. 100 pt per metre, 9.81 m/s², 60 steps a second, step caps only (default 3,000, at most 20,000; 6 million body-steps). Same bits natively and in wasm32 (Node) for a 20-body scene. Deliberate differences: [`physics.md`](physics.md). Gaps: holes in compound paths are filled for dynamic bodies; f32 world (sub-0.01 pt noise in where things rest) |
+| PIC30.2 | Physics: `physics.set/clear/get/simulate`, Object ▸ Physics, the Appearance panel's physics row | B | Simulate drops every object with settings turned on (and the selected ones without, as dynamic bodies) onto the active artboard's floor and walls, then moves each by its rigid motion through the transform commands' path, as one undo step (undo restores the document exactly); locked objects stay put; hidden ones are left out; damaged settings are skipped and reported. Object ▸ Physics: Simulate, Add Physics, Make Static, Settings… (`ui.physicsSettings`), Clear Physics. Panel row: eye, fields, Simulate, Clear. Checked headless (panel frames, menu run), by engine tests (undo, save and reopen, determinism of the saved document, groups, static shelves, sideways gravity, lost bodies) and junk sweeps, and in CLI renders (12 shapes and a tilted static shelf: settled after 203 steps, 3.4 s). Gaps: not yet checked in the running app; no canvas preview of colliders or walls; modifier copies don't collide; no live playback ([`physics.md`](physics.md) › Phase 2) |
 
 ## P0 identity, as built
 
@@ -94,11 +96,15 @@ they still apply.
 
 The owner authored tlprocedural and gave permission to port it; `NOTICE` says so in Picabia's
 block since the first ported tlprocedural feature (PIC20, the geometry rows). No tlprocedural
-dependency is ported (its `marching-squares` package is AGPL and stays out). The Picabia icon is original work (see
+dependency is ported (its `marching-squares` package is AGPL and stays out). Physics uses the Rust
+`rapier2d` crate (Apache-2.0, Dimforge), as tlprocedural uses its JavaScript build; its dependencies
+(parry2d, nalgebra, simba, glam, glamx, spade, robust, wide, libm…) are Apache-2.0, MIT, Zlib or dual
+licensed (checked with `cargo metadata` for PIC30.1). The Picabia icon is original work (see
 `assets/picabia/app-icon/`), attributed in `ASSETS.md` and `NOTICE`.
 
 ## Links
 
 - Modifiers spec: [`modifiers.md`](modifiers.md)
+- Physics: [`physics.md`](physics.md)
 - Seams register: [`SEAMS.md`](SEAMS.md)
 - VectorCraft's own docs: [`../../ROADMAP.md`](../../ROADMAP.md), [`../gaps.md`](../gaps.md)

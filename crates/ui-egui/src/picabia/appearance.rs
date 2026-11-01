@@ -378,7 +378,14 @@ fn note(ui: &mut Ui, s: &str) {
 
 /// The selection's modifier rows (none when no selected object has modifier data). The panel's
 /// own `mixed` flag (its fills and effects differ) doesn't hide them: the rows compare stacks.
+/// Then the selection's physics row (`super::physics`), when an object has physics settings.
 pub fn rows(app: &mut VectorcraftApp, ui: &mut Ui, _n: &vectorcraft_doc::Node, _mixed: bool) {
+    modifier_rows(app, ui);
+    // The physics row (the selection's physics settings) under them.
+    super::physics::section(app, ui);
+}
+
+fn modifier_rows(app: &mut VectorcraftApp, ui: &mut Ui) {
     let Some((ids, v)) = kept_view(app, ui.ctx()) else { return };
     match &*v {
         View::Empty => {}
