@@ -188,6 +188,16 @@ impl Gather<'_> {
             return;
         }
         match vectorcraft_modifiers::node_instances_in_doc(self.doc, n) {
+            // Geometry rows reshape the copies: each is cut as drawn.
+            Some(o) if o.has_geometry() => {
+                let (copies, notes) = vectorcraft_modifiers::shaped_copies(n, &o);
+                for note in &notes {
+                    self.warn(note);
+                }
+                for c in &copies {
+                    self.once(c, xf, depth, out);
+                }
+            }
             Some(o) if !o.instances.is_empty() => {
                 for t in o.transforms() {
                     self.once(n, xf * t, depth, out);

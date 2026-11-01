@@ -41,6 +41,12 @@
 //! Per-instance stages apply a local transform `L_i` around the pivot before the instance's own
 //! transform: `S_i * (pivot · L_i · pivot⁻¹)`.
 //!
+//! # Geometry rows
+//! `resample`, `trim` and `tidy` change the object's paths instead of placing copies
+//! ([`shape`]): above every copy row they change the object before it is copied, below one they
+//! run on each copy after its transform. [`Output::geometry`] lists them; [`Shaper`] runs them for
+//! whoever builds the copies.
+//!
 //! # Caps
 //! Sources over [`MAX_SOURCE_BYTES`] and stacks over [`MAX_STACK_LEN`] are refused by [`parse`];
 //! array counts are clamped to [`MAX_COUNT`]; the instance product is checked against
@@ -59,8 +65,10 @@ mod kinds;
 mod kinds_tests;
 mod lenient;
 pub mod model;
+mod model_shape;
 mod node;
 mod parse;
+pub mod shape;
 mod target;
 #[cfg(test)]
 mod target_tests;
@@ -74,6 +82,7 @@ pub use model::{
     StencilPreview, StencilRepeat, StencilTieMode, TransformEach, Wallpaper, WallpaperGroup, expr_field, expr_fields, expr_key, hex_colour,
     kind_label, parse_hex_colour,
 };
+pub use model::{CloseMethod, Resample, ResampleMode, SortBy, SubdivideMethod, Tidy, Trim};
 pub use model::{
     MAX_CORNER_ANGLE, MAX_HOSHI_DIAMETER_MM, MAX_PATTERN_SPACING_MM, MAX_TIE_WIDTH_MM, MAX_TIES_PER_ISLAND, MIN_HOSHI_DIAMETER_MM,
     MIN_PATTERN_SPACING_MM, MIN_TIE_WIDTH_MM, STENCIL_CLOTH, STENCIL_PAPER, STENCIL_PASTE,
@@ -83,6 +92,7 @@ pub use node::{
     node_instances_in_doc, node_source, node_stack, set_node_source,
 };
 pub use parse::{parse, parse_cached, stack_from_value, stack_to_value, to_json};
+pub use shape::{GeometryOp, GeometryRow, MAX_GEOMETRY_ANCHORS, RowAt, Shaper, shaped_copies};
 pub use target::{
     DocTargets, MAX_LISTED_TARGETS, MAX_TARGET_ELEMENTS, NoTargets, TargetResolver, TargetShape, check_target, parse_target, stack_targets,
     valid_targets,

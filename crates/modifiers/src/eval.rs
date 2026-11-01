@@ -4,6 +4,7 @@ use vectorcraft_geom::{Affine, Point, Rect, Vec2};
 
 use crate::kinds::{self, Ctx, Stage};
 use crate::model::{ModifierKind, Stack, Stencil, StencilOutput, StencilRepeat};
+use crate::shape::{GeometryRow, RowAt};
 use crate::target::{NoTargets, TargetResolver};
 use crate::{MAX_INSTANCES_PER_NODE, MAX_LENGTH};
 
@@ -61,6 +62,10 @@ pub struct Output {
     /// or `randomize` row anywhere: those vary every copy). `None` otherwise, without a warning; a
     /// stencil with `output: tile` then evaluates as `sheet`, with a warning.
     pub repeat: Option<Repeat>,
+    /// The enabled geometry rows (`resample`, `trim`, `tidy`), in stack order, each with where it
+    /// runs: on the object before it is copied, or on every copy after its transform
+    /// ([`crate::shape`]). Empty: the copies are the object's geometry, transformed.
+    pub geometry: Vec<GeometryRow>,
 }
 
 /// A translation lattice in the layer's parent space (like [`Instance::transform`]): the copies
@@ -88,6 +93,12 @@ impl Output {
     /// The instance transforms, in draw order.
     pub fn transforms(&self) -> impl Iterator<Item = Affine> + '_ {
         self.instances.iter().map(|i| i.transform)
+    }
+
+    /// Whether geometry rows change the paths: the copies must then be built ([`crate::Shaper`]),
+    /// not just placed (and a single unmoved copy still differs from the object).
+    pub fn has_geometry(&self) -> bool {
+        !self.geometry.is_empty()
     }
 
     fn set_stencil(&mut self, id: &str, p: &Stencil) {
@@ -154,6 +165,8 @@ pub fn evaluate_with(stack: &Stack, bounds: Rect, targets: &dyn TargetResolver) 
     let mut lattice: Option<Repeat> = None;
     // A per-copy row anywhere varies the final copies one by one, so they never form a lattice.
     let mut per_copy = false;
+    // A copy row has run: geometry rows from here on run on every copy.
+    let mut copied = false;
     for m in rows.by_ref() {
         // Terminal: no copies of its own, and the rows below it are ignored (one warning, below).
         if let ModifierKind::Stencil(p) = &m.kind {
@@ -164,6 +177,15 @@ pub fn evaluate_with(stack: &Stack, bounds: Rect, targets: &dyn TargetResolver) 
             out.warn(Some(&m.id), other_message(kind, error.as_deref()));
             continue;
         }
+        if let Some((op, warnings)) = crate::shape::clamped(&m.kind) {
+            for w in warnings {
+                out.warn(Some(&m.id), w);
+            }
+            let at = if copied { RowAt::Copies } else { RowAt::Source };
+            out.geometry.push(GeometryRow { modifier: m.id.clone(), op, at });
+            continue;
+        }
+        copied = true;
         let ctx = Ctx { pivot, bounds, n_prev: set.len() };
         let r = kinds::stage(&m.kind, &ctx, targets);
         out.guides.extend(r.guides);

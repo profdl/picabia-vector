@@ -90,6 +90,17 @@ pub fn gather<'a>(doc: &'a Document, node: &Node, copies: &[Affine], text: Outli
     g.out
 }
 
+/// [`gather`] for a design whose copies are reshaped by geometry rows above the stencil: `copies`
+/// are the reshaped copies themselves, in document space (`vectorcraft_modifiers::shaped_copies`),
+/// each gathered as it is.
+pub fn gather_shaped<'a>(doc: &'a Document, copies: &[Node], text: Outliner<'a>) -> Gathered {
+    let mut g = G { doc, text, out: Gathered::default(), visits: 0, full: false };
+    for c in copies {
+        g.once(c, Affine::IDENTITY, None, 0);
+    }
+    g.out
+}
+
 impl G<'_> {
     fn warn(&mut self, w: &str) {
         if !self.out.warnings.iter().any(|x| x == w) {
@@ -106,6 +117,19 @@ impl G<'_> {
             self.warn("opacity masks aren't cut; the masked art is cut whole");
         }
         match vectorcraft_modifiers::node_instances_in_doc(self.doc, n) {
+            Some(out) if out.has_geometry() => {
+                if out.stencil.is_some() {
+                    self.warn("a stencil inside the stencil is cut from its design");
+                }
+                // Geometry rows reshape the copies: each is cut as drawn.
+                let (copies, notes) = vectorcraft_modifiers::shaped_copies(n, &out);
+                for note in &notes {
+                    self.warn(note);
+                }
+                for c in &copies {
+                    self.once(c, xf, clip, depth);
+                }
+            }
             Some(out) if !out.instances.is_empty() => {
                 if out.stencil.is_some() {
                     self.warn("a stencil inside the stencil is cut from its design");

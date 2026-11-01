@@ -12,13 +12,17 @@ use vectorcraft_testkit::fixtures::Fixture;
 use vectorcraft_testkit::invariants::check_session;
 use vectorcraft_testkit::strategies::junk_params;
 
-/// `fx` with a stack on each selected object: a grid array, a mirror and a copy to shape onto the
-/// first selected object (refused on that object itself), and copied rows for `modifier.paste`.
+/// `fx` with a stack on each selected object: a resample (geometry, on the object), a grid array,
+/// a trim and a tidy (geometry, on every copy), a mirror and a copy to shape onto the first
+/// selected object (refused on that object itself), and copied rows for `modifier.paste`.
 fn stacked(fx: Fixture) -> Session {
     let mut s = fx.session();
     let selected: Vec<u64> = s.active().map(|d| d.selection.objects.iter().map(|i| i.0).collect()).unwrap_or_default();
     for (k, id) in selected.iter().enumerate() {
+        s.execute("modifier.add", &json!({"ids": [id], "kind": "resample", "props": {"mode": "subdivide", "iterations": 2}})).unwrap();
         s.execute("modifier.add", &json!({"ids": [id], "kind": "gridArray", "props": {"rows": 2, "cols": 2}})).unwrap();
+        s.execute("modifier.add", &json!({"ids": [id], "kind": "trim", "props": {"start": 0.2, "end": 0.7, "offset": 0.4}})).unwrap();
+        s.execute("modifier.add", &json!({"ids": [id], "kind": "tidy", "props": {"close": "smooth", "sort": "random", "reverse": true}})).unwrap();
         s.execute("modifier.add", &json!({"ids": [id], "kind": "mirror"})).unwrap();
         if k > 0 {
             let _ = s.execute("modifier.add", &json!({"ids": [id], "kind": "copyToShape", "props": {"target": selected[0].to_string()}}));
@@ -74,7 +78,8 @@ fn modifier_commands_undo_exactly() {
         ("modifier.add", json!({"kind": "linearArray", "props": {"count": 3}})),
         ("modifier.remove", json!({"index": 0})),
         ("modifier.move", json!({"from": 0, "to": 1})),
-        ("modifier.set", json!({"index": 0, "props": {"rows": 3}})),
+        ("modifier.set", json!({"index": 1, "props": {"rows": 3}})),
+        ("modifier.set", json!({"index": 2, "props": {"start": 0.5}})),
         ("modifier.toggle", json!({"index": 1})),
         ("modifier.paste", json!({"replace": true})),
         ("modifier.remove_all", json!({})),
@@ -90,6 +95,54 @@ fn modifier_commands_undo_exactly() {
         let after = vectorcraft_testkit::invariants::doc_json(&s.active().unwrap().doc);
         assert!(before == after, "{id}: {}", vectorcraft_testkit::invariants::first_diff(&before, &after, "$"));
     }
+}
+
+/// Each geometry row kind `modifier.add` takes, each param set to each junk value in turn, added
+/// on top of stacked objects, then listed and applied: Ok or Err, never a panic or a corrupt tree.
+#[test]
+fn geometry_kinds_with_junk_props() {
+    let junk = vectorcraft_testkit::strategies::junk_values();
+    let mut failures = vec![];
+    let mut calls = 0usize;
+    // The geometry rows (the other kinds' params are swept through `modifier.set` above and in the
+    // modifiers crate's clamp tests).
+    let kinds: Vec<&str> = vectorcraft_modifiers::KINDS
+        .iter()
+        .map(|(k, _)| *k)
+        .filter(|k| vectorcraft_modifiers::Modifier::new("m1", k).unwrap().kind.is_geometry())
+        .collect();
+    assert_eq!(kinds, ["resample", "trim", "tidy"]);
+    for kind in kinds {
+        let params: Vec<String> = vectorcraft_modifiers::Modifier::new("m1", kind).unwrap().kind.params().keys().cloned().collect();
+        for fx in [Fixture::Single, Fixture::Multi] {
+            for key in &params {
+                for v in &junk {
+                    calls += 1;
+                    let mut s = stacked(fx);
+                    let r = catch_quiet(|| {
+                        let _ = s.execute("modifier.add", &json!({"kind": kind, "index": 0, "props": {key.as_str(): v}}));
+                        let _ = s.execute("modifier.list", &json!({}));
+                        s.execute("modifier.apply", &json!({}))
+                    });
+                    let fail = match r {
+                        Err(msg) => Some(format!("PANIC {kind}.{key} = {v} [{fx:?}]: {msg}")),
+                        Ok(Err(vectorcraft_engine::EngineError::Internal { msg, .. })) => Some(format!("PANIC {kind}.{key} = {v} [{fx:?}]: {msg}")),
+                        Ok(_) => check_session(&s).err().map(|e| format!("{kind}.{key} = {v} [{fx:?}]: {e}")),
+                    };
+                    failures.extend(fail);
+                }
+            }
+        }
+    }
+    assert!(calls > 500, "only {calls} calls");
+    failures.sort();
+    failures.dedup();
+    assert!(
+        failures.is_empty(),
+        "{} failures (of {calls} calls):\n{}",
+        failures.len(),
+        failures.iter().take(60).cloned().collect::<Vec<_>>().join("\n")
+    );
 }
 
 /// `fx` with a stencil: a black and a white square (and the fixture's selection) under one

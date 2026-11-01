@@ -24,7 +24,12 @@
 //! A stencil row is never baked here: `upTo` stops above it, and it moves onto the group with the
 //! rows after it (it cuts the same copies there).
 //!
-//! An object whose stack makes no copies (empty, all rows off, or one unmoved copy) is left alone;
+//! Geometry rows (`resample`, `trim`, `tidy`) are baked too: the copies get the reshaped paths the
+//! renderer draws (`vectorcraft_modifiers::Shaper`), so a stack of geometry rows alone applies as a
+//! group of one reshaped copy.
+//!
+//! An object whose stack makes no copies (empty, all rows off, or one unmoved copy and no geometry
+//! row) is left alone;
 //! when no object has anything to apply the command is refused. An object that can't be replaced
 //! by a group where it is (a member of a compound path, blend, envelope, repeat or intertwine, or
 //! a clipping path) is refused.
@@ -50,6 +55,8 @@ struct Plan {
     id: NodeId,
     /// The instance transforms of the baked rows, one copy each.
     copies: Vec<Affine>,
+    /// The baked rows' evaluation: its geometry rows reshape the copies as they are drawn.
+    out: vectorcraft_modifiers::Output,
     /// The rows that stay live, moved onto the group.
     rest: Stack,
     /// The source's pivot (the centre of its geometric bounds).
@@ -78,9 +85,17 @@ pub(super) fn apply(s: &mut Session, p: &Value) -> Result<Value> {
         let mut groups = Vec::with_capacity(plans.len());
         let mut copy_ids = Vec::new();
         let mut live = Vec::new();
+        let mut warnings: Vec<String> = Vec::new();
         for plan in plans {
             let (id, copies) = (plan.id, plan.copies.len());
-            let (group, ids) = bake(d, &plan)?;
+            let (group, ids, notes) = bake(d, &plan)?;
+            // What a geometry row couldn't do (skipped over the anchor cap…) is said, not lost.
+            for n in notes {
+                let w = format!("object {}: {n}", id.0);
+                if !warnings.contains(&w) {
+                    warnings.push(w);
+                }
+            }
             applied.push((id, group.id, copies));
             if !plan.rest.is_empty() {
                 live.push((group.id, plan.rest, plan.pivot));
@@ -100,11 +115,12 @@ pub(super) fn apply(s: &mut Session, p: &Value) -> Result<Value> {
             vectorcraft_modifiers::set_node_source(g, Some(vectorcraft_modifiers::to_json(&rest)));
         }
         sel.set(applied.iter().map(|a| a.1));
-        Ok(applied)
+        Ok((applied, warnings))
     })?;
+    let (applied, warnings) = applied;
     let groups: Vec<u64> = applied.iter().map(|a| a.1.0).collect();
     let rows: Vec<Value> = applied.iter().map(|(id, g, n)| json!({"id": id.0, "group": g.0, "copies": n})).collect();
-    Ok(json!({"ids": groups, "applied": rows}))
+    Ok(json!({"ids": groups, "applied": rows, "warnings": warnings}))
 }
 
 /// What applying object `id` makes, or `None` when its stack makes no copies.
@@ -128,7 +144,8 @@ fn plan(doc: &Document, id: NodeId, up_to: Option<usize>, budget: &mut usize) ->
     // The pivot the renderer uses (a symbol instance pivots on its art).
     let bounds = vectorcraft_modifiers::node_bounds_in_doc(doc, node);
     let out = vectorcraft_modifiers::evaluate_with(&baked, bounds, &vectorcraft_modifiers::DocTargets::new(doc, id));
-    let unmoved = matches!(out.instances.as_slice(), [one] if one.transform == Affine::IDENTITY);
+    // One unmoved copy is the object itself, unless geometry rows reshape it.
+    let unmoved = matches!(out.instances.as_slice(), [one] if one.transform == Affine::IDENTITY) && !out.has_geometry();
     if out.instances.is_empty() || unmoved {
         return Ok(None);
     }
@@ -140,7 +157,7 @@ fn plan(doc: &Document, id: NodeId, up_to: Option<usize>, budget: &mut usize) ->
         return Err(super::super::bad(CMD, format!("applying would make {wanted} objects (at most {MAX_APPLY_OBJECTS} at once)")));
     }
     *budget -= wanted;
-    Ok(Some(Plan { id, copies: out.instances.iter().map(|i| i.transform).collect(), rest, pivot: bounds.center() }))
+    Ok(Some(Plan { id, copies: out.instances.iter().map(|i| i.transform).collect(), out, rest, pivot: bounds.center() }))
 }
 
 /// Refuse `node` when a group can't take its place.
@@ -160,8 +177,9 @@ fn replaceable(doc: &Document, node: &Node) -> Result<()> {
     }
 }
 
-/// The group of `plan.id`'s copies (not in the tree yet), and the copies' ids.
-fn bake(d: &mut Document, plan: &Plan) -> Result<(Node, Vec<NodeId>)> {
+/// The group of `plan.id`'s copies (not in the tree yet), the copies' ids, and what the geometry
+/// rows said (a row skipped over the anchor cap: its reshape isn't in the copies).
+fn bake(d: &mut Document, plan: &Plan) -> Result<(Node, Vec<NodeId>, Vec<String>)> {
     let mut node = d.node(plan.id).cloned().ok_or_else(|| super::super::bad(CMD, format!("no object with id {}", plan.id.0)))?;
     // The object's transparency and its own attributes go on the group, as the renderer draws
     // the copies (composited together, once): the copies are the object without them.
@@ -175,14 +193,20 @@ fn bake(d: &mut Document, plan: &Plan) -> Result<(Node, Vec<NodeId>)> {
     group.extras_mut().attrs = node.extras_mut().attrs.take();
     vectorcraft_modifiers::set_node_source(&mut group, None);
     let sc = vectorcraft_render::picabia::scaling();
+    // Geometry rows reshape the object before copying and each copy after its transform, as the
+    // renderer draws them (the tree's shape is kept, so targets still pair up below).
+    let mut shaper = vectorcraft_modifiers::Shaper::new(&plan.out);
+    let mut shaped = node.clone();
+    shaper.source(&mut shaped);
     let mut kids = Vec::with_capacity(plan.copies.len());
     for (k, t) in plan.copies.iter().enumerate() {
-        let mut c = d.reid(&node);
+        let mut c = d.reid(&shaped);
         // Targets inside the object point at the ones inside this copy.
         super::targets::remap_copy(&node, &mut c);
         if *t != Affine::IDENTITY {
             super::super::object::transform_node(&mut c, *t, sc, true);
         }
+        shaper.copy(&mut c);
         vectorcraft_modifiers::set_node_source(&mut c, None);
         if let Some(name) = &node.name {
             c.name = Some(format!("{name} {}", k + 1));
@@ -193,7 +217,7 @@ fn bake(d: &mut Document, plan: &Plan) -> Result<(Node, Vec<NodeId>)> {
     if let Some(ch) = group.children_mut() {
         *ch = kids;
     }
-    Ok((group, copy_ids))
+    Ok((group, copy_ids, shaper.notes))
 }
 
 /// Shift the pivot-relative params of `stack` by `d` (the old pivot minus the new one), so its

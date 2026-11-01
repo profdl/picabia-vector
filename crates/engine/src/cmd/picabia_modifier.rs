@@ -18,7 +18,7 @@ use super::{CommandSpec, always, cmd, has_doc, has_selection, ok, targets};
 use crate::{EngineError, Result, Session};
 
 /// The kinds `modifier.add` takes, for messages.
-const KIND_LIST: &str = "linearArray|circularArray|gridArray|mirror|transformEach|randomize|wallpaper|copyToShape|stencil";
+const KIND_LIST: &str = "linearArray|circularArray|gridArray|mirror|transformEach|randomize|wallpaper|copyToShape|stencil|resample|trim|tidy";
 
 /// Picabia's state in a [`Session`] (its `picabia` field), not saved.
 #[derive(Debug, Default)]
@@ -72,7 +72,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Modifier",
             [],
             None,
-            "{ids?|id?: the objects (default: the selection), kind: linearArray|circularArray|gridArray|mirror|transformEach|randomize|wallpaper|copyToShape|stencil, props?: {…the kind's params, camelCase: points, degrees, scale factors (1 = 100%); copyToShape: target (an object id; refused: the object itself, its groups or its contents, a top-level layer, or an object copying back onto it), mode (points|alongPath|populate), count, scale, align, seed; stencil (ends the stack: rows below it are ignored): its params as docs/picabia/modifiers.md lists them}, index?: where in the stack (default: the end, which runs last)} add a modifier to each object's stack, as one undo step → {modifier: the new id on the first object, added: [{id, modifier}]}",
+            "{ids?|id?: the objects (default: the selection), kind: linearArray|circularArray|gridArray|mirror|transformEach|randomize|wallpaper|copyToShape|stencil|resample|trim|tidy, props?: {…the kind's params, camelCase: points, degrees, scale factors (1 = 100%); copyToShape: target (an object id; refused: the object itself, its groups or its contents, a top-level layer, or an object copying back onto it), mode (points|alongPath|populate), count, scale, align, seed; stencil (ends the stack: rows below it are ignored): its params as docs/picabia/modifiers.md lists them; geometry rows (reshape the paths: above every copy row the object, below one each copy): resample: mode (subdivide|count|spacing), iterations (1-5), method (linear|catmullRom|chaikin), count (2-1024), spacing (1-5000 pt); trim: start, end, offset (fractions of the length, 0-1); tidy: close (off|straight|smooth), tolerance (0-500 pt), sort (none|angle|distance|x|y|random), reverse, seed}, index?: where in the stack (default: the end, which runs last)} add a modifier to each object's stack, as one undo step → {modifier: the new id on the first object, added: [{id, modifier}]}",
             has_selection,
             add
         ),
@@ -153,7 +153,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Apply Modifiers",
             [],
             None,
-            "{ids?|id?, upTo?: index (inclusive): bake only the rows down to it; the rows after it move onto the new group and stay live} replace each object by a group of real objects, one per modifier copy (named `Name 1…n` when the object has a name), in its place, as one undo step; a stencil row stays live on the group; objects whose stack makes no copies are left alone → {ids: the groups (selected), applied: [{id, group, copies}]}",
+            "{ids?|id?, upTo?: index (inclusive): bake only the rows down to it; the rows after it move onto the new group and stay live} replace each object by a group of real objects, one per modifier copy (named `Name 1…n` when the object has a name), in its place, as one undo step; a stencil row stays live on the group; objects whose stack makes no copies are left alone → {ids: the groups (selected), applied: [{id, group, copies}], warnings: [what a geometry row couldn't do, e.g. skipped over the anchor cap: its reshape is not in the copies]}",
             has_selection,
             apply::apply
         ),
@@ -519,6 +519,8 @@ mod apply_tests;
 mod canvas_tests;
 #[cfg(test)]
 mod export_tests;
+#[cfg(test)]
+mod geometry_tests;
 #[cfg(test)]
 mod laser_tests;
 #[cfg(test)]

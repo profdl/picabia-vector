@@ -32,6 +32,9 @@ pub struct CopyHooks {
     pub transforms: fn(&SymbolBoxes, &Node) -> Option<Placements>,
     /// The group of an object's copies, for marquees.
     pub art: fn(&SymbolBoxes, &Node) -> Option<Arc<Node>>,
+    /// The group of an object's copies when they can't be found from the object by a transform
+    /// (geometry rows reshape them): a click then tries that group, as drawn.
+    pub shaped: fn(&SymbolBoxes, &Node) -> Option<Arc<Node>>,
     /// A stencil object's sheet: clicked anywhere on it, as the object. `true`: the sheet is all
     /// it draws (a sheet was computed); `false`: its design (or copies) draws, also clicked.
     pub sheet: fn(&SymbolBoxes, &Node) -> Option<(vectorcraft_geom::Rect, bool)>,
@@ -145,7 +148,8 @@ pub(super) fn hit(
     if !(h.has)(c) || plain(c.id) {
         return None;
     }
-    // A stencil: its sheet, a filled rectangle with the object's id.
+    // A stencil: its sheet, a filled rectangle with the object's id. When the sheet is all it
+    // draws, that is the answer; otherwise its design (or copies) is tried next.
     if let Some((r, only)) = (h.sheet)(symbols, c) {
         let paper = crate::Appearance::basic(vectorcraft_color::Paint::solid(vectorcraft_color::Color::BLACK), vectorcraft_color::Paint::None, 0.0);
         let mut sheet = Node::path(c.id, vectorcraft_geom::PathData::from_bezpath(&vectorcraft_geom::kurbo::Shape::to_path(&r, 0.1)), paper);
@@ -155,6 +159,13 @@ pub(super) fn hit(
         if only || found.is_some() {
             return Some(found);
         }
+    }
+    // Reshaped copies are tried as drawn: the group of them, in place of the object (they carry
+    // no stack; members' own copies are found inside them as anywhere).
+    if let Some(art) = (h.shaped)(symbols, c) {
+        let holder = Node::group(c.id, vec![art]);
+        let _plain = Plain::push(c.id, false);
+        return Some(try_at(&holder, p, opt));
     }
     let (ts, strip) = (h.transforms)(symbols, c)?;
     // A top-level object with copies (none is being tried yet): count its placements afresh.
