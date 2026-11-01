@@ -267,22 +267,24 @@ fn view(doc: &Document, ids: &[NodeId]) -> View {
 }
 
 /// The view kept for (document, revision, selection), so a frame without an edit reads no stack.
-type Kept = (u64, u64, Vec<NodeId>, Arc<View>);
+type Kept = (u64, u64, usize, Vec<NodeId>, Arc<View>);
 
 /// The selection's view, kept across frames until the document or the selection changes.
 fn kept_view(app: &VectorcraftApp, ctx: &egui::Context) -> Option<(Vec<NodeId>, Arc<View>)> {
     let st = app.session.active()?;
     let ids: Vec<NodeId> = st.selection.subjects().iter().copied().filter(|id| st.doc.node(*id).is_some_and(|n| !n.is_layer())).collect();
     let kept: Option<Kept> = pstate(ctx, "pc-view");
-    if let Some((uid, rev, kept_ids, v)) = kept
+    let at = Arc::as_ptr(&st.doc) as usize;
+    if let Some((uid, rev, kept_at, kept_ids, v)) = kept
         && uid == st.uid
         && rev == st.revision
+        && kept_at == at
         && kept_ids == ids
     {
         return Some((ids, v));
     }
     let v = Arc::new(view(&st.doc, &ids));
-    set_pstate::<Option<Kept>>(ctx, "pc-view", Some((st.uid, st.revision, ids.clone(), v.clone())));
+    set_pstate::<Option<Kept>>(ctx, "pc-view", Some((st.uid, st.revision, at, ids.clone(), v.clone())));
     Some((ids, v))
 }
 
@@ -423,7 +425,12 @@ fn modifier_row(app: &mut VectorcraftApp, ui: &mut Ui, doc: &Document, ids: &[No
             egui::Frame::NONE.fill(t.panel_darker).inner_margin(egui::Margin { left: (EYE_W + 12.0) as i8, right: 6, top: 4, bottom: 4 }).show(
                 ui,
                 |ui| {
-                    crate::picabia_stencil_panel::stencil_section(ui, app, first);
+                    // The stencil settings edit one object (its sheet, its results).
+                    if ids.len() == 1 {
+                        crate::picabia_stencil_panel::stencil_section(ui, app, first);
+                    } else {
+                        widgets::dim_label(ui, tl!("Select one object to edit its stencil"));
+                    }
                 },
             );
         } else {

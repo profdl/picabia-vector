@@ -169,3 +169,20 @@ fn the_panel_says_when_an_object_draws_once() {
     let shown = texts(&mut app, &ctx);
     assert!(shown.iter().any(|s| s.contains("drawn once")), "{shown:?}");
 }
+
+/// Two objects whose stacks end in a stencil: one set of rows, and the stencil row asks for one
+/// object instead of editing only the first.
+#[test]
+fn the_stencil_settings_edit_one_object() {
+    let (mut app, ctx, a) = arrayed();
+    let b = app.run("shape.rectangle", json!({"x": 0, "y": 100, "width": 20, "height": 20})).unwrap()["id"].as_u64().unwrap();
+    app.run("modifier.add", json!({"ids": [b], "kind": "linearArray"})).unwrap();
+    app.run("modifier.add", json!({"ids": [a, b], "kind": "stencil"})).unwrap();
+    app.run("select.set", json!({"ids": [a, b]})).unwrap();
+    let st = app.session.active().unwrap();
+    let stencil = vectorcraft_modifiers::node_stack(st.doc.node(vectorcraft_doc::NodeId(a)).unwrap()).unwrap().unwrap().modifiers[1].id.clone();
+    set_pstate(&ctx, &format!("pc-open-{a}-{stencil}"), true);
+    assert!(texts(&mut app, &ctx).iter().any(|s| s == "Select one object to edit its stencil"));
+    app.run("select.set", json!({"ids": [a]})).unwrap();
+    assert!(!texts(&mut app, &ctx).iter().any(|s| s == "Select one object to edit its stencil"));
+}
