@@ -70,6 +70,8 @@ pub(crate) fn stage(kind: &ModifierKind, ctx: &Ctx, targets: &dyn TargetResolver
         ModifierKind::CopyToShape(p) => copy_to_shape::stage(p, ctx, targets),
         // Terminal: the evaluator stops before it; were it reached, it would add nothing.
         ModifierKind::Stencil(_) => StageResult::unchanged(),
+        // Geometry rows place no copies: the evaluator collects them (`crate::shape`).
+        ModifierKind::Resample(_) | ModifierKind::Trim(_) | ModifierKind::Tidy(_) => StageResult::unchanged(),
         ModifierKind::Other { .. } => StageResult::unchanged(),
     }
 }
@@ -149,6 +151,11 @@ impl Clamp<'_> {
     pub fn within(&mut self, name: &str, v: f64, lo: f64, hi: f64, default: f64) -> f64 {
         self.bounded(name, v, lo, hi, default)
     }
+}
+
+/// The crate's deterministic stream for `(seed, index)` (the geometry rows' random sort).
+pub(crate) fn rng_stream(seed: u32, index: usize) -> rng::Stream {
+    rng::Stream::new(seed, index)
 }
 
 #[cfg(test)]

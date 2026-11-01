@@ -186,3 +186,35 @@ fn the_stencil_settings_edit_one_object() {
     app.run("select.set", json!({"ids": [a]})).unwrap();
     assert!(!texts(&mut app, &ctx).iter().any(|s| s == "Select one object to edit its stencil"));
 }
+
+/// The geometry rows: their fields show by mode (tlprocedural's `isVisible`), fractions as
+/// percentages, and a field edit reaches the stack clamped to the field's range.
+#[test]
+fn geometry_rows_show_the_fields_their_mode_uses() {
+    let (mut app, ctx, a) = arrayed();
+    for kind in ["resample", "trim", "tidy"] {
+        app.run("modifier.add", json!({"ids": [a], "kind": kind})).unwrap();
+    }
+    for m in ["m2", "m3", "m4"] {
+        set_pstate(&ctx, &format!("pc-open-{a}-{m}"), true);
+    }
+    let shown = texts(&mut app, &ctx);
+    for want in ["Resample", "Trim", "Tidy", "Mode", "Points", "Start", "End", "Offset", "Close", "Join within", "Order", "Reverse"] {
+        assert!(shown.iter().any(|s| s == want), "{want} in {shown:?}");
+    }
+    for hidden in ["Iterations", "Spacing", "Seed"] {
+        assert!(!shown.iter().any(|s| s == hidden), "{hidden} hidden in {shown:?}");
+    }
+    app.run("modifier.set", json!({"ids": [a], "index": 1, "props": {"mode": "subdivide"}})).unwrap();
+    app.run("modifier.set", json!({"ids": [a], "index": 3, "props": {"sort": "random"}})).unwrap();
+    let shown = texts(&mut app, &ctx);
+    for want in ["Iterations", "Method", "Seed"] {
+        assert!(shown.iter().any(|s| s == want), "{want} in {shown:?}");
+    }
+    assert!(!shown.iter().any(|s| s == "Points"));
+    // Trim's start reads as a percentage.
+    let st = app.session.active().unwrap();
+    let stack = vectorcraft_modifiers::node_stack(st.doc.node(vectorcraft_doc::NodeId(a)).unwrap()).unwrap().unwrap();
+    assert_eq!(stack.modifiers[2].kind.params()["start"], 0.1);
+    assert!(shown.iter().any(|s| s.starts_with("10")), "10% shown: {shown:?}");
+}

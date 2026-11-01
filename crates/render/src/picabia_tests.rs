@@ -410,3 +410,67 @@ fn draws_copies_builds_no_art() {
     set_stack(&mut d, r, Some(&linear(7, 40.0)));
     assert!(draws_copies(&d, d.node(r).unwrap()));
 }
+
+/// A trim keeping the first half of the 20×20 rectangle at (10, 10): its top and right sides, the
+/// open path filled as the triangle under them (the top-right half).
+const TRIM_HALF: &str = r#"{"v":1,"stack":[{"id":"t","kind":"trim","start":0,"end":0.5,"offset":0}]}"#;
+/// Three copies 40 apart, each trimmed after its transform.
+const TRIM_BELOW: &str =
+    r#"{"v":1,"stack":[{"id":"a","kind":"linearArray","count":3,"offsetX":40},{"id":"t","kind":"trim","start":0,"end":0.5,"offset":0}]}"#;
+/// The object trimmed, then copied.
+const TRIM_ABOVE: &str =
+    r#"{"v":1,"stack":[{"id":"t","kind":"trim","start":0,"end":0.5,"offset":0},{"id":"a","kind":"linearArray","count":3,"offsetX":40}]}"#;
+
+#[test]
+fn a_geometry_row_alone_draws_the_reshaped_object() {
+    let (mut d, r) = doc();
+    set_stack(&mut d, r, Some(TRIM_HALF));
+    let n = d.node(r).unwrap();
+    assert!(draws_copies(&d, n), "one unmoved copy, reshaped, is still art");
+    let a = art(&d, n).unwrap();
+    let copy = &a.children().unwrap()[0];
+    let sp = &copy.path_data().unwrap().subpaths[0];
+    assert!(!sp.closed);
+    assert_eq!(sp.anchors.len(), 3);
+    let pix = render(&d, Rect::new(0.0, 0.0, 40.0, 40.0));
+    assert_eq!(px(&pix, 26, 14), RED, "the kept half");
+    assert_eq!(px(&pix, 14, 26), WHITE, "the trimmed half");
+    assert!(notes(&d, n).is_empty());
+}
+
+#[test]
+fn a_geometry_row_below_an_array_reshapes_every_copy_and_above_reshapes_the_object() {
+    for src in [TRIM_BELOW, TRIM_ABOVE] {
+        let (mut d, r) = doc();
+        set_stack(&mut d, r, Some(src));
+        let pix = render(&d, Rect::new(0.0, 0.0, 140.0, 40.0));
+        for x in [0, 40, 80] {
+            assert_eq!(px(&pix, 26 + x, 14), RED, "{src}: copy at +{x}");
+            assert_eq!(px(&pix, 14 + x, 26), WHITE, "{src}: trimmed at +{x}");
+        }
+    }
+}
+
+#[test]
+fn reshaped_copies_are_clicked_as_drawn() {
+    use vectorcraft_doc::hit::{HitOptions, hit_test};
+    use vectorcraft_geom::Point;
+    vectorcraft_doc::hit::set_copies(hit_hooks());
+    let (mut d, r) = doc();
+    set_stack(&mut d, r, Some(&linear(3, 40.0)));
+    let at = |d: &Document, x: f64, y: f64| hit_test(d, Point::new(x, y), HitOptions::default()).map(|h| h.leaf);
+    assert_eq!(at(&d, 54.0, 26.0), Some(r), "the whole second copy");
+    set_stack(&mut d, r, Some(TRIM_BELOW));
+    assert_eq!(at(&d, 66.0, 14.0), Some(r), "the kept half of the second copy");
+    assert_eq!(at(&d, 54.0, 26.0), None, "its trimmed half");
+}
+
+#[test]
+fn the_anchor_cap_note_reaches_the_panel() {
+    let (mut d, r) = doc();
+    let src = r#"{"v":1,"stack":[{"id":"a","kind":"linearArray","count":1000,"offsetX":1},{"id":"b","kind":"resample","count":1024}]}"#;
+    set_stack(&mut d, r, Some(src));
+    let n = d.node(r).unwrap();
+    assert!(art(&d, n).is_some());
+    assert!(notes(&d, n).iter().any(|s| s.contains("anchors")), "{:?}", notes(&d, n));
+}

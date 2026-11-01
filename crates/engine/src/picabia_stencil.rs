@@ -108,7 +108,16 @@ fn compute_keyed(doc: &Document, node: &Node, frame: &Frame, inputs: Inputs) -> 
         }
     }
     let text = vectorcraft_render::effects::text_outliner();
-    let g = vectorcraft_stencil::gather(doc, node, &frame.copies, text);
+    // Geometry rows above the stencil reshape what it cuts: the copies as drawn.
+    let g = match vectorcraft_modifiers::node_instances_in_doc(doc, node).filter(|o| o.has_geometry()) {
+        Some(out) => {
+            let (copies, notes) = vectorcraft_modifiers::shaped_copies(node, &out);
+            let mut g = vectorcraft_stencil::gather_shaped(doc, &copies, text);
+            g.warnings.extend(notes);
+            g
+        }
+        None => vectorcraft_stencil::gather(doc, node, &frame.copies, text),
+    };
     let key = store::geometry_key(frame, &g);
     if let Some(kept) = store::rekey(node.id, key, inputs.clone()) {
         return kept;

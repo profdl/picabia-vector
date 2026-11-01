@@ -5,7 +5,8 @@
 > drawing, the panel rows, Apply and the handles are not ported yet (see [`ROADMAP.md`](ROADMAP.md)).
 
 A **modifier stack** is a list of live, non-destructive steps attached to an object. The object keeps
-its own geometry; the stack describes how it is repeated and transformed. Edit the object or any
+its own geometry; the stack describes how it is repeated, transformed and (with the geometry rows,
+PIC20) reshaped. Edit the object or any
 modifier and every copy follows. Paths, compound shapes, text and groups can carry a stack. Copies
 are drawn, exported and hit-tested as part of their source object: clicking a copy selects the
 source.
@@ -58,8 +59,14 @@ differences:
   wherever their row sits in the stack: each copy gets its own values, and `i`/`n` count all the
   copies. (Their position among the arrays doesn't change the result; their order among
   themselves does.)
+- **Geometry steps** (resample, trim, tidy; PIC20) change paths instead of placing copies. A
+  geometry step **above every copy step** (array or per-instance) changes the object itself before
+  it is copied: every copy is a copy of the changed object. A geometry step **below a copy step**
+  runs on **each finished copy, after its transform**, in document space, in stack order (whether
+  it sits between two arrays or after the last: like the per-instance steps, it acts on the final
+  copies). A stack of geometry steps alone draws one reshaped copy. See *Geometry rows* below.
 - A **stencil** step ends the stack (see `stencil` below): it adds no copies, and the enabled steps
-  below it are ignored with one warning.
+  below it are ignored with one warning. Geometry steps above it reshape what it cuts.
 - A disabled step is skipped. An empty or fully disabled stack draws the object normally.
 - Limits: at most 64 steps, `count` at most 1000 per array, and at most **10 000 instances** per
   object in total. A stack that would exceed this is cut at the last step that fits, with a warning.
@@ -102,8 +109,15 @@ what clicks, hover and marquees hit (a copy hits as its object).
 - Copies never knock each other out (members inside each copy still do, as the object says).
 - `modifier.apply` bakes exactly what is drawn: the same pivot, the copies inside a group that takes
   the object's opacity, blending mode and opacity mask.
-- An object whose stack makes no copies (no active row, a single unmoved copy, a missing
-  copy-to-shape target) draws exactly as VectorCraft draws it without the stack.
+- An object whose stack makes no copies (no active row, a single unmoved copy without geometry
+  rows, a missing copy-to-shape target) draws exactly as VectorCraft draws it without the stack.
+- **Geometry rows** (PIC20) run inside the same builder (`vectorcraft_modifiers::Shaper`): the rows
+  above every copy row on the object before it is cloned, the rows below on each copy after its
+  transform. So the canvas, bounds, every export, `modifier.apply` (which bakes the reshaped
+  paths), the stencil and the laser all see the same reshaped paths. A click on reshaped copies
+  tests the art as drawn (a transform of the object isn't what is drawn); the hover outline follows
+  the reshaped paths. What a row couldn't do (over the anchor cap, type passed over) shows under the
+  rows.
 
 ## Export
 
@@ -328,6 +342,66 @@ read too; they are written lowercase).
 
 Numbers outside their range are clamped when evaluating (a warning names the field); a colour that
 doesn't read takes its default. `cutColours` can't be bound to a variable.
+
+### Geometry rows: resample, trim, tidy (PIC20)
+
+Ported from tlprocedural (the owner's TypeScript app): its Subdivide and Rebuild Points become
+**Resample**, Trim Path becomes **Trim**, Close Path and Sort Points become **Tidy** (the owner's
+row list: Resample, Trim, Tidy). Ranges and defaults are tlprocedural's; where the port behaves
+differently on purpose it says so below. They run as the evaluation order says: above every copy
+row on the object, below one on each copy. Each subpath is treated on its own (tlprocedural used
+only a shape's outer ring).
+
+#### resample
+
+| Field | Unit | Range | Default | Meaning |
+|---|---|---|---|---|
+| `mode` | choice | `subdivide`, `count`, `spacing` | `count` | `subdivide`: split every segment in two, `iterations` times. `count`: `count` points spaced evenly along each subpath by arc length (a closed one at least 3, the gap back to the start as long as the others; an open one keeps both ends). `spacing`: a point every `spacing` along each subpath from its start (a closed one: at least 3, the last gap shorter; an open one ends at its end). `count` and `spacing` join their points with straight segments, as tlprocedural's Rebuild Points with smoothing 0 |
+| `method` | choice | `linear`, `catmullRom`, `chaikin` | `linear` | `subdivide` only. `linear`: a new anchor in the middle of each segment; **curves keep their exact shape** (tlprocedural flattened them to their anchors). `catmullRom`: each anchor, then the point of the Catmull-Rom spline through the anchors halfway to the next (tlprocedural's replaced the anchors with those points); straight segments. `chaikin`: corner cutting at each segment's quarter points (the path rounds off and shrinks a little); straight segments. A closed subpath of n anchors gets 2n, an open one 2n − 1 |
+| `iterations` | times | 1 to 5 | 1 | `subdivide` only |
+| `count` | points | 2 to 1024 | 20 | `count` only. (tlprocedural's Rebuild Points defaulted to `simplify`, not ported; `count` is the default here) |
+| `spacing` | points | 1 to 5000 | 24 | `spacing` only. Fewer than three steps round a closed subpath spread its three points evenly (tlprocedural wrapped them round) |
+
+`count` and `spacing` measure the true curve, not a flattened outline.
+
+#### trim
+
+| Field | Unit | Range | Default | Meaning |
+|---|---|---|---|---|
+| `start` | fraction of the length | 0 to 1 | 0.1 | Where the kept part starts (the panel shows a percentage) |
+| `end` | fraction | 0 to 1 | 0.9 | Where it ends |
+| `offset` | fraction | 0 to 1 | 0 | Added to both, then each is wrapped into 0..1 (never clamped, so the offset slides the window round a closed path) |
+
+A closed subpath's window may run through its start point (end before start keeps the part through
+it); an open subpath never wraps (end before start keeps the part between them). The result is an
+open path; start = end keeps the whole subpath (closed if it was), and a window shorter than the
+precision drops the subpath. The cut is made on the true curve, so curves stay curves (tlprocedural
+trimmed a flattened outline). The object keeps its fill: an open path is filled as if closed by a
+straight line, as anywhere in VectorCraft (tlprocedural's trims drew no fill).
+
+#### tidy
+
+| Field | Unit | Range | Default | Meaning |
+|---|---|---|---|---|
+| `close` | choice | `off`, `straight`, `smooth` | `straight` | Close open subpaths. Ends within `tolerance` become one anchor (tlprocedural kept both, snapped together); otherwise `straight` adds a straight closing segment and `smooth` a curve that carries on both ends' directions, a third of the gap long at each end (tlprocedural added a nudged midpoint vertex). A subpath of two anchors whose ends meet is left alone |
+| `tolerance` | points | 0 to 500 | 1 | Ends this close are joined |
+| `sort` | choice | `none`, `angle`, `distance`, `x`, `y`, `random` | `none` | Put each subpath's anchors in order (after closing): by angle round the centre of its anchors, by distance from that centre, left to right, top to bottom, or shuffled by `seed` (a seeded shuffle; tlprocedural sorted with a random comparator, which differs between browsers). Equal keys keep their order. Sorted anchors are joined by straight segments; a closed subpath stays closed |
+| `reverse` | on/off | | off | Reverse the order; with `sort: none`, the subpath's direction (curves kept) |
+| `seed` | | 0 to 999999 | 1 | `sort: random` only |
+
+#### What geometry rows change
+
+- Paths, the members of compound paths and the paths inside groups. A live shape (rectangle,
+  ellipse, polygon, star) becomes a plain path in the copy. Guides are left alone.
+- Type, images, symbol instances and live objects (blends, envelopes, meshes, repeats…) pass
+  through unchanged, with a note in the panel.
+- **Cap:** the anchors the rows make for one object, all its copies together, stay within 200 000
+  (`MAX_GEOMETRY_ANCHORS`): each copy may hold its share (200 000 ÷ copies). A row that would make
+  more, and more than it was given, is skipped for that copy, with a note; so is a row that gives a
+  point that isn't finite. Trim and Tidy never make more anchors than they are given (a cut adds
+  at most two), so they are never skipped.
+- The pivot of the copy rows stays the centre of the object's own bounds, even when a row above
+  them reshapes it.
 
 
 ## Expressions

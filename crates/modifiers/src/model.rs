@@ -9,6 +9,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+pub use crate::model_shape::{CloseMethod, Resample, ResampleMode, SortBy, SubdivideMethod, Tidy, Trim};
 use crate::{MAX_STACK_LEN, ModError, STACK_VERSION, lenient};
 
 /// The kinds this build can add, as `(kind id, label)`, in menu order.
@@ -22,6 +23,9 @@ pub const KINDS: &[(&str, &str)] = &[
     ("wallpaper", "Wallpaper"),
     ("copyToShape", "Copy to shape"),
     ("stencil", "Stencil"),
+    ("resample", "Resample"),
+    ("trim", "Trim"),
+    ("tidy", "Tidy"),
 ];
 
 /// The label of kind id `kind` ("Linear array"), or `None` for a kind this build doesn't know.
@@ -126,6 +130,11 @@ pub enum ModifierKind {
     CopyToShape(CopyToShape),
     /// Terminal: the stack ends here (see [`Stencil`]).
     Stencil(Stencil),
+    /// Geometry rows: they change the object's paths instead of placing copies (see
+    /// [`crate::shape`]).
+    Resample(Resample),
+    Trim(Trim),
+    Tidy(Tidy),
     /// A kind this build doesn't know, or a known kind whose params don't read (`error` says
     /// why). Kept on a round trip, ignored when evaluating.
     Other {
@@ -854,6 +863,11 @@ fn read<T: for<'de> Deserialize<'de> + Serialize>(rest: &Map<String, Value>) -> 
 }
 
 impl ModifierKind {
+    /// Whether this is a geometry row (it changes the object's paths; [`crate::shape`]).
+    pub fn is_geometry(&self) -> bool {
+        matches!(self, ModifierKind::Resample(_) | ModifierKind::Trim(_) | ModifierKind::Tidy(_))
+    }
+
     /// The kind id written in `"kind"` (`"linearArray"`…).
     pub fn id(&self) -> &str {
         match self {
@@ -866,6 +880,9 @@ impl ModifierKind {
             ModifierKind::Wallpaper(_) => "wallpaper",
             ModifierKind::CopyToShape(_) => "copyToShape",
             ModifierKind::Stencil(_) => "stencil",
+            ModifierKind::Resample(_) => "resample",
+            ModifierKind::Trim(_) => "trim",
+            ModifierKind::Tidy(_) => "tidy",
             ModifierKind::Other { kind, .. } => kind,
         }
     }
@@ -882,6 +899,9 @@ impl ModifierKind {
             "wallpaper" => ModifierKind::Wallpaper(Wallpaper::default()),
             "copyToShape" => ModifierKind::CopyToShape(CopyToShape::default()),
             "stencil" => ModifierKind::Stencil(Stencil::default()),
+            "resample" => ModifierKind::Resample(Resample::default()),
+            "trim" => ModifierKind::Trim(Trim::default()),
+            "tidy" => ModifierKind::Tidy(Tidy::default()),
             _ => return None,
         })
     }
@@ -898,6 +918,9 @@ impl ModifierKind {
             ModifierKind::Wallpaper(p) => params_of(p),
             ModifierKind::CopyToShape(p) => params_of(p),
             ModifierKind::Stencil(p) => params_of(p),
+            ModifierKind::Resample(p) => params_of(p),
+            ModifierKind::Trim(p) => params_of(p),
+            ModifierKind::Tidy(p) => params_of(p),
             ModifierKind::Other { .. } => Map::new(),
         }
     }
@@ -918,6 +941,9 @@ impl ModifierKind {
             "wallpaper" => wrap(read(rest), ModifierKind::Wallpaper),
             "copyToShape" => wrap(read(rest), ModifierKind::CopyToShape),
             "stencil" => wrap(read(rest), ModifierKind::Stencil),
+            "resample" => wrap(read(rest), ModifierKind::Resample),
+            "trim" => wrap(read(rest), ModifierKind::Trim),
+            "tidy" => wrap(read(rest), ModifierKind::Tidy),
             _ => return (ModifierKind::Other { kind: kind.to_string(), error: None }, rest.clone()),
         };
         r.unwrap_or_else(|e| (ModifierKind::Other { kind: kind.to_string(), error: Some(e) }, rest.clone()))

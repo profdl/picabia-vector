@@ -21,6 +21,9 @@ pub(super) fn copy_outline_paths(doc: &Document, n: &Node, outline: &BezPath) ->
         return Vec::new();
     }
     let Some(out) = vectorcraft_modifiers::evaluate_node_in_doc(doc, n) else { return Vec::new() };
+    if out.has_geometry() {
+        return shaped_outlines(doc, n);
+    }
     let shown = out.instances.len().min(MAX_OUTLINES);
     if outline.elements().len().saturating_mul(shown) > MAX_OUTLINE_ELEMENTS {
         return Vec::new();
@@ -35,6 +38,32 @@ pub(super) fn copy_outline_paths(doc: &Document, n: &Node, outline: &BezPath) ->
             bp
         })
         .collect()
+}
+
+/// The paths of `n`'s copies as drawn, when geometry rows reshape them (a transform of the
+/// object's outline isn't what is drawn): every copy, the unmoved one too, within the same caps.
+fn shaped_outlines(doc: &Document, n: &Node) -> Vec<BezPath> {
+    fn walk(n: &Node, depth: usize, budget: &mut usize, out: &mut Vec<BezPath>) {
+        if depth > vectorcraft_doc::MAX_DEPTH || out.len() >= MAX_OUTLINES {
+            return;
+        }
+        if let Some(p) = n.path_data() {
+            let bp = p.to_bezpath();
+            let k = bp.elements().len();
+            if k <= *budget {
+                *budget -= k;
+                out.push(bp);
+            }
+            return;
+        }
+        for c in n.children().into_iter().flatten() {
+            walk(c, depth + 1, budget, out);
+        }
+    }
+    let Some(art) = vectorcraft_render::picabia::art(doc, n) else { return Vec::new() };
+    let (mut out, mut budget) = (Vec::new(), MAX_OUTLINE_ELEMENTS);
+    walk(&art, 0, &mut budget, &mut out);
+    out
 }
 
 /// Stroke `outline` on each of `n`'s copies.

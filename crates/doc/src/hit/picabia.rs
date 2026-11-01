@@ -32,6 +32,9 @@ pub struct CopyHooks {
     pub transforms: fn(&SymbolBoxes, &Node) -> Option<Placements>,
     /// The group of an object's copies, for marquees.
     pub art: fn(&SymbolBoxes, &Node) -> Option<Arc<Node>>,
+    /// The group of an object's copies when they can't be found from the object by a transform
+    /// (geometry rows reshape them): a click then tries that group, as drawn.
+    pub shaped: fn(&SymbolBoxes, &Node) -> Option<Arc<Node>>,
 }
 
 static HOOKS: OnceLock<CopyHooks> = OnceLock::new();
@@ -123,6 +126,13 @@ pub(super) fn hit(
     let h = HOOKS.get()?;
     if !(h.has)(c) || plain(c.id) {
         return None;
+    }
+    // Reshaped copies are tried as drawn: the group of them, in place of the object (they carry
+    // no stack; members' own copies are found inside them as anywhere).
+    if let Some(art) = (h.shaped)(symbols, c) {
+        let holder = Node::group(c.id, vec![art]);
+        let _plain = Plain::push(c.id, false);
+        return Some(try_at(&holder, p, opt));
     }
     let (ts, strip) = (h.transforms)(symbols, c)?;
     // A top-level object with copies (none is being tried yet): count its placements afresh.

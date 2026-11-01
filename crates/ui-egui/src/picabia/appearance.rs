@@ -52,6 +52,9 @@ pub const KINDS: &[(&str, &str)] = &[
     ("transformEach", "Transform Each"),
     ("randomize", "Randomize"),
     ("stencil", "Stencil"),
+    ("resample", "Resample"),
+    ("trim", "Trim"),
+    ("tidy", "Tidy"),
 ];
 
 /// How a field is edited.
@@ -93,6 +96,20 @@ const GROUPS: &[(&str, &str)] = &[
     ("p6", "p6"),
     ("p6m", "p6m"),
 ];
+
+const RESAMPLE_MODES: &[(&str, &str)] = &[("subdivide", "Subdivide"), ("count", "By count"), ("spacing", "By spacing")];
+const SUBDIVIDE_METHODS: &[(&str, &str)] = &[("linear", "Linear"), ("catmullRom", "Catmull-Rom"), ("chaikin", "Chaikin")];
+const CLOSE_METHODS: &[(&str, &str)] = &[("off", "Leave open"), ("straight", "Straight"), ("smooth", "Smooth")];
+const SORTS: &[(&str, &str)] = &[
+    ("none", "Keep order"),
+    ("angle", "Angle"),
+    ("distance", "Distance from centre"),
+    ("x", "X position"),
+    ("y", "Y position"),
+    ("random", "Random"),
+];
+/// A fraction of a path's length, shown as a percentage.
+const FRACTION: F = F::Pct(0.0, 1.0);
 
 const LEN: F = F::Len(-BIG, BIG);
 const DEG: F = F::Deg(-BIG, BIG);
@@ -156,17 +173,47 @@ fn fields(kind: &str) -> &'static [(&'static str, &'static str, F)] {
             ("scale", "Scale", SCALE),
             ("seed", "Seed", SEED),
         ],
+        // Geometry rows: tlprocedural's ranges (`docs/picabia/modifiers.md`).
+        "resample" => &[
+            ("mode", "Mode", F::Choice(RESAMPLE_MODES)),
+            ("method", "Method", F::Choice(SUBDIVIDE_METHODS)),
+            ("iterations", "Iterations", F::Int(1.0, 5.0)),
+            ("count", "Points", F::Int(2.0, 1024.0)),
+            ("spacing", "Spacing", F::Len(1.0, 5000.0)),
+        ],
+        "trim" => &[("start", "Start", FRACTION), ("end", "End", FRACTION), ("offset", "Offset", FRACTION)],
+        "tidy" => &[
+            ("close", "Close", F::Choice(CLOSE_METHODS)),
+            ("tolerance", "Join within", F::Len(0.0, 500.0)),
+            ("sort", "Order", F::Choice(SORTS)),
+            ("reverse", "Reverse", F::Bool),
+            ("seed", "Seed", F::Int(0.0, 999_999.0)),
+        ],
         _ => &[],
     }
 }
 
-/// Whether wallpaper row `m` uses field `key` (its group decides: picabia-craft's `wallpaper_applies`).
+/// Whether row `m` uses field `key`: a wallpaper's group decides (picabia-craft's
+/// `wallpaper_applies`), a resample's mode and a tidy's close and order (tlprocedural's
+/// `isVisible`).
 fn applies(m: &Modifier, key: &str) -> bool {
+    use vectorcraft_modifiers::{CloseMethod, ResampleMode, SortBy};
     match &m.kind {
         ModifierKind::Wallpaper(w) => match key {
             "cellHeight" => w.group.uses_cell_height(),
             "angle" => w.group.uses_angle(),
             "originX" | "originY" => w.group.uses_origin(),
+            _ => true,
+        },
+        ModifierKind::Resample(r) => match key {
+            "method" | "iterations" => r.mode == ResampleMode::Subdivide,
+            "count" => r.mode == ResampleMode::Count,
+            "spacing" => r.mode == ResampleMode::Spacing,
+            _ => true,
+        },
+        ModifierKind::Tidy(t) => match key {
+            "tolerance" => t.close != CloseMethod::Off,
+            "seed" => t.sort == SortBy::Random,
             _ => true,
         },
         _ => true,
@@ -262,6 +309,8 @@ fn view(doc: &Document, ids: &[NodeId]) -> View {
             copies = out.instances.len();
             notes.extend(out.warnings.iter().map(|w| w.message.clone()));
         }
+        // What the geometry rows said while the copies were built (a row over the anchor cap…).
+        notes.extend(vectorcraft_render::picabia::notes(doc, n));
     }
     View::Rows { rows, notes, copies }
 }
@@ -563,6 +612,10 @@ fn target_picker(ui: &mut Ui, doc: &Document, id: NodeId, current: &str, fid: im
 pub fn add_menu(app: &mut VectorcraftApp, ui: &mut Ui) {
     ui.menu_button(tl!("Modifiers"), |ui| {
         for (kind, label) in KINDS {
+            // The geometry rows after the rows that copy.
+            if *kind == "resample" {
+                ui.separator();
+            }
             if ui.button(tl!(label)).clicked() {
                 app.run("modifier.add", json!({"kind": kind})).ok();
                 ui.close();
