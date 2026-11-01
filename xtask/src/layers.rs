@@ -89,6 +89,8 @@ pub const INTRA_LAYER_ORDER: &[&[&str]] = &[
     &["three-d", "effects"],
     // Inflate cuts its surface's grid cells to the shape with Pathfinder's booleans.
     &["pathops", "three-d"],
+    // PICABIA: the renderer draws stencil sheets (render reads vectorcraft-stencil's store).
+    &["stencil", "render"],
 ];
 
 fn intra_layer_allowed(from: &str, to: &str) -> bool {

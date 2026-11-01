@@ -735,8 +735,8 @@ pub fn marquee(doc: &Document, r: Rect, scope: Option<NodeId>, leaves: bool) -> 
     /// by the copies it draws, as clicks hit them. Objects of every other kind except paths,
     /// compound paths, layers and groups are touched by their box.
     fn touches(n: &Node, s: &SymbolBoxes, r: Rect, scope: Option<NodeId>) -> bool {
-        if let Some(copies) = picabia::copies(s, n) {
-            return touches(&copies, s, r, scope); // PICABIA: a marquee over a copy takes its object
+        if let Some(t) = picabia::touches(s, n, r, &|a| touches(a, s, r, scope)) {
+            return t; // PICABIA: a marquee over a copy (or a stencil's sheet) takes its object
         }
         match &n.kind {
             NodeKind::Path { path, .. } => vectorcraft_geom::hit::intersects_rect(path, r),

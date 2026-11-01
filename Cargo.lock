@@ -6494,6 +6494,7 @@ dependencies = [
  "vectorcraft-geom",
  "vectorcraft-modifiers",
  "vectorcraft-plugins",
+ "vectorcraft-stencil",
  "vectorcraft-testkit",
  "vectorcraft-text",
  "vello_common",
