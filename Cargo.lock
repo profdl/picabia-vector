@@ -6490,6 +6490,7 @@ dependencies = [
  "vectorcraft-doc",
  "vectorcraft-effects",
  "vectorcraft-geom",
+ "vectorcraft-modifiers",
  "vectorcraft-plugins",
  "vectorcraft-testkit",
  "vectorcraft-text",

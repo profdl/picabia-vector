@@ -33,6 +33,7 @@ pub(crate) fn has_object_fx(n: &Node) -> bool {
         || effects::has_adjustment(n)
         || effects::has_revolve(n)
         || effects::has_solid(n)
+        || crate::picabia::has_stack(n) // PICABIA: an object with modifier copies draws as their art
 }
 
 /// Is `n` a group or layer (whose evaluated art keeps its knockout setting)?

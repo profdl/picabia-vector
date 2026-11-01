@@ -12,6 +12,7 @@ impl Renderer {
         let key = Arc::as_ptr(a) as usize;
         if let Some(e) = self.geom.get_mut(&key)
             && Arc::ptr_eq(&e.node, a)
+            && !crate::picabia::has_targets(a) // PICABIA: copy-to-shape copies follow their target
         {
             e.stamp = self.stamp;
             return e.bounds;
@@ -230,6 +231,7 @@ impl Renderer {
             && (!blended || single_plain_fill(a))
             && !a.isolate
             && !fx::has_fx(a)
+            && !crate::picabia::has_stack(a) // PICABIA: an object with modifier copies draws as their art
             && (self.opacity_of(a) >= 1.0 || painted_items(a) == 1)
             && let Some(bp) = self.path_of(f.symbols, a)
         {
