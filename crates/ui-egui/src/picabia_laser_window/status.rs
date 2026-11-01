@@ -161,7 +161,7 @@ pub fn badge(st: &Status, t: &Tokens) -> (String, Color32) {
     }
     let Some(state) = st.state.as_deref() else { return (tl!("Waiting for the machine…").to_string(), t.text_dim) };
     let (label, c) = match state {
-        "Idle" => (tl!("Idle"), t.accent),
+        "Idle" => (tl!("Idle"), t.text_dim),
         "Run" => (tl!("Running"), t.accent),
         "Jog" => (tl!("Jogging"), t.accent),
         "Home" => (tl!("Homing"), t.accent),

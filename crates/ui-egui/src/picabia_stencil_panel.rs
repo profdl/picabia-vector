@@ -694,14 +694,17 @@ pub fn window(app: &mut VectorcraftApp, ctx: &egui::Context) {
         .show(ctx, |ui| {
             ui.set_width(WINDOW_W);
             let max = (ctx.content_rect().height() - 180.0).max(200.0);
-            egui::ScrollArea::vertical().id_salt("picabia_stencil_scroll").max_height(max).show(ui, |ui| match node {
-                Some(node) => {
-                    if let Some(name) = app.session.active().and_then(|d| d.doc.node(node)).and_then(|n| n.name.clone()).filter(|n| !n.is_empty()) {
-                        ui.label(egui::RichText::new(name).font(semibold(12.5)).color(t.text_strong));
+            egui::ScrollArea::vertical().id_salt("picabia_stencil_scroll").max_height(max).min_scrolled_height(max.min(760.0)).show(ui, |ui| {
+                match node {
+                    Some(node) => {
+                        if let Some(name) = app.session.active().and_then(|d| d.doc.node(node)).and_then(|n| n.name.clone()).filter(|n| !n.is_empty())
+                        {
+                            ui.label(egui::RichText::new(name).font(semibold(12.5)).color(t.text_strong));
+                        }
+                        stencil_section(ui, app, node);
                     }
-                    stencil_section(ui, app, node);
+                    None => wrapped(ui, tl!("Select a stencil object, or the objects to make one from."), t.text_dim),
                 }
-                None => wrapped(ui, tl!("Select a stencil object, or the objects to make one from."), t.text_dim),
             });
         });
     app.picabia.stencil_open = open;

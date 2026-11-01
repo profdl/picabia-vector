@@ -42,8 +42,16 @@ const LABEL_W: f32 = 84.0;
 const FIELD_W: f32 = 90.0;
 
 /// The dialogs' spec (one `registry!` row for the three kinds).
-pub(crate) const SPEC: DialogSpec =
-    DialogSpec { heading, body, confirm, ok: Some("Export…"), ok_enabled: Some(can_export), min_width: 400.0, ..DialogSpec::FORM };
+pub(crate) const SPEC: DialogSpec = DialogSpec {
+    heading,
+    body,
+    confirm,
+    ok: Some("Export…"),
+    ok_enabled: Some(can_export),
+    min_width: 400.0,
+    max_width: Some(480.0),
+    ..DialogSpec::FORM
+};
 
 fn heading(d: &Dialog) -> String {
     match d.kind.as_str() {
