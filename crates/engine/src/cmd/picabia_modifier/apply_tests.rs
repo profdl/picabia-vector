@@ -136,9 +136,90 @@ fn rotated_and_mirrored_copies_bake_exactly() {
     add(&mut s, r, "randomize", json!({"seed": 7, "rotation": 40, "scale": 0.3}));
     let want = drawn(&s, r);
     assert_eq!(want.len(), 12);
+    // Each copy's outline, point by point: the live instance transform applied to the source's
+    // outline (computed here with the geometry crate, not with `Node::transform`).
+    let src = node(&s, r);
+    let outline = src.path_data().unwrap().to_bezpath();
+    let instances: Vec<Affine> = vectorcraft_modifiers::evaluate_node_in_doc(doc(&s), &src).unwrap().instances.iter().map(|i| i.transform).collect();
     let g = id_of(&ex(&mut s, "modifier.apply", json!({"ids": [r.0]}))["ids"][0]);
     assert_eq!(children(&s, g).len(), 12);
     assert_eq!(drawn_group(&s, g), want);
+    for (c, t) in children(&s, g).iter().zip(&instances) {
+        let got = node(&s, *c).path_data().unwrap().to_bezpath();
+        let mut expected = outline.clone();
+        expected.apply_affine(*t);
+        let pts = |b: &vectorcraft_geom::BezPath| -> Vec<vectorcraft_geom::Point> { b.elements().iter().filter_map(|e| e.end_point()).collect() };
+        let (a, b) = (pts(&got), pts(&expected));
+        assert_eq!(a.len(), b.len());
+        for (p, q) in a.iter().zip(&b) {
+            assert!(p.distance(*q) < 1e-6, "{p:?} vs {q:?}");
+        }
+    }
+}
+
+#[test]
+fn a_copys_effects_and_strokes_scale_with_it() {
+    let mut s = session();
+    let r = rect(&mut s, 0.0);
+    ex(&mut s, "stroke.set", json!({"ids": [r.0], "weight": 3}));
+    s.edit("Shadow", |d, _| {
+        d.node_mut(r).unwrap().appearance.effects.push(vectorcraft_doc::Effect {
+            id: "stylize.dropShadow".into(),
+            params: json!({"x": 8.0, "y": 6.0, "blur": 4.0, "opacity": 75.0}),
+            visible: true,
+        });
+        Ok(())
+    })
+    .unwrap();
+    add(&mut s, r, "linearArray", json!({"count": 3, "scaleEach": 2}));
+    let g = id_of(&ex(&mut s, "modifier.apply", json!({"ids": [r.0]}))["ids"][0]);
+    let got: Vec<(f64, f64, f64)> = children(&s, g)
+        .iter()
+        .map(|c| {
+            let n = node(&s, *c);
+            let fx = &n.appearance.effects[0].params;
+            (n.appearance.stroke().unwrap().width, fx["x"].as_f64().unwrap(), fx["blur"].as_f64().unwrap())
+        })
+        .collect();
+    assert_eq!(got, [(3.0, 8.0, 4.0), (6.0, 16.0, 8.0), (12.0, 32.0, 16.0)]);
+}
+
+#[test]
+fn the_first_member_of_a_clip_group_is_refused_whatever_its_kind() {
+    let mut s = session();
+    // A compound path clipping a rectangle.
+    let a = rect(&mut s, 0.0);
+    let (p, q) = (rect(&mut s, 10.0), rect(&mut s, 40.0));
+    ex(&mut s, "object.compoundPath.make", json!({"ids": [p.0, q.0]}));
+    let c = doc(&s).parent_of(p).unwrap();
+    ex(&mut s, "object.clippingMask.make", json!({"ids": [a.0, c.0]}));
+    let clip = doc(&s).parent_of(c).unwrap();
+    assert_eq!(children(&s, clip)[0], c, "the compound path clips");
+    add(&mut s, c, "linearArray", json!({"count": 3}));
+    assert!(err(&mut s, "modifier.apply", json!({"ids": [c.0]})).contains("clipping path"));
+    assert!(doc(&s).node(c).is_some());
+    // Type clipping a rectangle.
+    let b = rect(&mut s, 300.0);
+    let t = id_of(&ex(&mut s, "text.create", json!({"x": 300, "y": 50, "text": "Clip", "size": 48}))["id"]);
+    ex(&mut s, "object.clippingMask.make", json!({"ids": [b.0, t.0]}));
+    let clip = doc(&s).parent_of(t).unwrap();
+    assert_eq!(children(&s, clip)[0], t);
+    add(&mut s, t, "linearArray", json!({"count": 2}));
+    assert!(err(&mut s, "modifier.apply", json!({"ids": [t.0]})).contains("clipping path"));
+    // The clipped art itself can be applied.
+    add(&mut s, b, "linearArray", json!({"count": 2}));
+    ex(&mut s, "modifier.apply", json!({"ids": [b.0]}));
+    assert_eq!(children(&s, clip)[0], t, "the clipping object keeps its place");
+}
+
+#[test]
+fn an_object_given_twice_is_applied_once() {
+    let mut s = session();
+    let r = rect(&mut s, 0.0);
+    add(&mut s, r, "linearArray", json!({"count": 3, "offsetX": 120}));
+    let out = ex(&mut s, "modifier.apply", json!({"ids": [r.0, r.0]}));
+    assert_eq!(out["applied"].as_array().unwrap().len(), 1);
+    assert_eq!(children(&s, id_of(&out["ids"][0])).len(), 3);
 }
 
 #[test]
