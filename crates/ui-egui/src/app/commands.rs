@@ -147,6 +147,7 @@ impl VectorcraftApp {
                 if let Some(w) = v.get("warning").and_then(Value::as_str) {
                     self.ui.status = w.to_string();
                 }
+                crate::picabia_ui::after_command(self, id, v); // PICABIA: a laser export run without a path opens its dialog
             }
         }
         r

@@ -12,6 +12,7 @@ impl VectorcraftApp {
         if !take_frame_once(&mut self.input_frames, frame) {
             return;
         }
+        crate::picabia_laser_window::stop_shortcut(self, ctx); // PICABIA: Shift+Esc stops the laser, before anything else sees the key
         self.write_formats_before_text_input(ctx);
         native_menu::run(self, ctx);
         if self.fonts_ready {

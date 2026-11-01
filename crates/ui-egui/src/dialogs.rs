@@ -402,6 +402,8 @@ registry! {
     DivideDashes: [crate::addons::pathtools::dashes::KIND] => crate::addons::pathtools::dashes::SPEC,
     ArrangeTools: [crate::addons::arrange::GRID, crate::addons::arrange::REPLACE, crate::addons::arrange::SIZE] => crate::addons::arrange::SPEC,
     ShortcutImport: [shortcut_import::KIND] => DialogSpec::window(shortcut_import::show, shortcut_import::confirm),
+    // PICABIA: Export for Laser, Laser Test Card, Export G-code for Laser.
+    PicabiaLaser: [crate::picabia_laser_export::EXPORT, crate::picabia_laser_export::TEST_CARD, crate::picabia_laser_export::DESIGN] => crate::picabia_laser_export::SPEC,
 }
 
 /// The button labels the shared dialog frame can show (OK, discard, the fixed Cancel/Close and

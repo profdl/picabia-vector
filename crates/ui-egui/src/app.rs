@@ -135,6 +135,7 @@ impl VectorcraftApp {
             plugin_runs: Default::default(),
             placing: Default::default(),
             trace_runs: Default::default(),
+            picabia: Default::default(), // PICABIA: Picabia's UI state
             recovery: Default::default(),
             host_modifiers: Default::default(),
             forwarded: Vec::new(),
@@ -512,6 +513,7 @@ impl VectorcraftApp {
         export_progress::show(self, &ctx);
         plugin_runs::show(self, &ctx);
         trace_runs::show(self, &ctx);
+        crate::picabia_ui::show(self, &ctx); // PICABIA: the Laser window (or its Stop bar), the Stencil window, stencil markers
         palette::show(self, &ctx);
         if self.custom_titlebar {
             titlebar::resize_zones(ui);
