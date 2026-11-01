@@ -91,12 +91,40 @@ pub struct Checklist {
     /// The confirm button's pointer press: `Some(automated)` from the frame it went down in; `None`
     /// before one (an AccessKit or keyboard press has none and counts as automated).
     pub press: Option<bool>,
+    /// What the job came to when the checklist opened (Start): checked again at confirm, so the job
+    /// that runs is the one the checklist showed.
+    pub expected: Option<Expected>,
+}
+
+/// A job's size and line count, and the dry run that tells them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Expected {
+    pub cmd: &'static str,
+    pub params: Value,
+    /// The sheet that runs, 1-based.
+    pub sheet: usize,
+    pub w_mm: f64,
+    pub h_mm: f64,
+    pub lines: u64,
+}
+
+impl Expected {
+    /// The sheet's size and lines in a dry run's reply, if it has that sheet.
+    pub fn read(&self, reply: &Value) -> Option<(f64, f64, u64)> {
+        let f = reply.get("files")?.as_array()?.get(self.sheet.max(1) - 1)?;
+        Some((f.get("wMm")?.as_f64()?, f.get("hMm")?.as_f64()?, f.get("lines")?.as_u64()?))
+    }
+
+    /// The job is still the one shown: the same size (to 0.01 mm) and line count.
+    pub fn matches(&self, (w, h, lines): (f64, f64, u64)) -> bool {
+        (w - self.w_mm).abs() <= 0.01 && (h - self.h_mm).abs() <= 0.01 && lines == self.lines
+    }
 }
 
 impl Checklist {
     pub fn new(kind: Confirm, params: Value) -> Self {
         let n = kind.checks().len();
-        Checklist { kind, params, summary: Vec::new(), ticks: vec![false; n], ticked_by_automation: vec![false; n], press: None }
+        Checklist { kind, params, summary: Vec::new(), ticks: vec![false; n], ticked_by_automation: vec![false; n], press: None, expected: None }
     }
 
     /// Every box is ticked.
@@ -138,6 +166,36 @@ pub enum Refused {
     NotAPerson,
     /// The link closed meanwhile.
     NotConnected,
+    /// The job changed since the checklist opened (the design was edited): the checklist shows it
+    /// again, to be confirmed afresh.
+    Changed,
+}
+
+/// Whether a press counts as automated: where it came from when it went down (`press`; none: an
+/// AccessKit or keyboard press, automated) or the frame it lands in being automated.
+pub fn press_automated(press: Option<bool>, auto_now: bool) -> bool {
+    press.unwrap_or(true) || auto_now
+}
+
+/// The job as it would be built now still matches what the checklist showed; when it doesn't, the
+/// checklist takes the new numbers, its boxes are cleared and the reason is the result.
+fn still_the_job(app: &mut VectorcraftApp, list: &mut Checklist) -> Result<(), String> {
+    let Some(exp) = list.expected.clone() else { return Ok(()) };
+    let reply = app.session.execute(exp.cmd, &exp.params).map_err(|e| e.to_string())?;
+    let now = exp.read(&reply).ok_or_else(|| tl!("The job couldn't be worked out again: check it and press Start again.").to_string())?;
+    if exp.matches(now) {
+        return Ok(());
+    }
+    let old = super::job::size_text(exp.w_mm, exp.h_mm, exp.lines);
+    let new = super::job::size_text(now.0, now.1, now.2);
+    for line in list.summary.iter_mut().filter(|l| **l == old) {
+        line.clone_from(&new);
+    }
+    list.expected = Some(Expected { w_mm: now.0, h_mm: now.1, lines: now.2, ..exp });
+    list.ticks.iter_mut().for_each(|t| *t = false);
+    list.ticked_by_automation.iter_mut().for_each(|t| *t = false);
+    list.press = None;
+    Err(tl!("The job changed since the checklist opened: check it and press Start again.").to_string())
 }
 
 /// Whether a confirmed checklist may arm the laser: always for a person's click, and for automated
@@ -172,6 +230,10 @@ pub fn confirm(app: &mut VectorcraftApp, list: &mut Checklist, automated: bool) 
         app.status(tl!("Only a person at this computer can start the laser: scripts, agents and accessibility clients can't."));
         return Err(Refused::NotAPerson);
     }
+    if let Err(why) = still_the_job(app, list) {
+        app.status(why);
+        return Err(Refused::Changed);
+    }
     let (cmd, params) = match list.kind {
         Confirm::Start => ("laser.start", list.params.clone()),
         Confirm::Resume => ("laser.resume", json!({})),
@@ -196,8 +258,9 @@ pub fn as_person(app: &mut VectorcraftApp, automated: bool, id: &str, params: Va
         return Err(why.to_string());
     }
     let r = app.session.laser_execute_person(id, &params).map_err(|e| e.to_string());
-    if let Err(e) = &r {
-        app.status(e.clone());
+    match &r {
+        Err(e) => app.status(e.clone()),
+        Ok(_) => super::note_motion(app),
     }
     r
 }
@@ -251,7 +314,7 @@ pub fn checklist(app: &mut VectorcraftApp, ctx: &Context, st: &Status) {
                 let resp = widgets::primary_button_enabled(ui, list.kind.button(), list.complete());
                 // Where the press came from, recorded when the button goes down: a press injected
                 // and released later (a lost release the app completes) stays automated.
-                if resp.hovered() && ui.input(|i| i.pointer.primary_pressed()) {
+                if resp.contains_pointer() && ui.input(|i| i.pointer.primary_pressed()) {
                     list.press = Some(auto_now);
                 }
                 go = resp.clicked() && list.complete();
@@ -263,9 +326,10 @@ pub fn checklist(app: &mut VectorcraftApp, ctx: &Context, st: &Status) {
         return;
     }
     if go {
-        let automated = list.press.unwrap_or(true) || auto_now;
-        // A refusal says why in the status bar; the list stays open for a person's ticks.
-        if confirm(app, &mut list, automated) != Err(Refused::NotAPerson) {
+        let automated = press_automated(list.press, auto_now);
+        // A refusal says why in the status bar; the list stays open for a person's ticks (or, the
+        // job changed, to be confirmed again with its new numbers).
+        if !matches!(confirm(app, &mut list, automated), Err(Refused::NotAPerson | Refused::Changed)) {
             return;
         }
     }

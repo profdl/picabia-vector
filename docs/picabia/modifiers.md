@@ -412,8 +412,14 @@ picabia-craft's `LASER_CONTROL.md` and the safety review of the port:
   Neither is a command; the app calls them only from the Laser window (`picabia_laser_window/run.rs`).
 - **Input from automation** never counts as a person on a real machine: a frame of control-channel
   input, a control request being answered, or an AccessKit action (any screen reader or
-  UI-automation client). Where the checklist's Start press came from is recorded when the button
-  goes down; boxes automation ticked are cleared and must be ticked again by a person.
+  UI-automation client). Where a press came from is recorded when it goes down (the checklist's
+  Start, and the window's motion buttons), not when its click lands; boxes automation ticked are
+  cleared and must be ticked again by a person.
+- **The job Start runs is the one the checklist showed:** the checklist keeps the dry run's size
+  and line count, and confirm works the job out again; if it changed (the design was edited
+  meanwhile) Start is refused and the checklist shows the new numbers, its boxes cleared.
+- For a second after a motion command is sent (before the status says the machine moves) the laser
+  counts as working: no file dialog opens.
 - **Real ports** are on only in the desktop app, and off whenever it runs with `--control` (agents,
   MCP through the control channel) unless `PICABIA_LASER_HARDWARE=1`; `PICABIA_LASER_HARDWARE=0`
   turns them off always. Tests, the CLI and headless MCP sessions never turn them on.

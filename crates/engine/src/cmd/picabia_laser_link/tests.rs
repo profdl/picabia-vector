@@ -547,6 +547,37 @@ fn motion_on_a_real_machine_is_for_the_person_at_the_window() {
     ex(&mut s, "laser.disconnect", json!({}));
 }
 
+/// The motion path for a person, [`Session::laser_execute_person`], is called only by the engine's
+/// laser code and its tests and by the Laser window (`picabia_laser_window/run.rs`, `as_person`;
+/// its tests name it in strings).
+#[test]
+fn only_the_laser_window_moves_a_real_machine() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut hits = Vec::new();
+    let mut stack = vec![root.join("crates"), root.join("apps")];
+    while let Some(dir) = stack.pop() {
+        for e in std::fs::read_dir(&dir).unwrap().flatten() {
+            let p = e.path();
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if p.is_dir() {
+                if name != "target" && !name.starts_with('.') {
+                    stack.push(p);
+                }
+            } else if name.ends_with(".rs") && std::fs::read_to_string(&p).unwrap().contains("laser_execute_person(") {
+                hits.push(p.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    let allowed = |f: &str| {
+        f.starts_with("crates/engine/src/cmd/picabia_laser_link")
+            || f == "crates/ui-egui/src/picabia_laser_window/run.rs"
+            || f == "crates/ui-egui/src/picabia_laser_window/tests.rs"
+    };
+    let others: Vec<&String> = hits.iter().filter(|f| !allowed(f)).collect();
+    assert!(others.is_empty(), "laser_execute_person is called from {others:?}");
+    assert!(hits.iter().any(|f| f == "crates/ui-egui/src/picabia_laser_window/run.rs"), "{hits:?}");
+}
+
 #[test]
 fn laser_mode_off_and_not_idle_are_refused() {
     let mut s = connected(json!({"laserMode": false, "speedFactor": 1000, "timeScale": 100}));

@@ -308,3 +308,110 @@ fn no_file_dialog_opens_over_a_working_laser_and_motion_goes_the_persons_way() {
     wait(&mut app, "stopped", |s| s.job.as_ref().is_some_and(|j| j.state == "stopped") && !s.stopping);
     app.run("laser.disconnect", json!({})).unwrap();
 }
+
+#[test]
+fn start_refuses_a_job_that_changed_since_the_checklist_opened() {
+    let mut app = app();
+    let id = square(&mut app);
+    connect(&mut app, json!({"speedFactor": 1000, "timeScale": 100}));
+    let sel = [vectorcraft_doc::NodeId(id)];
+    let mut j = JobState::default();
+    j.take_result(app.session.execute("laser.gcode", &json!({"ids": [id], "dryRun": true})).map_err(|e| e.to_string()));
+    let start = j.start_params(j.params(&sel).unwrap());
+    let mut list = ticked(Confirm::Start, start.clone());
+    list.summary = j.checklist_lines("Rectangle");
+    list.expected = j.expected(&sel, &start);
+    let before = list.expected.clone().unwrap();
+    // The design grows after the checklist opened.
+    app.run("object.setBounds", json!({"width": 80, "height": 80})).unwrap();
+    assert_eq!(run::confirm(&mut app, &mut list, false), Err(Refused::Changed));
+    assert!(app.ui.status.contains("The job changed"), "{}", app.ui.status);
+    let after = list.expected.clone().unwrap();
+    assert!(after.w_mm > before.w_mm * 1.9, "{before:?} → {after:?}");
+    assert!(!list.complete(), "the boxes are to be ticked again");
+    assert!(list.summary.contains(&job::size_text(after.w_mm, after.h_mm, after.lines)), "{:?}", list.summary);
+    assert!(status_of(&app).job.is_none(), "nothing ran");
+    // Confirmed again with the new numbers, it runs.
+    list.ticks.iter_mut().for_each(|t| *t = true);
+    run::confirm(&mut app, &mut list, false).unwrap();
+    wait(&mut app, "done", |s| s.job.as_ref().is_some_and(|j| j.state == "done"));
+    app.run("laser.disconnect", json!({})).unwrap();
+}
+
+#[test]
+fn a_press_counts_where_it_went_down() {
+    assert!(!run::press_automated(Some(false), false), "a person's press and click");
+    assert!(run::press_automated(Some(true), false), "an injected press released by the app later");
+    assert!(run::press_automated(Some(false), true), "a click landing in an automated frame");
+    assert!(run::press_automated(None, false), "no pointer press (AccessKit, keyboard)");
+    // The checklist records its Start button's press in the frame it goes down in.
+    let mut app = app();
+    square(&mut app);
+    connect(&mut app, json!({"speedFactor": 1000, "timeScale": 100}));
+    let mut list = Checklist::new(Confirm::Start, json!({}));
+    list.ticks.iter_mut().for_each(|t| *t = true);
+    // One box left unticked: the click can't start anything, so the press stays to be read.
+    list.ticks[0] = false;
+    app.picabia.laser.checklist = Some(list);
+    let ctx = context(false);
+    frame(&mut app, &ctx, vec![]);
+    let shapes = frame(&mut app, &ctx, vec![]);
+    let start = shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.text() == "Start" => Some(t.visual_bounding_rect().center()),
+            _ => None,
+        })
+        .expect("the checklist's Start");
+    let press = |pressed| egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    app.synthetic_frame = true;
+    frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start), press(true)]);
+    app.synthetic_frame = false;
+    frame(&mut app, &ctx, vec![press(false)]);
+    assert_eq!(app.picabia.laser.checklist.as_ref().and_then(|l| l.press), Some(true), "recorded when it went down");
+    // The window's motion buttons read the same: the last press while the window is up.
+    app.picabia.laser.open = true;
+    app.synthetic_frame = true;
+    frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start), press(true)]);
+    app.synthetic_frame = false;
+    assert_eq!(app.picabia.laser.last_press, Some(true));
+    frame(&mut app, &ctx, vec![press(false), egui::Event::PointerMoved(start), press(true)]);
+    assert_eq!(app.picabia.laser.last_press, Some(false), "a person's press");
+    app.run("laser.disconnect", json!({})).unwrap();
+}
+
+#[test]
+fn a_motion_just_sent_holds_file_dialogs_off() {
+    let mut app = app();
+    app.services.pick_open = Some(Box::new(|_| Some("/tmp/x.gcode".into())));
+    connect(&mut app, json!({"speedFactor": 1000, "timeScale": 100}));
+    let pick = crate::FilePick::named("x.gcode");
+    assert!(crate::picks::open(&mut app, &pick).is_some(), "idle: it opens");
+    run::as_person(&mut app, false, "laser.jog", json!({"dx": 0.1})).unwrap();
+    assert_eq!(crate::picks::open(&mut app, &pick), None, "within a second of the jog, before the status says it moves");
+    app.picabia.laser.last_motion = Some(std::time::Instant::now() - std::time::Duration::from_secs(2));
+    wait(&mut app, "idle", |s| s.state.as_deref() == Some("Idle") && !s.stoppable());
+    assert!(crate::picks::open(&mut app, &pick).is_some(), "a while later, idle: it opens");
+    app.run("laser.disconnect", json!({})).unwrap();
+}
+
+#[test]
+fn the_ladders_checklist_shows_its_grid_and_the_line_count_is_what_is_sent() {
+    let mut app = app();
+    connect(&mut app, json!({"speedFactor": 1000, "timeScale": 100}));
+    let mut j = JobState::default();
+    j.source = Source::PowerLadder;
+    let (cmd, p) = j.dry_run(&[]).unwrap();
+    j.take_result(app.session.execute(cmd, &p).map_err(|e| e.to_string()));
+    let lines = j.checklist_lines("");
+    assert!(lines.iter().any(|l| l == "Squares at 20–100 % power (5 steps) × 150–1200 mm/min (4 steps), 1 pass each"), "{lines:?}");
+    assert!(lines.iter().all(|l| !l.starts_with("Cut:") && !l.starts_with("Score:")), "the table's cut and score aren't the ladder's: {lines:?}");
+    assert!(lines.iter().any(|l| l.starts_with("Engrave:")), "its labels are engraved: {lines:?}");
+    assert_eq!(job::ladder_text(&json!({"powersPct": "x"})), None, "junk: no line");
+    // The dry run's line count is what the job sends.
+    let shown = j.chosen_sheet().unwrap().lines;
+    run::confirm(&mut app, &mut ticked(Confirm::Start, j.start_params(j.params(&[]).unwrap())), false).unwrap();
+    let st = wait(&mut app, "done", |s| s.job.as_ref().is_some_and(|j| j.state == "done"));
+    assert_eq!(st.job.unwrap().lines, shown);
+    app.run("laser.disconnect", json!({})).unwrap();
+}

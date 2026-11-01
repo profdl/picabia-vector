@@ -76,6 +76,9 @@ pub struct JobState {
     pub sheet: usize,
     /// The last dry run cut a stencil object (its sheets), not a design's outlines.
     pub stencil: bool,
+    /// The power ladder's grid from the last dry run (`ladder`: `{powersPct, speedsMmMin, squareMm,
+    /// gapMm, passes}`).
+    pub ladder: Option<Value>,
     pub summary: Summary,
     /// Open… was pressed: the window asks for a G-code file once it has drawn.
     pub want_file: bool,
@@ -136,19 +139,35 @@ impl JobState {
         };
         let mut out = vec![what];
         if let Some(s) = self.chosen_sheet() {
-            out.push(format!(
-                "{} · {}",
-                i18n::fmt(tl!("{w} × {h} mm"), &[("w", &num(s.w_mm)), ("h", &num(s.h_mm))]),
-                i18n::tn(s.lines, "{n} line", "{n} lines")
-            ));
+            out.push(size_text(s.w_mm, s.h_mm, s.lines));
         }
         if !matches!(self.source, Source::File(_)) {
             out.push(format!("{}: {}", tl!("Material"), super::ops::material_label(self.material_shown())));
-            for (key, op) in super::ops::OP_KEYS.iter().zip(self.ops.0.iter()).filter(|(_, op)| op.enabled) {
+            // The ladder cuts each square at its own power and speed: its grid, then the labels'
+            // engraving, not the operation table's cut and score.
+            let ladder = matches!(self.source, Source::PowerLadder);
+            if ladder && let Some(grid) = self.ladder.as_ref().and_then(ladder_text) {
+                out.push(grid);
+            }
+            for (key, op) in super::ops::OP_KEYS.iter().zip(self.ops.0.iter()).filter(|(k, op)| op.enabled && (!ladder || **k == "engrave")) {
                 out.push(format!("{}: {} %, {} mm/min, {}×", super::ops::op_label(key), num(op.power), num(op.speed), op.passes));
             }
         }
         out
+    }
+
+    /// What Start's job comes to now, to check again at confirm: the dry run of `start` (Start's
+    /// params, [`JobState::start_params`]) and the chosen sheet's size and lines. `None` for a
+    /// G-code file (it runs as it is) or before a dry run.
+    pub fn expected(&self, sel: &[NodeId], start: &Value) -> Option<super::run::Expected> {
+        let (cmd, mut p) = self.dry_run(sel)?;
+        for k in ["material", "cut", "score", "engrave", "sheet"] {
+            if let Some(v) = start.get(k) {
+                p[k] = v.clone();
+            }
+        }
+        let s = self.chosen_sheet()?;
+        Some(super::run::Expected { cmd, params: p, sheet: self.sheet.max(1), w_mm: s.w_mm, h_mm: s.h_mm, lines: s.lines })
     }
 
     /// The dry run: its command and params, or `None` when there's nothing to ask.
@@ -201,6 +220,7 @@ impl JobState {
                 }
                 self.stencil = v.get("id").is_some_and(|id| !id.is_null());
                 self.material_used = v.get("material").and_then(Value::as_str).map(str::to_string);
+                self.ladder = v.get("ladder").filter(|l| l.is_object()).cloned();
                 let files: Vec<&Value> = v.get("files").and_then(Value::as_array).into_iter().flatten().take(64).collect();
                 let sheets: Vec<Sheet> = files
                     .iter()
@@ -390,6 +410,36 @@ pub fn settings(app: &mut VectorcraftApp, ui: &mut Ui, j: &mut JobState, locked:
     changed
 }
 
+/// "270.1 × 174.1 mm · 908 lines": a job's size and lines as the checklist shows them.
+pub fn size_text(w: f64, h: f64, lines: u64) -> String {
+    format!("{} · {}", i18n::fmt(tl!("{w} × {h} mm"), &[("w", &num(w)), ("h", &num(h))]), i18n::tn(lines, "{n} line", "{n} lines"))
+}
+
+/// The power ladder's grid in words: "Squares at 20–100 % power (5 steps) × 150–1200 mm/min
+/// (4 steps), 1 pass each" (`v`: the dry run's `ladder`).
+pub fn ladder_text(v: &Value) -> Option<String> {
+    let list = |k: &str| -> Vec<f64> {
+        v.get(k).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_f64).filter(|x| x.is_finite()).collect()
+    };
+    let range = |xs: &[f64]| -> Option<String> {
+        let lo = xs.iter().copied().reduce(f64::min)?;
+        let hi = xs.iter().copied().reduce(f64::max)?;
+        Some(if (hi - lo).abs() < 1e-9 { num(lo) } else { format!("{}–{}", num(lo), num(hi)) })
+    };
+    let (powers, speeds) = (list("powersPct"), list("speedsMmMin"));
+    let passes = v.get("passes").and_then(Value::as_u64).unwrap_or(1);
+    Some(i18n::fmt(
+        tl!("Squares at {powers} % power ({p} steps) × {speeds} mm/min ({s} steps), {passes} each"),
+        &[
+            ("powers", &range(&powers)?),
+            ("p", &powers.len().to_string()),
+            ("speeds", &range(&speeds)?),
+            ("s", &speeds.len().to_string()),
+            ("passes", &i18n::tn(passes, "{n} pass", "{n} passes")),
+        ],
+    ))
+}
+
 /// "1 of 2 · 600 × 400 mm".
 fn sheet_label(s: &Sheet) -> String {
     let size = i18n::fmt(tl!("{w} × {h} mm"), &[("w", &num(s.w_mm)), ("h", &num(s.h_mm))]);
@@ -413,6 +463,11 @@ pub fn summary(ui: &mut Ui, j: &JobState) {
                     line.push_str(&i18n::fmt(tl!("about {time}"), &[("time", &super::status::clock(e))]));
                 }
                 ui.label(egui::RichText::new(line).font(crate::theme::semibold(12.0)).color(t.text));
+            }
+            if matches!(j.source, Source::PowerLadder)
+                && let Some(grid) = j.ladder.as_ref().and_then(ladder_text)
+            {
+                crate::picabia_ui::note(ui, &grid);
             }
             for w in warnings {
                 wrapped(ui, &crate::i18n::msg(w), readable(t.warning, &t));
