@@ -305,6 +305,8 @@ impl VectorcraftApp {
         opening::poll(self);
         plugin_runs::poll(self);
         trace_runs::poll(self);
+        // PICABIA: stale stencil sheets recompute off the UI thread (web: once settled); repaint while one is coming.
+        let picabia_busy = vectorcraft_engine::picabia_stencil::poll(&self.session, now);
         placing::poll(self);
         #[cfg(not(target_arch = "wasm32"))]
         self.tick_link_updates(ctx, now);
@@ -313,6 +315,8 @@ impl VectorcraftApp {
             || !self.plugin_runs.running.is_empty()
             || !self.placing.pending.is_empty()
             || !self.trace_runs.running.is_empty()
+            || picabia_busy
+        // PICABIA: a stencil sheet is coming.
         {
             // Keep the status bar's progress moving and pick the result up when it arrives.
             ctx.request_repaint_after(std::time::Duration::from_millis(100));

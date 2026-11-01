@@ -164,13 +164,29 @@ impl Session {
     pub fn laser_shutdown(&mut self) {
         self.picabia.laser.armed = false;
         self.picabia.laser.close(SHUTDOWN_BUDGET_MS);
+        sync_machine(self);
     }
+}
+
+/// Copy what the connected machine reports into `PicabiaState::laser_machine` (cleared once the
+/// link is closed or lost), for the G-code commands' defaults.
+fn sync_machine(s: &mut Session) {
+    s.picabia.laser_machine = s.picabia.laser.reports().unwrap_or_default();
 }
 
 impl LaserLink {
     /// Use up the arm: whether the command runs armed.
     fn take_arm(&mut self) -> bool {
         std::mem::take(&mut self.armed)
+    }
+
+    /// What the open link's machine reports (`$30`, `$130`, `$131`); `None` when the link is closed.
+    pub(crate) fn reports(&self) -> Option<crate::cmd::picabia_modifier::LaserMachine> {
+        if !self.is_open() {
+            return None;
+        }
+        let (travel_x_mm, travel_y_mm) = self.machine_travel();
+        Some(crate::cmd::picabia_modifier::LaserMachine { s_max: self.machine_s_max(), travel_x_mm, travel_y_mm })
     }
 
     /// Replace the port lister (tests: never the computer's ports).
@@ -352,6 +368,7 @@ fn status_with(s: &Session, extra: Value) -> Value {
 }
 
 fn status(s: &mut Session, _p: &Value) -> Result<Value> {
+    sync_machine(s);
     Ok(status_json(s))
 }
 
@@ -467,6 +484,7 @@ fn connect(s: &mut Session, p: &Value) -> Result<Value> {
         }
         s.picabia.laser.close(SHUTDOWN_BUDGET_MS);
         s.picabia.laser.job = None;
+        sync_machine(s);
         s.picabia.laser.open(CMD, &port, baud, sim)?;
         Ok(status_json(s))
     }
@@ -474,6 +492,7 @@ fn connect(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn disconnect(s: &mut Session, _p: &Value) -> Result<Value> {
     s.picabia.laser.close(DISCONNECT_BUDGET_MS);
+    sync_machine(s);
     Ok(status_json(s))
 }
 

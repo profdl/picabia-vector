@@ -35,6 +35,9 @@
 //! [`ladder_gcode`] make the grid of squares that finds a material's power and speed. This crate
 //! only writes text: it never opens a port or talks to a machine.
 //!
+//! [`store`] keeps computed sheets for the renderer and exports (the engine computes them), with
+//! the cheap snapshot and the geometry key that say whether one is still fresh.
+//!
 //! Path operations: [`ops`] (booleans on `linesweeper`'s raw contours, see its docs for why not
 //! VectorCraft's tidied booleans) and [`offset`] (region offset, opening, closing).
 #![forbid(unsafe_code)]
@@ -61,6 +64,7 @@ mod pattern;
 mod problems;
 mod repeat;
 mod rings;
+pub mod store;
 mod ties;
 mod visible;
 
@@ -78,6 +82,7 @@ pub use laser_ladder::{Ladder, LadderCell, LadderParams, MAX_LADDER_STEPS, ladde
 pub use laser_svg::laser_svg;
 pub use offset::{MAX_OFFSET_DISTANCE, MAX_OFFSET_ELEMENTS, OFFSET_MITER_LIMIT, close, offset, open};
 pub use problems::{MAX_PROBLEMS, Problem, ProblemCounts, ProblemKind};
+pub use repeat::tile_cell;
 pub use visible::{Region, Visible, rgb8, visible_regions};
 
 use vectorcraft_geom::kurbo::BezPath;

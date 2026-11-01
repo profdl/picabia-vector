@@ -17,11 +17,8 @@ const GCODE_EXTENSIONS: [&str; 6] = ["gcode", "nc", "ngc", "gc", "tap", "txt"];
 /// The longest job name kept (characters).
 const MAX_NAME_CHARS: usize = 80;
 
-/// The machine the link checks jobs against.
-///
-/// PICABIA: the saved machine profile (`laser.profile`, kept with the preferences) is ported
-/// separately; until it lands every session uses these defaults (the owner's X-Carve, guesses
-/// until checked on the machine). [`Machine::of`] is the one place that reads it.
+/// The machine the link checks jobs against: the saved machine profile (`laser.profile`, kept with
+/// the preferences; the owner's X-Carve until changed), the fields the link needs.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Machine {
     pub name: String,
@@ -41,25 +38,20 @@ pub struct Machine {
     pub origin: &'static str,
 }
 
-impl Default for Machine {
-    fn default() -> Self {
-        Machine {
-            name: "X-Carve 23x48 + J Tech 2.8W".into(),
-            bed_w_mm: 584.2,
-            bed_h_mm: 1219.2,
-            s_max: 1000.0,
-            rapid_mm_min: 3000.0,
-            air: false,
-            checked: false,
-            origin: "head",
-        }
-    }
-}
-
 impl Machine {
     /// The session's machine profile.
-    pub fn of(_s: &Session) -> Machine {
-        Machine::default()
+    pub fn of(s: &Session) -> Machine {
+        let p = crate::cmd::picabia_modifier::laser_gcode::MachineProfile::of(s);
+        Machine {
+            origin: if p.origin_at_head() { "head" } else { "machine" },
+            name: p.name,
+            bed_w_mm: p.bed_w_mm,
+            bed_h_mm: p.bed_h_mm,
+            s_max: p.s_max,
+            rapid_mm_min: p.rapid_mm_min,
+            air: p.air,
+            checked: p.checked,
+        }
     }
 
     pub fn origin_at_head(&self) -> bool {

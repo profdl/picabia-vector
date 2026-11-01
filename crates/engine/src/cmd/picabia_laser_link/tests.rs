@@ -113,6 +113,10 @@ fn connect_reads_the_machine_and_lists_only_the_simulator() {
     assert!(v["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("$30 is 1200")), "{v}");
     assert!(v["log"].as_array().unwrap().iter().any(|l| l.as_str().unwrap().contains("$$")), "{v}");
     assert!(v["pos"]["x"].is_number() && v["simStats"]["overflows"] == 0, "{v}");
+    // The G-code export reads the connected machine's $30 and travel.
+    assert_eq!(s.picabia.laser_machine.s_max, Some(1200.0));
+    assert_eq!(s.picabia.laser_machine.travel_x_mm, Some(584.2));
+    assert_eq!(ex(&mut s, "laser.profile", json!({}))["sMaxMachine"], 1200.0);
     // The test card's G-code uses the connected machine's $30 too.
     let v = start(&mut s, json!({"testCard": "card", "sMax": 500}));
     assert!(v["started"]["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("$30 = 1200")), "{v}");
@@ -124,6 +128,8 @@ fn connect_reads_the_machine_and_lists_only_the_simulator() {
     let v = ex(&mut s, "laser.disconnect", json!({}));
     assert_eq!((v["connected"].as_bool(), v["phase"].as_str()), (Some(false), Some("closed")));
     assert!(s.execute("laser.home", &json!({})).is_err());
+    assert_eq!(s.picabia.laser_machine, Default::default(), "cleared on disconnect");
+    assert_eq!(ex(&mut s, "laser.profile", json!({}))["sMaxMachine"], Value::Null);
     // Connecting again works.
     ex(&mut s, "laser.connect", json!({"port": "sim", "sim": fast()}));
     wait(&mut s, 10.0, "ready again", |v| v["phase"] == "ready");
@@ -578,8 +584,9 @@ fn junk_params_on_every_laser_command() {
         json!({"path": "\u{0}.gcode"}),
         json!({"path": "/nonexistent/picabia/x.gcode", "gcode": "G0 X1"}),
     ];
-    let ids: Vec<&str> = crate::command_specs().iter().map(|c| c.id).filter(|i| i.starts_with("laser.")).collect();
+    let ids: Vec<&str> = super::specs().iter().map(|c| c.id).collect();
     assert_eq!(ids.len(), 14, "{ids:?}");
+    assert!(ids.iter().all(|id| crate::command_specs().iter().any(|c| c.id == *id)), "registered");
     for (connect, hardware) in [(false, false), (true, false), (false, true)] {
         let mut s = if connect { connected(fast()) } else { Session::new() };
         s.picabia.laser.set_port_lister(fake_ports);

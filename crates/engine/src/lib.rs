@@ -12,6 +12,7 @@ pub mod guard;
 pub mod inspect;
 pub mod journal;
 pub mod link_watch;
+pub mod picabia_stencil; // PICABIA: stencil sheets computed off the UI thread, kept for the renderer.
 pub mod steps;
 pub mod store;
 mod tooling;

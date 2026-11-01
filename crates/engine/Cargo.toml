@@ -39,6 +39,7 @@ vectorcraft-scriptcheck = { workspace = true }
 vectorcraft-modifiers = { workspace = true }
 # PICABIA: the laser link (cmd/picabia_laser_link.rs): GRBL protocol and simulator; the test card and power ladder G-code.
 vectorcraft-grbl = { workspace = true }
+# PICABIA: stencil sheets and laser export (picabia_stencil.rs, cmd/picabia_modifier/).
 vectorcraft-stencil = { workspace = true }
 image = { workspace = true }
 hayro-jpeg2000 = { version = "=0.3.5", default-features = false, features = ["std", "simd"] }
