@@ -103,8 +103,8 @@ fn object_modifiers_menu_lists_every_kind_and_the_stack_commands() {
         .collect();
     assert_eq!(
         ids.iter().filter(|(id, _)| *id == "modifier.add").count(),
-        super::appearance::KINDS.len(),
-        "the same kinds as Add New Effect ▸ Modifiers"
+        super::appearance::KINDS.len() + super::appearance::PRESETS.len(),
+        "the same kinds and presets as Add New Effect ▸ Modifiers"
     );
     for id in ["modifier.apply", "modifier.remove_all", "modifier.copy", "modifier.paste"] {
         assert!(ids.iter().any(|(i, _)| *i == id), "{id}");
@@ -265,4 +265,35 @@ fn the_deform_row_shows_its_modes_fields() {
     }
     // Strength 0.35 reads as 35%.
     assert!(shown.iter().any(|s| s.starts_with("35")), "35% shown: {shown:?}");
+}
+
+/// The screen row (PIC20.5c): spot, ruling, angle, quality, tone and invert; the amount only for a
+/// fixed tone and the image picker only for an image tone; the presets come with their values.
+#[test]
+fn the_screen_row_shows_the_fields_its_tone_uses() {
+    let (mut app, ctx, a) = arrayed();
+    app.run("modifier.add", json!({"ids": [a], "kind": "screen"})).unwrap();
+    set_pstate(&ctx, &format!("pc-open-{a}-m2"), true);
+    let shown = texts(&mut app, &ctx);
+    for want in ["Screen", "Spot", "Round", "Lines/inch", "Angle", "Quality", "Tone", "Fill colour", "Invert"] {
+        assert!(shown.iter().any(|s| s == want), "{want} in {shown:?}");
+    }
+    for hidden in ["Amount", "Image"] {
+        assert!(!shown.iter().any(|s| s == hidden), "{hidden} hidden in {shown:?}");
+    }
+    assert!(shown.iter().any(|s| s == "20"), "20 lpi: {shown:?}");
+    app.run("modifier.set", json!({"ids": [a], "index": 1, "props": {"tone": "fixed"}})).unwrap();
+    let shown = texts(&mut app, &ctx);
+    assert!(shown.iter().any(|s| s == "Amount") && shown.iter().any(|s| s.starts_with("50")), "{shown:?}");
+    assert!(!shown.iter().any(|s| s == "Image"), "{shown:?}");
+    app.run("modifier.set", json!({"ids": [a], "index": 1, "props": {"tone": "image"}})).unwrap();
+    let shown = texts(&mut app, &ctx);
+    assert!(shown.iter().any(|s| s == "Image") && shown.iter().any(|s| s == "Choose an object"), "{shown:?}");
+    // A preset from the menus.
+    app.run("modifier.add", json!({"ids": [a], "kind": "screen", "preset": "lineFill"})).unwrap();
+    let st = app.session.active().unwrap();
+    let stack = vectorcraft_modifiers::node_stack(st.doc.node(vectorcraft_doc::NodeId(a)).unwrap()).unwrap().unwrap();
+    let p = stack.modifiers[2].kind.params();
+    assert_eq!((p["spot"].as_str(), p["tone"].as_str(), p["amount"].as_f64()), (Some("line"), Some("fixed"), Some(30.0)));
+    assert!(super::menu::object_items().iter().any(|i| matches!(i, crate::menus::Item::Cmd("Ben-Day Dots", "modifier.add", _))));
 }

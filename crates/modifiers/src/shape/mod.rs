@@ -1,5 +1,5 @@
 //! Geometry rows: modifiers that change the object's paths instead of placing copies
-//! (`resample`, `trim`, `tidy`, `deform`, `displace`).
+//! (`resample`, `trim`, `tidy`, `deform`, `displace`, `screen`).
 //!
 //! # Where they run
 //! Rows run top to bottom. A geometry row above every copy row (arrays, mirror, wallpaper, copy
@@ -28,6 +28,9 @@ mod deform_tests;
 mod displace;
 #[cfg(test)]
 mod displace_tests;
+mod halftone;
+#[cfg(test)]
+mod halftone_tests;
 mod pieces;
 mod resample;
 #[cfg(test)]
@@ -44,6 +47,8 @@ use crate::eval::Output;
 use crate::kinds::Clamp;
 use crate::model::{Deform, Displace, ModifierKind, Resample, Tidy, Trim};
 
+pub use halftone::{MAX_BAND_ENTRIES, MAX_CLIP_SEGMENTS, MAX_CLIP_WORK, MAX_EDGE_CONTACTS, MAX_OUTLINE_PIECES, NEAR_WHITE, SPOT_ANCHORS, ScreenRow};
+
 /// The most anchors the geometry rows make for one object, all its copies together.
 pub const MAX_GEOMETRY_ANCHORS: usize = 200_000;
 
@@ -55,6 +60,7 @@ pub enum GeometryOp {
     Tidy(Tidy),
     Deform(Deform),
     Displace(Displace),
+    Screen(ScreenRow),
 }
 
 impl GeometryOp {
@@ -66,6 +72,7 @@ impl GeometryOp {
             GeometryOp::Tidy(_) => "Tidy",
             GeometryOp::Deform(_) => "Deform",
             GeometryOp::Displace(_) => "Displace",
+            GeometryOp::Screen(_) => "Screen",
         }
     }
 }
@@ -135,6 +142,15 @@ pub(crate) fn clamped(kind: &ModifierKind) -> Option<(GeometryOp, Vec<String>)> 
             p.progressive_amount = c.within("progressiveAmount", p.progressive_amount, 0.0, 1.0, 1.0);
             GeometryOp::Displace(p)
         }
+        ModifierKind::Screen(p) => {
+            let mut p = p.clone();
+            p.lpi = c.within("lpi", p.lpi, crate::screen::MIN_LPI, crate::screen::MAX_LPI, crate::screen::DEFAULT_LPI);
+            p.angle = c.within("angle", p.angle, -360.0, 360.0, 45.0);
+            p.quality = whole(&mut c, "quality", p.quality, crate::screen::MIN_QUALITY, crate::screen::MAX_QUALITY);
+            p.amount = c.within("amount", p.amount, 0.0, 100.0, 50.0);
+            // The image is resolved by the evaluator, which has the document.
+            GeometryOp::Screen(ScreenRow { params: p, image: None })
+        }
         _ => return None,
     };
     Some((op, warnings))
@@ -200,6 +216,7 @@ impl<'a> Shaper<'a> {
         for row in rows.iter().filter(|r| r.at == at) {
             match &row.op {
                 GeometryOp::Deform(p) => self.deform(n, p, copy),
+                GeometryOp::Screen(p) => self.screen(n, p),
                 _ => self.row(n, row, copy),
             }
         }
@@ -222,6 +239,24 @@ impl<'a> Shaper<'a> {
         }
         if !finite(&changed, 0) {
             self.note("Deform gave points that aren't finite numbers; it is skipped".into());
+            return;
+        }
+        *n = changed;
+    }
+
+    /// A Screen row on `n` (the object, or a copy where it sits: the screen is fixed to the page).
+    /// It checks the anchors against the budget itself, path by path.
+    fn screen(&mut self, n: &mut Node, p: &ScreenRow) {
+        let mut changed = n.clone();
+        let mut run = halftone::Run { room: self.budget, notes: &mut self.notes, skipped: false };
+        if !halftone::screen_node(&mut changed, p, &mut run) {
+            return;
+        }
+        if run.skipped {
+            self.note("Screen changes paths only: type, images, symbols and live objects are drawn as they are".into());
+        }
+        if !finite(&changed, 0) {
+            self.note("Screen gave points that aren't finite numbers; it is skipped".into());
             return;
         }
         *n = changed;
@@ -298,6 +333,8 @@ fn projected(n: &Node, op: &GeometryOp, depth: usize) -> usize {
                 GeometryOp::Deform(_) => sp.anchors.len(),
                 // A displace moves anchors, never adds them.
                 GeometryOp::Displace(_) => sp.anchors.len(),
+                // A screen checks its dots against the budget itself (`Shaper::screen`).
+                GeometryOp::Screen(_) => sp.anchors.len(),
             })
             .fold(0usize, usize::saturating_add),
         NodeKind::Group { children, .. } | NodeKind::Layer { children, .. } | NodeKind::Compound { children, .. } => {
@@ -381,7 +418,7 @@ fn shaped(path: &PathData, op: &GeometryOp, field: Option<&displace::Field>) -> 
         let new = match op {
             GeometryOp::Resample(p) => resample::resample(sp, p),
             GeometryOp::Tidy(p) => tidy::tidy(sp, p),
-            GeometryOp::Deform(_) => None,
+            GeometryOp::Deform(_) | GeometryOp::Screen(_) => None,
             GeometryOp::Displace(_) => field.and_then(|f| f.displace(sp)),
             GeometryOp::Trim(p) => match trim::trim(sp, p) {
                 trim::Trimmed::Whole => None,
@@ -446,7 +483,8 @@ pub fn shaped_copies(n: &Node, out: &Output) -> (Vec<Node>, Vec<String>) {
 }
 
 /// `path` after `op` (as it is when `op` leaves it alone): bare geometry, without the caps (a
-/// displace as on the object: its radial centre the mean of `path`'s anchors, no copy ramp).
+/// displace as on the object: its radial centre the mean of `path`'s anchors, no copy ramp). A
+/// screen needs the path's paint and returns `path` as it is: it runs on nodes ([`Shaper`]).
 pub fn shape_path(path: &PathData, op: &GeometryOp) -> PathData {
     let field = field_from(|| path_sum(path), op, None, displace::Frame::IDENTITY);
     shaped(path, op, field.as_ref()).unwrap_or_else(|| path.clone())

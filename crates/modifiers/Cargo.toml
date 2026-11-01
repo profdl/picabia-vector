@@ -13,3 +13,4 @@ vectorcraft-geom = { workspace = true }
 vectorcraft-doc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+vectorcraft-pathops = { workspace = true }
