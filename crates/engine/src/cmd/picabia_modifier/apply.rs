@@ -60,6 +60,8 @@ pub(super) fn apply(s: &mut Session, p: &Value) -> Result<Value> {
     let up_to = opt_index(CMD, p, "upTo")?;
     let ids = objects(CMD, s, p)?;
     let doc = &s.doc()?.doc;
+    let mut seen = std::collections::BTreeSet::new();
+    let ids: Vec<NodeId> = ids.into_iter().filter(|id| seen.insert(*id)).collect();
     let ids = super::super::edit::outermost(doc, ids);
     let mut budget = MAX_APPLY_OBJECTS;
     let mut plans = Vec::new();
@@ -73,10 +75,28 @@ pub(super) fn apply(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let applied = s.edit("Apply Modifiers", |d, sel| {
         let mut applied = Vec::with_capacity(plans.len());
+        let mut groups = Vec::with_capacity(plans.len());
+        let mut copy_ids = Vec::new();
+        let mut live = Vec::new();
         for plan in plans {
-            let copies = plan.copies.len();
-            let (id, group) = (plan.id, bake(d, plan)?);
-            applied.push((id, group, copies));
+            let (id, copies) = (plan.id, plan.copies.len());
+            let (group, ids) = bake(d, &plan)?;
+            applied.push((id, group.id, copies));
+            if !plan.rest.is_empty() {
+                live.push((group.id, plan.rest, plan.pivot));
+            }
+            copy_ids.extend(ids);
+            groups.push((id, vec![group]));
+        }
+        // Every source is replaced in one pass over the tree.
+        d.insert_beside(groups, true)?;
+        // Copied type whose layout caches `reid` dropped has them again.
+        super::super::typecmd::refresh_bounds_of(d, &copy_ids);
+        // The rows after `upTo` keep running on the group.
+        for (gid, rest, pivot) in live {
+            let g = d.node_mut(gid).ok_or_else(|| super::super::bad(CMD, "the new group is gone"))?;
+            let rest = repivot(rest, pivot - vectorcraft_modifiers::node_bounds(g).center());
+            vectorcraft_modifiers::set_node_source(g, Some(vectorcraft_modifiers::to_json(&rest)));
         }
         sel.set(applied.iter().map(|a| a.1));
         Ok(applied)
@@ -124,10 +144,13 @@ fn plan(doc: &Document, id: NodeId, up_to: Option<usize>, budget: &mut usize) ->
 /// Refuse `node` when a group can't take its place.
 fn replaceable(doc: &Document, node: &Node) -> Result<()> {
     let name = node.display_name();
-    if matches!(node.kind, NodeKind::Path { clipping: true, .. }) {
+    let parent = doc.parent_of(node.id).and_then(|p| doc.node(p));
+    // The first member of a clip group or of a layer with a clipping mask clips the rest, whatever
+    // kind it is (a path, a compound path, type…): a group can't take its place.
+    let clips = parent.is_some_and(|p| p.clips() && p.children().and_then(|c| c.first()).is_some_and(|c| c.id == node.id));
+    if clips || matches!(node.kind, NodeKind::Path { clipping: true, .. }) {
         return Err(super::super::bad(CMD, format!("\"{name}\" is a clipping path: release the clipping mask first")));
     }
-    let parent = doc.parent_of(node.id).and_then(|p| doc.node(p));
     match parent.map(|p| &p.kind) {
         Some(NodeKind::Layer { .. } | NodeKind::Group { .. }) if !parent.is_some_and(Node::is_compound_shape) => Ok(()),
         Some(_) => Err(super::super::bad(CMD, format!("\"{name}\" is part of another object: release or expand it first"))),
@@ -135,8 +158,8 @@ fn replaceable(doc: &Document, node: &Node) -> Result<()> {
     }
 }
 
-/// Replace `plan.id` by the group of its copies; returns the group's id.
-fn bake(d: &mut Document, plan: Plan) -> Result<NodeId> {
+/// The group of `plan.id`'s copies (not in the tree yet), and the copies' ids.
+fn bake(d: &mut Document, plan: &Plan) -> Result<(Node, Vec<NodeId>)> {
     let node = d.node(plan.id).cloned().ok_or_else(|| super::super::bad(CMD, format!("no object with id {}", plan.id.0)))?;
     let sc = Scaling {
         strokes: true,
@@ -163,15 +186,7 @@ fn bake(d: &mut Document, plan: Plan) -> Result<NodeId> {
     let gid = d.alloc_id();
     let mut group = Node::group(gid, kids);
     group.name = node.name.clone();
-    d.insert_beside(vec![(plan.id, vec![group])], true)?;
-    // Copied type whose layout caches `reid` dropped has them again.
-    super::super::typecmd::refresh_bounds_of(d, &copy_ids);
-    if !plan.rest.is_empty() {
-        let g = d.node_mut(gid).ok_or_else(|| super::super::bad(CMD, "the new group is gone"))?;
-        let rest = repivot(plan.rest, plan.pivot - vectorcraft_modifiers::node_bounds(g).center());
-        vectorcraft_modifiers::set_node_source(g, Some(vectorcraft_modifiers::to_json(&rest)));
-    }
-    Ok(gid)
+    Ok((group, copy_ids))
 }
 
 /// Shift the pivot-relative params of `stack` by `d` (the old pivot minus the new one), so its

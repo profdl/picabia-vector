@@ -483,7 +483,7 @@ pub mod laser_gcode;
 mod stencil;
 mod targets;
 pub use targets::{check_target, target_choices};
-pub(crate) use targets::{remap_copies, remap_pasted};
+pub(crate) use targets::{remap_copies, remap_pasted, snapshot};
 #[cfg(test)]
 mod apply_tests;
 #[cfg(test)]

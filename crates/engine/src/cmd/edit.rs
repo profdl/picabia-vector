@@ -932,6 +932,7 @@ pub(crate) fn duplicate_in(d: &mut Document, sel: &mut vectorcraft_doc::Selectio
 /// another root, are copied one at a time: each copy is made from the document as the copies
 /// before it left it. Copied type whose layout caches [`Document::reid`] dropped has them again.
 pub(crate) fn copy_above(d: &mut Document, roots: &[NodeId], mut change: impl FnMut(&mut Document, &Node, &mut Node)) -> Result<Vec<NodeId>> {
+    let picabia = super::picabia_modifier::snapshot(d, roots); // PICABIA: the originals, for copy-to-shape targets
     let paths = d.index_paths(roots.iter().copied());
     let mut found: Vec<_> = roots.iter().filter_map(|id| paths.get(id)).collect();
     found.sort_unstable();
@@ -957,7 +958,7 @@ pub(crate) fn copy_above(d: &mut Document, roots: &[NodeId], mut change: impl Fn
         }
         out
     };
-    super::picabia_modifier::remap_copies(d, roots, &out); // PICABIA: copy-to-shape targets copied along point at the copies
+    super::picabia_modifier::remap_copies(d, picabia, &out); // PICABIA: copy-to-shape targets copied along point at the copies
     super::typecmd::refresh_bounds_of(d, &out);
     Ok(out)
 }
