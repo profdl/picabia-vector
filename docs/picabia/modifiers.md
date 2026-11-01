@@ -451,6 +451,10 @@ Differences from tlprocedural, on purpose:
   tlprocedural took one LCG step of `seed + index`; its step is a fixed 0.514 of a turn, so
   copies alternated between two nearly equal phases (copies 0, 2, 4… looked alike) instead of
   each getting its own.
+- **The radial centre** is the mean of the anchors of every plain path in the object (or copy).
+  tlprocedural averaged the vertices of the flattened polygon (32 points round an ellipse, a
+  Bézier's sampled points, a ring's repeated closing vertex counted once more), so on a path with
+  unevenly spaced anchors the centre, and the ripple round it, can sit a little differently.
 - **Not ported:** `animated` and `animationSpeed` (tlprocedural's panel showed them, its processor
   never read them; Picabia has no time line).
 - Progressive copies are numbered by the stack's copy order (every copy of every array above, in

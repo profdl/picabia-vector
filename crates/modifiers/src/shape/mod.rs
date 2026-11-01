@@ -134,7 +134,7 @@ fn whole(c: &mut Clamp<'_>, name: &str, v: u32, lo: u32, hi: u32) -> u32 {
 /// ```ignore
 /// let mut shaper = Shaper::new(&out);
 /// shaper.source(&mut object);          // before copying
-/// for each copy: copy.transform(t); shaper.copy(&mut copy);
+/// for (k, t) in copies: copy.transform(t); shaper.copy_at(&mut copy, k);
 /// ```
 pub struct Shaper<'a> {
     rows: &'a [GeometryRow],
@@ -281,12 +281,19 @@ fn apply(n: &mut Node, op: &GeometryOp, field: Option<&displace::Field>, depth: 
 /// A displace's field for `n` (the radial centre is the mean of `n`'s anchors) and copy `copy`;
 /// `None` for the other rows.
 fn field(n: &Node, op: &GeometryOp, copy: Option<(usize, usize)>) -> Option<displace::Field> {
-    field_from(anchor_sum(n, 0), op, copy)
+    field_from(|| anchor_sum(n, 0), op, copy)
 }
 
-fn field_from((sum, count): (Vec2, usize), op: &GeometryOp, copy: Option<(usize, usize)>) -> Option<displace::Field> {
+/// The field for `op` (a displace), the anchors' sum and count read only when radial needs them.
+fn field_from(sum: impl FnOnce() -> (Vec2, usize), op: &GeometryOp, copy: Option<(usize, usize)>) -> Option<displace::Field> {
     let GeometryOp::Displace(p) = op else { return None };
-    let centre = if count > 0 { (sum / count as f64).to_point() } else { Point::ZERO };
+    let centre = match p.mode {
+        crate::model::DisplaceMode::Radial => match sum() {
+            (s, count) if count > 0 => (s / count as f64).to_point(),
+            _ => Point::ZERO,
+        },
+        crate::model::DisplaceMode::Spatial => Point::ZERO,
+    };
     Some(displace::Field::new(p, centre, copy))
 }
 
@@ -384,6 +391,6 @@ pub fn shaped_copies(n: &Node, out: &Output) -> (Vec<Node>, Vec<String>) {
 /// `path` after `op` (as it is when `op` leaves it alone): bare geometry, without the caps (a
 /// displace as on the object: its radial centre the mean of `path`'s anchors, no copy ramp).
 pub fn shape_path(path: &PathData, op: &GeometryOp) -> PathData {
-    let field = field_from(path_sum(path), op, None);
+    let field = field_from(|| path_sum(path), op, None);
     shaped(path, op, field.as_ref()).unwrap_or_else(|| path.clone())
 }

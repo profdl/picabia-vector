@@ -177,13 +177,15 @@ fn the_laser_cuts_the_trimmed_design() {
 }
 
 /// PIC20.4: a displace below an array moves each copy's corners differently; the SVG writes the
-/// moved corners, Apply bakes the same ones, undo restores the live row.
+/// moved corners, Apply bakes the same ones, undo restores the live row. Radial with a progressive
+/// ramp: each copy's shape depends on its index (its phase and its share), so a renderer and an
+/// Apply that numbered the copies differently would disagree here.
 #[test]
 fn displace_below_an_array_is_written_to_svg_and_apply_bakes_it() {
     let mut s = session();
     let r = rect(&mut s, 0.0);
     add(&mut s, r.0, "linearArray", json!({"count": 3, "offsetX": 150}));
-    add(&mut s, r.0, "displace", json!({"amplitude": 30, "progressive": false}));
+    add(&mut s, r.0, "displace", json!({"mode": "radial", "amplitude": 100, "rippleCount": 3, "progressiveReverse": true}));
     let corners = |sps: &[SubPath]| -> Vec<Vec<(f64, f64)>> {
         sps.iter().enumerate().map(|(k, sp)| sp.anchors.iter().map(|a| (a.p.x - 150.0 * k as f64, a.p.y)).collect()).collect()
     };
@@ -191,12 +193,15 @@ fn displace_below_an_array_is_written_to_svg_and_apply_bakes_it() {
     let written = corners(&subpaths(&reopen_svg(&svg).doc().unwrap().doc));
     assert_eq!(written.len(), 3, "{svg}");
     let square = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)];
-    for c in &written {
+    for (k, c) in written.iter().enumerate() {
         assert_eq!(c.len(), 4);
-        assert!(c.iter().zip(&square).any(|(p, q)| (p.0 - q.0).abs() > 0.5 || (p.1 - q.1).abs() > 0.5), "moved: {c:?}");
-        assert!(c.iter().zip(&square).all(|(p, q)| (p.0 - q.0).abs() <= 30.0 && (p.1 - q.1).abs() <= 30.0), "within the amplitude: {c:?}");
+        let moved = c.iter().zip(&square).any(|(p, q)| (p.0 - q.0).abs() > 0.5 || (p.1 - q.1).abs() > 0.5);
+        // Reversed ramp: copy 0 all of it, copy 1 half, the last none.
+        assert_eq!(moved, k < 2, "copy {k}: {c:?}");
+        // A quarter of the corner's distance from the centre (71 pt), at most.
+        assert!(c.iter().zip(&square).all(|(p, q)| (p.0 - q.0).abs() <= 18.0 && (p.1 - q.1).abs() <= 18.0), "within the amplitude: {c:?}");
     }
-    assert_ne!(written[0], written[1], "each copy displaced where it sits");
+    assert_ne!(written[0], written[1], "each copy its own phase and share");
     let before = super::tests::data(&s, r);
     let out = ex(&mut s, "modifier.apply", json!({"ids": [r.0]}));
     assert_eq!(out["applied"][0]["copies"], 3);

@@ -204,12 +204,19 @@ fn the_same_seed_gives_the_same_bits_and_another_seed_another_shape() {
         assert_ne!(bits(&one), bits(&other), "{:?}", p.mode);
     }
     // A pinned value, so a change to the maths (or a platform that computes it differently) shows.
+    // The bits are literals: worked out once on this build, so any platform that computes them
+    // differently (or any change to the maths) fails here.
     let d = shape_path(&PathData::new(vec![square()]), &GeometryOp::Displace(spatial()));
     let a = d.subpaths[0].anchors[2].p;
-    let p = perm_table(42);
-    assert_eq!(a.x, 100.0 + fbm(5.0, 5.0, 3, &p) * 10.0);
-    assert_eq!(a.y, 100.0 + fbm(105.0, 105.0, 3, &p) * 10.0);
+    assert_eq!((a.x.to_bits(), a.y.to_bits()), (SPATIAL_BITS.0, SPATIAL_BITS.1), "spatial {a:?}");
+    let r = Field::new(&Displace { amplitude: 60.0, ripple_count: 3, ..radial() }, Point::new(50.0, 50.0), Some((2, 4))).displace(&square()).unwrap();
+    let b = r.anchors[1].p;
+    assert_eq!((b.x.to_bits(), b.y.to_bits()), (RADIAL_BITS.0, RADIAL_BITS.1), "radial {b:?}");
 }
+
+/// [`the_same_seed_gives_the_same_bits_and_another_seed_another_shape`]'s pinned anchors.
+const SPATIAL_BITS: (u64, u64) = (4636742559579634236, 4637038045916675944);
+const RADIAL_BITS: (u64, u64) = (4636237433407583925, 4619683745580225710);
 
 #[test]
 fn zero_amplitude_and_degenerate_paths_are_left_alone() {
@@ -239,22 +246,36 @@ fn junk_geometry_never_panics_and_stays_finite() {
     let ops = [
         Displace { amplitude: 100.0, scale: 1.0, octaves: 6, ..spatial() },
         Displace { amplitude: 100.0, ripple_count: 12, seed: 999_999, ..radial() },
+        // Progressive: copy 0 gets none of it, copies 1 and 2 some.
         Displace::default(),
+        // Unclamped junk, as a public `GeometryOp` or `shape_path` may pass: the loops are capped
+        // inside the field, and what isn't finite is refused by the shaper.
+        Displace { amplitude: f64::NAN, octaves: u32::MAX, ..spatial() },
+        Displace { amplitude: 1e308, scale: f64::INFINITY, octaves: u32::MAX, ..spatial() },
+        Displace { amplitude: 1e308, ripple_count: u32::MAX, ..radial() },
     ];
+    let mut moved = 0;
     for sp in &weird {
         for p in &ops {
             let rows = vec![GeometryRow { modifier: "m".into(), op: GeometryOp::Displace(p.clone()), at: RowAt::Copies }];
             let out = Output { instances: vec![crate::Instance::identity(); 3], geometry: rows, ..Output::default() };
             let mut sh = Shaper::new(&out);
             for k in 0..3 {
-                let mut n = path_node(sp.clone());
+                let before = path_node(sp.clone());
+                let mut n = before.clone();
                 sh.copy_at(&mut n, k);
                 let ok = n.path_data().unwrap().subpaths.iter().flat_map(|s| &s.anchors).all(|a| a.p.is_finite());
                 let was_ok = sp.anchors.iter().all(|a| a.p.is_finite());
                 assert!(ok || !was_ok, "{p:?} on {sp:?}");
+                moved += usize::from(n != before);
             }
+            // Straight to the field and to `shape_path`, without the shaper's checks: no panic.
+            let _ = Field::new(p, Point::new(1.0, 1.0), Some((7, 3))).displace(sp);
+            let _ = shape_path(&PathData::new(vec![sp.clone()]), &GeometryOp::Displace(p.clone()));
         }
     }
+    // The rows did run: most finite paths moved under the finite params.
+    assert!(moved >= 20, "only {moved} moved");
 }
 
 #[test]

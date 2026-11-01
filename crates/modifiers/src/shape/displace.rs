@@ -20,6 +20,10 @@ const LCG_A: u64 = 1_103_515_245;
 const LCG_C: u64 = 12_345;
 const LCG_MASK: u64 = 0x7fff_ffff;
 
+/// The most octaves and ripples a field runs (the params' ranges).
+const MAX_OCTAVES: u32 = 6;
+const MAX_RIPPLES: u32 = 12;
+
 /// The eight gradient directions of tlprocedural's 2D simplex.
 const GRAD2: [(f64, f64); 8] = [(1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0), (1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)];
 
@@ -36,15 +40,17 @@ enum How {
 }
 
 impl Field {
-    /// `p` (clamped) for an object whose anchors centre on `centre`; `copy`: the copy's index and
+    /// `p` (clamped) for an object whose anchors centre on `centre` (read in radial mode only); `copy`: the copy's index and
     /// the number of copies when the row runs on the copies (`None`: on the object).
     pub fn new(p: &Displace, centre: Point, copy: Option<(usize, usize)>) -> Field {
         let amplitude = p.amplitude * ramp(p, copy);
+        // The loops are capped here too: `GeometryOp` and `shape_path` are public, so `p` may not
+        // have been through `clamped`.
         let how = match p.mode {
-            DisplaceMode::Spatial => How::Spatial { scale: p.scale, octaves: p.octaves, perm: perm_table(p.seed) },
+            DisplaceMode::Spatial => How::Spatial { scale: p.scale, octaves: p.octaves.min(MAX_OCTAVES), perm: perm_table(p.seed) },
             DisplaceMode::Radial => {
                 let (phase_sin, phase_cos) = sin_cos(phase(p.seed, copy.map_or(0, |c| c.0)));
-                How::Radial { centre, ripples: p.ripple_count, phase_cos, phase_sin }
+                How::Radial { centre, ripples: p.ripple_count.min(MAX_RIPPLES), phase_cos, phase_sin }
             }
         };
         Field { amplitude, how }
@@ -77,7 +83,8 @@ impl Field {
             }
             How::Radial { centre, ripples, phase_cos, phase_sin } => {
                 let v = p - *centre;
-                let dist = v.hypot();
+                // Plain √ (correctly rounded everywhere), not the platform's `hypot`.
+                let dist = (v.x * v.x + v.y * v.y).sqrt();
                 if dist <= 0.0 || !dist.is_finite() {
                     return Vec2::ZERO;
                 }
@@ -176,7 +183,7 @@ pub(super) fn simplex(x: f64, y: f64, p: &[u8]) -> f64 {
 /// by the weights (tlprocedural's `fbmNoise2D`).
 pub(super) fn fbm(x: f64, y: f64, octaves: u32, p: &[u8]) -> f64 {
     let (mut value, mut weight, mut frequency, mut total) = (0.0, 1.0, 1.0, 0.0);
-    for _ in 0..octaves.max(1) {
+    for _ in 0..octaves.clamp(1, MAX_OCTAVES) {
         value += simplex(x * frequency, y * frequency, p) * weight;
         total += weight;
         weight *= 0.5;
