@@ -6507,6 +6507,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "vectorcraft-stencil"
+version = "0.19.0"
+dependencies = [
+ "linesweeper",
+ "serde_json",
+ "vectorcraft-color",
+ "vectorcraft-doc",
+ "vectorcraft-geom",
+ "vectorcraft-modifiers",
+ "vectorcraft-pathops",
+ "vectorcraft-trace",
+]
+
+[[package]]
 name = "vectorcraft-svg"
 version = "0.19.0"
 dependencies = [
