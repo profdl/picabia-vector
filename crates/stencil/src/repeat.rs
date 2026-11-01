@@ -28,6 +28,18 @@ pub(crate) const MAX_BLOCK_CANDIDATES: usize = 200_000;
 /// The most tie bars repeated over the sheet.
 pub(crate) const MAX_REPEAT_BARS: usize = 100_000;
 
+/// The repeat cell a tile is cut from: the cell of `r`'s lattice containing the centre of
+/// `design` (with `margin` around it), its corners `o, o + a, o + a + b, o + b`; a strip's cell
+/// spans the design across the repeat. `None` where the stencil ignores the repeat (degenerate, or
+/// over [`MAX_CELLS`] cells on the sheet). The cell [`crate::compute_repeat`] tiles: frames and
+/// bounds use it before a result exists.
+pub fn tile_cell(r: Repeat, design: Rect, margin: f64) -> Option<[Point; 4]> {
+    let lat = Lattice::new(r, design, margin).ok()?;
+    let o = lat.cell_origin(lat.cell_at(design.abs().center()));
+    let c = [o, o + lat.a, o + lat.a + lat.b, o + lat.b];
+    c.iter().all(|p| p.x.is_finite() && p.y.is_finite()).then_some(c)
+}
+
 fn cross(u: Vec2, v: Vec2) -> f64 {
     u.x * v.y - u.y * v.x
 }

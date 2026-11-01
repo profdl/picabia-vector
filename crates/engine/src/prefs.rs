@@ -316,6 +316,13 @@ pub struct Prefs {
     /// preferences keeps it.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub import_matches: Vec<cmd::importmatches::ImportMatch>,
+    /// PICABIA: the laser export's remembered settings, and the laser machine profile (two
+    /// fields, so two windows' preference merges keep each); not Preferences dialog fields, kept
+    /// by a reset.
+    #[serde(skip_serializing_if = "Value::is_null")]
+    pub picabia_laser: Value,
+    #[serde(skip_serializing_if = "Value::is_null")]
+    pub picabia_machine: Value,
 }
 
 impl Default for Prefs {
@@ -479,6 +486,8 @@ impl Default for Prefs {
             blend_options: None,
             perspective_widget: Default::default(),
             import_matches: vec![],
+            picabia_laser: Value::Null,   // PICABIA: the laser export's settings.
+            picabia_machine: Value::Null, // PICABIA: the laser machine profile.
         }
     }
 }

@@ -14,17 +14,42 @@ use serde_json::{Map, Value, json};
 use vectorcraft_doc::{Document, NodeId};
 use vectorcraft_modifiers::{Modifier, Stack};
 
-use super::{CommandSpec, cmd, has_doc, has_selection, ok, targets};
+use super::{CommandSpec, always, cmd, has_doc, has_selection, ok, targets};
 use crate::{EngineError, Result, Session};
 
 /// The kinds `modifier.add` takes, for messages.
 const KIND_LIST: &str = "linearArray|circularArray|gridArray|mirror|transformEach|randomize|wallpaper|copyToShape|stencil";
 
 /// Picabia's state in a [`Session`] (its `picabia` field), not saved.
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub(crate) struct PicabiaState {
     /// The modifier rows `modifier.copy` copied (each one modifier object), for `modifier.paste`.
     pub(crate) copied_modifiers: Vec<Value>,
+    /// The laser link (`laser.*`, [`super::picabia_laser_link`]); dropping it stops a running job.
+    pub(crate) laser: super::picabia_laser_link::LaserLink,
+    /// What the connected laser machine reports, for the G-code commands' defaults (the laser
+    /// link fills it while connected; empty: the machine profile's values are used).
+    pub(crate) laser_machine: LaserMachine,
+}
+
+/// What a connected laser machine reports ([`PicabiaState::laser_machine`]). The G-code commands
+/// only read it: they write text and never talk to a machine.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LaserMachine {
+    /// GRBL `$30`: `S` at full power.
+    pub s_max: Option<f64>,
+    /// GRBL `$130` / `$131`: the X and Y travel, mm.
+    pub travel_x_mm: Option<f64>,
+    pub travel_y_mm: Option<f64>,
+}
+
+impl PicabiaState {
+    /// What the connected laser machine reports: read live from the laser link while it is open
+    /// (its settings arrive after `laser.connect`, between commands), else
+    /// [`PicabiaState::laser_machine`] (the link's last copy, cleared when it closes).
+    pub(crate) fn machine_reports(&self) -> LaserMachine {
+        self.laser.reports().unwrap_or_else(|| self.laser_machine.clone())
+    }
 }
 
 impl Session {
@@ -143,6 +168,69 @@ pub fn specs() -> Vec<CommandSpec> {
             "{id?: the object (default: the first selected), modifier?: id | index?: a copyToShape row (also its target, valid, reason?)} → {id, targets: [{id, name, kind}] (the objects it can copy onto, in layer order)}",
             has_doc,
             targets::list_targets
+        ),
+        cmd!(
+            query "modifier.stencilInfo",
+            "Stencil Info",
+            [],
+            None,
+            "{id?: the object (default: the first selected)} (computes the stencil when it is out of date) → {id, stencil: the stencil row's id (null when the object's stack has none), colours: [{hex, cut, area (mm², visible)}], warnings: […], stats: {cutPieces, droppedSpecks, filledHoles, cutLengthMm, areaCutMm2, islands, ties, untied, patternHeld, repeatIslands (islands per repeat cell), problems: {narrowPaper, narrowCut, smallCut, smallHole, sharpCorner, untied}}, islands: [{x, y, w, h (bounds, document space), tied (tie bars holding it), patternHeld, depth (0: in a cut-out of the sheet)}], problems: [{kind, x, y, w, h}] (at most 500), hoshi: [{x, y}] (registration hole centres), repeat: {ax, ay, bx, by} | null (the lattice when repeat-aware), cell: [{x, y} ×4] | null (the repeat cell), sheetMm: {w, h} (the whole design's sheet), tile: {w, h} | null (mm, tile output), materials: [{id, minCutWidthMm, minBridgeMm, tieWidthMm, minCornerAngle, kerfMm}] (presets), shapes (outlines gathered)}",
+            has_doc,
+            stencil::stencil_info
+        ),
+        cmd!(
+            "modifier.stencilFromSelection",
+            "Make Stencil",
+            [],
+            None,
+            "{ids?|id?: the objects (default: the selection), props?: the stencil's params (camelCase; the ones modifier.add takes for a stencil)} one object takes a stencil row itself; several are grouped first (a group named Stencil, where the front-most was), one undo step with the row → {id: the stencil object (selected), modifier}",
+            has_selection,
+            stencil::stencil_from_selection
+        ),
+        cmd!(
+            query "modifier.stencilExport",
+            "Export for Laser…",
+            [],
+            None,
+            "{id?: the stencil object (default: the first selected), path?: the .svg to write (several sheets: \" 1\", \" 2\"… before the extension), data?: true: return the files as base64, dryRun?: true: only describe the sheets (nothing written or returned and the settings not remembered: the dialog's summary; with none of path or data or dryRun nothing is made and the result is what the dialog opens with: {dialog: \"stencilExport\", id, params}), kerfMm? (0-2; default the stencil material's kerf, custom: the remembered one), bedWidthMm?, bedHeightMm? (10-5000 mm; 0 = no limit; a bigger sheet is split into overlapping sheets), overlapMm? (0-200), cutColour?, engraveColour?, scoreColour? (\"#rrggbb\"), label? (engrave the object's name, size, material, sheet number and THIS SIDE UP)} SVG for laser software such as LightBurn: the drawn cut (one tile with tile output), mm, kerf-compensated, inner cuts first; settings not given: the ones used last; computes the stencil when it is out of date → {id, files: [{name, path | data, sheet (\"1 of 2\"), wMm, hMm, contours, loosePieces}], sheets, warnings, params {kerfMm, bedWidthMm, bedHeightMm, overlapMm, cutColour, engraveColour, scoreColour, label} (remembered for next time)}",
+            has_doc,
+            laser::export
+        ),
+        cmd!(
+            query "modifier.stencilTestCard",
+            "Laser Test Card…",
+            [],
+            None,
+            "{id?: a stencil object (default: the first selected, when it is one), material? (paper|film|card|custom; default the stencil's, else paper; custom needs a stencil: its limits), kind? (card (default): a 120 × 80 mm card of bridges, holes, slits, corners and a kerf gauge at the material's limits | powerLadder: a grid of squares each cut at its own power and speed, G-code only), format? (svg | gcode; default svg for the card, gcode for the ladder), kerfMm?, path?, data?, dryRun? (as modifier.stencilExport; none: {dialog: \"stencilTestCard\", id, material, params, format, kind, gcode?}), cutColour?, engraveColour?, scoreColour? (svg), sMax?, originXMm?, originYMm?, air?, cut?, score?, engrave? (G-code settings, as modifier.stencilGcode), powersPct?, speedsMmMin? (the ladder's columns and rows, at most 12 each), squareMm? (2-50), gapMm? (1-50), passes? (1-20)} → {files: [{name, path | data, sheet, wMm, hMm, contours, loosePieces (svg) | lines, estimatedSec, burnMm, travelMm, boundsMm {x0, y0, x1, y1}, warnings (gcode)}], sheets: 1, warnings, material, params, kind? and gcode? (gcode), ladder? {powersPct, speedsMmMin, squareMm, gapMm, passes}}",
+            always,
+            laser::test_card
+        ),
+        cmd!(
+            query "modifier.stencilGcode",
+            "Export G-code for Laser…",
+            [],
+            None,
+            "{id?, path?: the .gcode to write (several sheets: \" 1\", \" 2\"… before the extension), data?, dryRun? (as modifier.stencilExport; none: {dialog: \"stencilExport\", id, format: \"gcode\", material, params, gcode}), material? (paper|film|card|custom: whose operation settings; default the stencil's), kerfMm?, bedWidthMm?, bedHeightMm? (default the machine profile's bed, less where the connected machine's travel is smaller; a bigger sheet is split), overlapMm?, label?, sMax? (S at full power; default the connected machine's $30, else the profile's), originXMm?, originYMm? (where the sheet's bottom-left sits in work coordinates, mm, ±5000; default 0, 0), air? (M8/M9; default the profile's), cut?, score?, engrave? ({enabled?, speedMmMin? (1-20000), powerPct? (0-100), passes? (1-20)}, over the material's remembered settings)} GRBL 1.1 laser mode G-code, written as text only (never sent): G21 G90, M4 dynamic power, engrave then score then cut, inner contours first, beam off (M5) at both ends, park at the origin; Y up from the sheet's bottom-left → {id, files: [{name, path | data, sheet, wMm, hMm, lines, estimatedSec, burnMm, travelMm, boundsMm {x0, y0, x1, y1}, warnings}], sheets, warnings, material, params (the laser settings used), gcode {sMax, originXMm, originYMm, air, cut, score, engrave} (op settings remembered per material in the machine profile)}",
+            has_doc,
+            laser_gcode::stencil_gcode
+        ),
+        cmd!(
+            query "laser.gcode",
+            "Export Design G-code for Laser…",
+            [],
+            None,
+            "{ids?|id?: the objects (default: the selection; a single stencil object is exported as modifier.stencilGcode), kerfMm?, overlapMm?, label?, bedWidthMm?, bedHeightMm? (a single stencil object's only), path?: the .gcode to write, data?, dryRun? (as modifier.stencilExport; none: {dialog: \"laserGcode\", ids, material, gcode}), material? (paper|film|card|custom: whose operation settings; default paper), mmPerUnit? (mm per document unit, 0.001-100; default 25.4/72: a point), widthMm? (scale the objects' bounds to this width instead), sMax?, originXMm?, originYMm?, air?, cut?, score?, engrave? (as modifier.stencilGcode)} the objects' visible outlines as one G-code file (text only, never sent): mm, origin at their bounds' top-left; closed outlines cut (inner first, nearest neighbour, the largest outermost last), open paths along their line with the score settings, type as glyph outlines, modifier copies included; no kerf compensation, no sheet outline → {files: [{name, path | data, sheet (\"design\"), wMm, hMm, lines, estimatedSec, burnMm, travelMm, boundsMm, warnings}], sheets: 1, warnings, material, mmPerUnit, gcode}",
+            has_doc,
+            laser_design::gcode
+        ),
+        cmd!(
+            query "laser.profile",
+            "Laser Machine Profile",
+            [],
+            None,
+            "{set?: {name?, bedWidthMm?, bedHeightMm? (10-5000), sMax? (1-100000), rapidMmMin? (10-20000), air?, checked? (the values were checked on the machine), origin? (head: work 0,0 is where the person pressed Set origin, the sheet's bottom-left (default) | machine: work coordinates are the bed's), materials?: {paper|film|card|custom: {cut?, score?, engrave?: {enabled?, speedMmMin?, powerPct?, passes?}}}} (merged into the saved profile)} → {profile {name, bedWidthMm, bedHeightMm, sMax, rapidMmMin, air, checked, origin, materials}, bedMm {w, h}, sMaxUsed, sMaxMachine | null, materialDefaults {paper|film|card|custom: {cut, score, engrave}}} (defaults: the owner's X-Carve, 584.2 × 1219.2 mm, $30 1000, rapid 3000 mm/min, no air: guesses until checked)",
+            always,
+            laser_gcode::profile
         ),
     ]
 }
@@ -410,6 +498,11 @@ fn remove_all(s: &mut Session, p: &Value) -> Result<Value> {
 
 mod apply;
 mod export;
+mod laser;
+mod laser_design;
+pub mod laser_gcode;
+pub(crate) mod laser_run;
+mod stencil;
 mod targets;
 pub(crate) use export::{bake_copies, baked_export, export_warning};
 pub use targets::{check_target, target_choices};
@@ -420,6 +513,10 @@ mod apply_tests;
 mod canvas_tests;
 #[cfg(test)]
 mod export_tests;
+#[cfg(test)]
+mod laser_tests;
+#[cfg(test)]
+mod stencil_tests;
 #[cfg(test)]
 mod targets_tests;
 #[cfg(test)]

@@ -1361,4 +1361,17 @@ pub const UI_COMMANDS: &[(&str, &str, &str, &str)] = &[
         "",
         "{plane?: left|right|ground (default: the active plane)} open the plane's options, as double-clicking its plane widget does (dialog `perspectivePlane`: location (pt along the plane's normal), objects: none|move|copy): OK runs perspective.plane.move",
     ),
+    // PICABIA: the Laser window and the Stencil window (`picabia_ui::command`).
+    (
+        crate::picabia_ui::LASER_PANEL,
+        "Laser…",
+        "",
+        "{} open the Laser window: connect to a GRBL laser (real ports only in the desktop app) or the simulator, jog, frame, start a job through its safety checklist (only a person's click there arms the laser), pause, resume and stop (Shift+Esc anywhere); the machine profile",
+    ),
+    (
+        crate::picabia_ui::STENCIL_SETTINGS,
+        "Stencil Settings…",
+        "",
+        "{} open the Stencil window: the first selected object's stencil settings (modifier.set of its stencil row), its stats and problems, Export for Laser…, Test Card…; Make Stencil for an object without one",
+    ),
 ];

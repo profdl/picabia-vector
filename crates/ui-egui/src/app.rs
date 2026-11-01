@@ -135,6 +135,7 @@ impl VectorcraftApp {
             plugin_runs: Default::default(),
             placing: Default::default(),
             trace_runs: Default::default(),
+            picabia: Default::default(), // PICABIA: Picabia's UI state
             recovery: Default::default(),
             host_modifiers: Default::default(),
             forwarded: Vec::new(),
@@ -242,6 +243,7 @@ impl VectorcraftApp {
     pub fn tick(&mut self, ctx: &egui::Context) {
         let confined = self.synthetic_frame.then(|| self.automation_roots.clone()).flatten();
         if let Err(msg) = file_access::confine(confined.as_ref(), || vectorcraft_engine::guard::catch_panic(|| self.tick_frame(ctx))) {
+            self.session.laser_emergency_stop(); // PICABIA: a panicking frame stops a running laser job.
             self.picks.recover();
             self.status(format!("Internal error: {msg} (please report this bug)"));
         }
@@ -304,6 +306,8 @@ impl VectorcraftApp {
         opening::poll(self);
         plugin_runs::poll(self);
         trace_runs::poll(self);
+        // PICABIA: stale stencil sheets recompute off the UI thread (web: once settled); repaint while one is coming.
+        let picabia_busy = vectorcraft_engine::picabia_stencil::poll(&self.session, now);
         placing::poll(self);
         #[cfg(not(target_arch = "wasm32"))]
         self.tick_link_updates(ctx, now);
@@ -312,6 +316,8 @@ impl VectorcraftApp {
             || !self.plugin_runs.running.is_empty()
             || !self.placing.pending.is_empty()
             || !self.trace_runs.running.is_empty()
+            || picabia_busy
+        // PICABIA: a stencil sheet is coming.
         {
             // Keep the status bar's progress moving and pick the result up when it arrives.
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -455,6 +461,7 @@ impl VectorcraftApp {
                 self.ui_frame(ui);
             })
         }) {
+            self.session.laser_emergency_stop(); // PICABIA: a panicking frame stops a running laser job.
             self.picks.recover();
             self.status(format!("Internal error: {msg} (please report this bug)"));
         }
@@ -506,6 +513,7 @@ impl VectorcraftApp {
         export_progress::show(self, &ctx);
         plugin_runs::show(self, &ctx);
         trace_runs::show(self, &ctx);
+        crate::picabia_ui::show(self, &ctx); // PICABIA: the Laser window (or its Stop bar), the Stencil window, stencil markers
         palette::show(self, &ctx);
         if self.custom_titlebar {
             titlebar::resize_zones(ui);

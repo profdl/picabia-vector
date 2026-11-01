@@ -59,6 +59,9 @@ pub fn menu_tree_named(english_names: bool) -> Vec<(&'static str, Vec<Item>)> {
                     ],
                 ),
                 c("Export Selection…", "file.exportSelection"),
+                // PICABIA: laser export and the Laser window.
+                c("Export G-code for Laser…", "laser.gcode"),
+                c("Laser…", crate::picabia_ui::LASER_PANEL),
                 Sep,
                 c("Package…", "ui.packageDialog"),
                 sub("Scripts", vec![c("Check Script…", "ui.checkScript"), todos("Other Script…", "Cmd+F12")]),
@@ -667,6 +670,7 @@ pub fn menu_tree_named(english_names: bool) -> Vec<(&'static str, Vec<Item>)> {
                     type_items
                 }),
                 panel("Variables", crate::panels::variables::ID),
+                c("Stencil Settings…", crate::picabia_ui::STENCIL_SETTINGS), // PICABIA: the Stencil window
             ];
             sort_by_localized_label(&mut panels, lang);
             window_items.extend(panels);
