@@ -65,7 +65,7 @@ fn pdf_eps_dxf_and_metafiles_write_every_copy() {
     // An EPS VectorCraft wrote carries the document itself: it reopens live, and its PostScript
     // draws the copies for other software (five filled rectangles).
     let out = ex(&mut s, "document.serialize", json!({"format": "eps"}));
-    assert!(warned(&out), "{out}");
+    assert!(!warned(&out), "the EPS keeps the stack: {out}");
     let eps = vectorcraft_format::base64_decode(out["dataBase64"].as_str().unwrap()).unwrap();
     let t = reopen("live.eps", &out["dataBase64"]);
     assert_eq!(paths(&t.doc().unwrap().doc), (1, 1), "the EPS restores the live stack");
@@ -88,4 +88,29 @@ fn raster_exports_draw_every_copy_and_the_native_file_bakes_nothing() {
     assert_eq!(at(110)[3], 0, "between copies is empty");
     let out = ex(&mut s, "document.serialize", json!({"format": "vectorcraft"}));
     assert!(!warned(&out));
+}
+
+/// Only a file that drops the stack warns, and SVG and PDF say how to keep it.
+#[test]
+fn the_warning_names_what_drops_the_stack() {
+    let (mut s, _) = arrayed();
+    let text = |out: &Value| {
+        out["warnings"].as_array().into_iter().flatten().filter_map(Value::as_str).find(|w| w.contains("modifier copies")).map(str::to_string)
+    };
+    for (p, keeps) in [
+        (json!({"format": "svg"}), false),
+        (json!({"format": "svg", "preserveEditing": true}), true),
+        (json!({"format": "pdf"}), true),
+        (json!({"format": "pdf", "preserveEditing": false}), false),
+        (json!({"format": "eps"}), true),
+        (json!({"format": "vectorcraft"}), true),
+        (json!({"format": "dxf"}), false),
+        (json!({"format": "png"}), true),
+    ] {
+        let w = text(&ex(&mut s, "document.serialize", p.clone()));
+        assert_eq!(w.is_none(), keeps, "{p}: {w:?}");
+        if p["format"] == "svg" || p["format"] == "pdf" {
+            assert!(w.is_none_or(|w| w.contains("Preserve Editing")), "{p}");
+        }
+    }
 }

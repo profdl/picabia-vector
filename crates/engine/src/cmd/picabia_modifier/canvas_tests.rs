@@ -64,3 +64,15 @@ fn a_marquee_over_a_copy_takes_its_object() {
     s.pointer(&PointerEvent::new(PointerKind::Up, 515.0, 10.0), v).unwrap();
     assert_eq!(s.doc().unwrap().selection.objects, [r]);
 }
+
+#[test]
+fn direct_selections_marquee_takes_the_members_of_a_groups_copies() {
+    let mut s = super::tests::session();
+    let (a, b) = (rect(&mut s, 0.0), rect(&mut s, 200.0));
+    let g = super::tests::id_of(&ex(&mut s, "object.group", json!({"ids": [a.0, b.0]}))["id"]);
+    ex(&mut s, "modifier.add", json!({"ids": [g.0], "kind": "linearArray", "props": {"count": 2, "offsetX": 0, "offsetY": 300}}));
+    let d = &s.doc().unwrap().doc;
+    // Across the left edge of the lower copy of `b` only (b is 200..300 x 0..100; the copy 300 lower).
+    assert_eq!(marquee(d, Rect::new(190.0, 340.0, 210.0, 360.0), None, true), [b]);
+    assert_eq!(marquee(d, Rect::new(-10.0, 290.0, 400.0, 420.0), None, true), [a, b], "each member once");
+}

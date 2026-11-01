@@ -90,10 +90,15 @@ what clicks, hover and marquees hit (a copy hits as its object).
 - **Transparency once.** The object's opacity, blending mode, isolation and opacity mask apply once,
   to all its copies together (as for Crop Marks): overlapping copies of a half-transparent object
   don't darken each other. (picabia-craft composited each copy on its own.)
-- Members of a copied group keep their own stacks, within one budget (`MAX_NESTED_COPIES`, 10 000;
-  past it the members draw once in each copy).
+- Members of a copied group keep their own stacks, within one budget (`MAX_NESTED_COPIES`, 10 000
+  objects drawn, the counts multiplied across nesting levels; past it the members draw once in each
+  copy). An object whose copies would clone more than 100 000 objects (`MAX_ART_NODES`, as
+  `modifier.apply`'s cap) draws once, and `modifier.list` says why.
+- Copies never knock each other out (members inside each copy still do, as the object says).
+- `modifier.apply` bakes exactly what is drawn: the same pivot, the copies inside a group that takes
+  the object's opacity, blending mode and opacity mask.
 - An object whose stack makes no copies (no active row, a single unmoved copy, a missing
-  copy-to-shape target) draws as itself.
+  copy-to-shape target) draws exactly as VectorCraft draws it without the stack.
 
 ## Export
 

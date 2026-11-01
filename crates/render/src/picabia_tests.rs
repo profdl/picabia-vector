@@ -165,9 +165,11 @@ fn redraw_matches(old: &Document, new: &Document, what: &str) {
         }
     }
     let at = |p: &[u8], i: u32| p[(i * 4) as usize..(i * 4 + 4) as usize].to_vec();
-    // Within 2 of 255 a channel: the copies' transformed geometry can round a hair differently
-    // drawn from another origin.
-    let near = |a: Vec<u8>, b: Vec<u8>| a.iter().zip(&b).all(|(x, y)| x.abs_diff(*y) <= 2);
+    // Within 1 of 255 a channel: a moved object's anti-aliased edge drawn from the dirty rect's
+    // origin can differ by one step from the whole view's, upstream too: a plain object moved by
+    // the same amount (`redraws_after_an_edit_match_full_renders_without_stacks`) differs at the
+    // same pixel, by 1. The dirty rect itself covers every changed pixel.
+    let near = |a: Vec<u8>, b: Vec<u8>| a.iter().zip(&b).all(|(x, y)| x.abs_diff(*y) <= 1);
     let diff: Vec<_> = (0..W * H)
         .filter(|i| !near(at(&patched, *i), at(&after.pixels, *i)))
         .map(|i| (i % W, i / W, at(&patched, i), at(&after.pixels, i)))
@@ -237,4 +239,152 @@ fn nested_stacks_share_one_copy_budget() {
     assert!(matches!(a.kind, NodeKind::Group { .. }));
     assert!(!vectorcraft_modifiers::has_modifiers(&a), "the art carries no stack");
     let _ = Arc::strong_count(&a);
+}
+
+/// The same move on a plain object (no stack, upstream's own drawing): its redraw differs from
+/// the whole view by one step at an edge pixel too, which is why `redraw_matches` allows 1.
+#[test]
+fn redraws_after_an_edit_match_full_renders_without_stacks() {
+    let (d, r) = doc();
+    let mut nd = d.clone();
+    nd.node_mut(r).unwrap().transform(Affine::translate((30.0, 20.0)), false);
+    redraw_matches(&d, &nd, "plain object moved");
+    // Exactly: the patched redraw and the whole view differ, by at most 1.
+    let view = Affine::translate((3.3, 2.7)) * Affine::scale(1.37);
+    let opts = RenderOptions::default();
+    let whole = Renderer::new().render(&nd, 560, 150, view, &opts);
+    let Changed::Area(area) = changed(&d, &nd) else { panic!("an area changed") };
+    let [x0, y0, x1, y1] = view_pixels(area, view, 560, 150).unwrap();
+    let part = Renderer::new().render(&nd, x1 - x0, y1 - y0, Affine::translate((-f64::from(x0), -f64::from(y0))) * view, &opts);
+    let (mut same, mut off_by_one) = (true, true);
+    for y in 0..y1 - y0 {
+        for x in 0..x1 - x0 {
+            let a = ((y * (x1 - x0) + x) * 4) as usize;
+            let b = (((y0 + y) * 560 + x0 + x) * 4) as usize;
+            for k in 0..4 {
+                let (p, q) = (part.pixels[a + k], whole.pixels[b + k]);
+                same &= p == q;
+                off_by_one &= p.abs_diff(q) <= 1;
+            }
+        }
+    }
+    assert!(!same && off_by_one, "upstream's own partial redraw differs by one step somewhere, never more");
+}
+
+fn effect(id: &str, params: serde_json::Value) -> vectorcraft_doc::Effect {
+    vectorcraft_doc::Effect { id: id.into(), params, visible: true }
+}
+
+#[test]
+fn a_stack_that_makes_no_copies_draws_and_measures_exactly_as_upstream() {
+    let (mut d, r) = doc();
+    {
+        let n = d.node_mut(r).unwrap();
+        n.appearance.effects.push(effect("distort.zigZag", serde_json::json!({"size": 4.0, "ridges": 5.0})));
+        n.appearance.effects.push(effect("stylize.dropShadow", serde_json::json!({"x": 6.0, "y": 6.0, "blur": 2.0, "opacity": 75.0})));
+    }
+    let region = Rect::new(0.0, 0.0, 80.0, 60.0);
+    let want = render(&d, region).pixels;
+    let want_bounds = painted_bounds(&d, d.node(r).unwrap());
+    // One unmoved copy, and a copy-to-shape row whose target is gone.
+    let gone = r#"{"v":1,"stack":[{"id":"m1","kind":"copyToShape","target":"99999"}]}"#;
+    for src in [r#"{"v":1,"stack":[{"id":"m1","kind":"linearArray","count":1}]}"#, gone] {
+        let mut s = d.clone();
+        set_stack(&mut s, r, Some(src));
+        assert!(has_stack(s.node(r).unwrap()) && !draws_copies(&s, s.node(r).unwrap()), "{src}");
+        assert!(render(&s, region).pixels == want, "{src}: drawn as upstream draws it");
+        assert_eq!(painted_bounds(&s, s.node(r).unwrap()), want_bounds, "{src}");
+    }
+}
+
+#[test]
+fn a_copy_to_shape_source_inside_a_group_follows_its_moved_target() {
+    let (mut d, r) = doc();
+    let l = d.layers[0].id;
+    let ring = Node::path(d.alloc_id(), shapes::ellipse(Rect::new(100.0, 10.0, 200.0, 90.0)), Appearance::basic(Paint::None, Paint::None, 0.0));
+    let t = d.insert(Some(l), 1, ring).unwrap();
+    let src = format!(r#"{{"v":1,"stack":[{{"id":"m1","kind":"copyToShape","target":"{}","mode":"alongPath","count":6}}]}}"#, t.0);
+    set_stack(&mut d, r, Some(&src));
+    let gid = d.alloc_id();
+    d.wrap(&[r], |c| Node::group(gid, c)).unwrap();
+    let mut nd = d.clone();
+    nd.node_mut(t).unwrap().transform(Affine::translate((150.0, 0.0)), false);
+    redraw_matches(&d, &nd, "target of a grouped source moved");
+    let opts = RenderOptions { background: Some([255, 255, 255, 255]), ..Default::default() };
+    let mut renderer = Renderer::new();
+    let _ = renderer.render(&d, 400, 100, Affine::IDENTITY, &opts);
+    let after = renderer.render(&nd, 400, 100, Affine::IDENTITY, &opts);
+    let fresh = Renderer::new().render(&nd, 400, 100, Affine::IDENTITY, &opts);
+    assert!(after.pixels == fresh.pixels, "the group's kept bounds and art don't hold stale copies");
+}
+
+#[test]
+fn copies_of_a_knockout_group_dont_knock_each_other_out() {
+    let (mut d, r) = doc();
+    d.node_mut(r).unwrap().opacity = 0.5;
+    let gid = d.alloc_id();
+    let g = d.wrap(&[r], |c| Node::group(gid, c)).unwrap();
+    d.node_mut(g).unwrap().knockout = vectorcraft_doc::Knockout::On;
+    // Two copies overlapping by half: in the overlap both show (darker than one alone).
+    set_stack(&mut d, g, Some(&linear(2, 10.0)));
+    let pix = render(&d, Rect::new(0.0, 0.0, 60.0, 40.0));
+    let (one, both) = (px(&pix, 15, 20), px(&pix, 25, 20));
+    assert!(both[1] < one[1], "overlap {both:?} darker than one copy {one:?}");
+}
+
+#[test]
+fn nested_copies_multiply_and_count_copy_to_shape_members() {
+    let (mut d, r) = doc();
+    let l = d.layers[0].id;
+    let ring = Node::path(d.alloc_id(), shapes::ellipse(Rect::new(100.0, 10.0, 200.0, 90.0)), Appearance::basic(Paint::None, Paint::None, 0.0));
+    let t = d.insert(Some(l), 1, ring).unwrap();
+    // The member copies 100 times onto the ring; the group copies 90 times: 9 000 drawn objects
+    // inside one budget of 10 000 (an inner count of 1, as without the document, would undercount).
+    let src = format!(r#"{{"v":1,"stack":[{{"id":"m1","kind":"copyToShape","target":"{}","mode":"alongPath","count":100}}]}}"#, t.0);
+    set_stack(&mut d, r, Some(&src));
+    let gid = d.alloc_id();
+    let g = d.wrap(&[r], |c| Node::group(gid, c)).unwrap();
+    set_stack(&mut d, g, Some(&linear(90, 0.5)));
+    let a = art(&d, d.node(g).unwrap()).unwrap();
+    assert!(vectorcraft_modifiers::has_modifiers(&a.children().unwrap()[0].children().unwrap()[0]), "9 000: within the budget");
+    set_stack(&mut d, g, Some(&linear(200, 0.5)));
+    let a = art(&d, d.node(g).unwrap()).unwrap();
+    assert!(!vectorcraft_modifiers::has_modifiers(&a.children().unwrap()[0].children().unwrap()[0]), "20 000: members draw once");
+}
+
+#[test]
+fn an_art_over_the_node_cap_draws_once_with_a_reason() {
+    let (mut d, r) = doc();
+    let l = d.layers[0].id;
+    // A group of 200 rectangles, copied 1 000 times: 201 000 nodes to clone.
+    let kids: Vec<Arc<Node>> = (0..200).map(|i| Arc::new(red_rect(&mut d, Rect::new(f64::from(i), 0.0, f64::from(i) + 1.0, 1.0)))).collect();
+    let gid = d.alloc_id();
+    let g = d.insert(Some(l), 1, Node::group(gid, kids)).unwrap();
+    set_stack(&mut d, g, Some(&linear(1000, 1.0)));
+    let n = d.node(g).unwrap();
+    assert!(art(&d, n).is_none() && !draws_copies(&d, n));
+    assert!(too_big(&d, n).is_some_and(|m| m.contains("100000")), "{:?}", too_big(&d, n));
+    assert!(too_big(&d, d.node(r).unwrap()).is_none());
+}
+
+#[test]
+fn nothing_is_walked_for_a_document_without_stacks() {
+    let (d, r) = doc();
+    assert_eq!(doc_flags(&d), Flags::default());
+    let mut nd = d.clone();
+    nd.node_mut(r).unwrap().transform(Affine::translate((5.0, 0.0)), false);
+    assert!(dependents(&d, &nd).is_none());
+    let layer = d.layers[0].clone();
+    assert!(!holds_copies(&layer));
+    // A container is flagged once and kept by its identity.
+    assert_eq!(subtree_flags(&layer), subtree_flags(&layer));
+}
+
+#[test]
+fn the_art_is_kept_for_the_same_object() {
+    let (mut d, r) = doc();
+    set_stack(&mut d, r, Some(&linear(3, 40.0)));
+    let n = d.node(r).unwrap();
+    let (a, b) = (art(&d, n).unwrap(), art(&d, n).unwrap());
+    assert!(Arc::ptr_eq(&a, &b));
 }

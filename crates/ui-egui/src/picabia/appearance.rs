@@ -197,7 +197,11 @@ pub fn rows(app: &mut VectorcraftApp, ui: &mut Ui, n: &Node, mixed: bool) {
         return;
     }
     let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return };
-    let out = vectorcraft_modifiers::evaluate_with(&stack, vectorcraft_modifiers::node_bounds(n), &vectorcraft_modifiers::DocTargets::new(&doc, n.id));
+    let out = vectorcraft_modifiers::evaluate_with(
+        &stack,
+        vectorcraft_modifiers::node_bounds_in_doc(&doc, n),
+        &vectorcraft_modifiers::DocTargets::new(&doc, n.id),
+    );
     let selected: Option<usize> = pstate::<Option<usize>>(ui.ctx(), "pc-row").filter(|i| *i < stack.len());
     for (i, m) in stack.modifiers.iter().enumerate() {
         modifier_row(app, ui, &doc, n.id, &stack, i, m, selected == Some(i));

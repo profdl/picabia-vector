@@ -32,7 +32,7 @@
 use std::sync::Arc;
 
 use serde_json::{Value, json};
-use vectorcraft_doc::{Document, Node, NodeId, NodeKind, Scaling};
+use vectorcraft_doc::{Document, Node, NodeId, NodeKind};
 use vectorcraft_geom::{Affine, Vec2};
 use vectorcraft_modifiers::{MirrorAxis, ModifierKind, Stack};
 
@@ -94,8 +94,9 @@ pub(super) fn apply(s: &mut Session, p: &Value) -> Result<Value> {
         super::super::typecmd::refresh_bounds_of(d, &copy_ids);
         // The rows after `upTo` keep running on the group.
         for (gid, rest, pivot) in live {
+            let g = d.node(gid).ok_or_else(|| super::super::bad(CMD, "the new group is gone"))?;
+            let rest = repivot(rest, pivot - vectorcraft_modifiers::node_bounds_in_doc(d, g).center());
             let g = d.node_mut(gid).ok_or_else(|| super::super::bad(CMD, "the new group is gone"))?;
-            let rest = repivot(rest, pivot - vectorcraft_modifiers::node_bounds(g).center());
             vectorcraft_modifiers::set_node_source(g, Some(vectorcraft_modifiers::to_json(&rest)));
         }
         sel.set(applied.iter().map(|a| a.1));
@@ -124,7 +125,8 @@ fn plan(doc: &Document, id: NodeId, up_to: Option<usize>, budget: &mut usize) ->
     let baked = Stack { modifiers: stack.modifiers.get(..=cut).map(<[_]>::to_vec).unwrap_or_default(), ..stack.clone() };
     let rest = Stack { modifiers: stack.modifiers.get(cut + 1..).map(<[_]>::to_vec).unwrap_or_default(), ..stack };
     let node = doc.node(id).ok_or_else(|| super::super::bad(CMD, format!("no object with id {}", id.0)))?;
-    let bounds = vectorcraft_modifiers::node_bounds(node);
+    // The pivot the renderer uses (a symbol instance pivots on its art).
+    let bounds = vectorcraft_modifiers::node_bounds_in_doc(doc, node);
     let out = vectorcraft_modifiers::evaluate_with(&baked, bounds, &vectorcraft_modifiers::DocTargets::new(doc, id));
     let unmoved = matches!(out.instances.as_slice(), [one] if one.transform == Affine::IDENTITY);
     if out.instances.is_empty() || unmoved {
@@ -160,14 +162,19 @@ fn replaceable(doc: &Document, node: &Node) -> Result<()> {
 
 /// The group of `plan.id`'s copies (not in the tree yet), and the copies' ids.
 fn bake(d: &mut Document, plan: &Plan) -> Result<(Node, Vec<NodeId>)> {
-    let node = d.node(plan.id).cloned().ok_or_else(|| super::super::bad(CMD, format!("no object with id {}", plan.id.0)))?;
-    let sc = Scaling {
-        strokes: true,
-        effects: Some(vectorcraft_render::effects::scale_effect),
-        keep_type_strokes: false,
-        keep_corners: false,
-        patterns: true,
-    };
+    let mut node = d.node(plan.id).cloned().ok_or_else(|| super::super::bad(CMD, format!("no object with id {}", plan.id.0)))?;
+    // The object's transparency and its own attributes go on the group, as the renderer draws
+    // the copies (composited together, once): the copies are the object without them.
+    let gid = d.alloc_id();
+    let mut group = Node::group(gid, vec![]);
+    group.name = node.name.clone();
+    group.opacity = std::mem::replace(&mut node.opacity, 1.0);
+    group.blend = std::mem::take(&mut node.blend);
+    group.isolate = std::mem::take(&mut node.isolate);
+    group.extras_mut().mask = node.extras_mut().mask.take();
+    group.extras_mut().attrs = node.extras_mut().attrs.take();
+    vectorcraft_modifiers::set_node_source(&mut group, None);
+    let sc = vectorcraft_render::picabia::scaling();
     let mut kids = Vec::with_capacity(plan.copies.len());
     for (k, t) in plan.copies.iter().enumerate() {
         let mut c = d.reid(&node);
@@ -183,9 +190,9 @@ fn bake(d: &mut Document, plan: &Plan) -> Result<(Node, Vec<NodeId>)> {
         kids.push(Arc::new(c));
     }
     let copy_ids: Vec<NodeId> = kids.iter().map(|c| c.id).collect();
-    let gid = d.alloc_id();
-    let mut group = Node::group(gid, kids);
-    group.name = node.name.clone();
+    if let Some(ch) = group.children_mut() {
+        *ch = kids;
+    }
     Ok((group, copy_ids))
 }
 

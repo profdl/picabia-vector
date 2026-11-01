@@ -10,10 +10,10 @@ impl Renderer {
     /// measured by their art box from `symbols`.
     pub(crate) fn bounds_of(&mut self, symbols: &SymbolBoxes, a: &Arc<Node>) -> Option<Rect> {
         let key = Arc::as_ptr(a) as usize;
+        // PICABIA: what holds a copy-to-shape source follows its target (`&& !holds_targets`).
         if let Some(e) = self.geom.get_mut(&key)
             && Arc::ptr_eq(&e.node, a)
-            && !crate::picabia::has_targets(a)
-        // PICABIA: copy-to-shape copies follow their target
+            && !crate::picabia::holds_targets(a)
         {
             e.stamp = self.stamp;
             return e.bounds;
@@ -223,6 +223,10 @@ impl Renderer {
 
     /// Everything [`Self::draw_arc`] does after culling.
     fn draw_arc_body(&mut self, ctx: &mut RenderContext, f: &Frame, a: &Arc<Node>) {
+        // PICABIA: a stack that makes no copies draws exactly as upstream draws the object.
+        if let Some(plain) = crate::picabia::plain_arc(f.doc, a) {
+            return self.draw_arc_body(ctx, f, &plain);
+        }
         // Fast path for plain paths: cached geometry, opacity folded into the paint.
         // A blend mode on a single plain fill applies per draw (exact for one paint operation);
         // a blend layer would composite the whole viewport.

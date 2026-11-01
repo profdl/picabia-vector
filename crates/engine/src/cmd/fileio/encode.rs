@@ -448,7 +448,7 @@ fn encode_all_of(doc: &Document, format: &str, p: &Value) -> Result<Encoded> {
     }
     let failed = vectorcraft_render::decode_failures();
     let mut enc = encode_files(doc, f, p)?;
-    crate::cmd::picabia_modifier::export_warning(doc, f, &mut enc.warnings); // PICABIA: copies written as plain objects
+    crate::cmd::picabia_modifier::export_warning(doc, f, p, &mut enc.warnings); // PICABIA: copies written as plain objects
     // Baking, flattening and drawing stop early when cancelled and leave a truncated result.
     vectorcraft_doc::cancel::check()?;
     // An image the renderer couldn't decode draws nothing: say so rather than write a picture

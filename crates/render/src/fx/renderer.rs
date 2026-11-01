@@ -385,7 +385,8 @@ impl Renderer {
         self.made_again = outer || !kept;
         // With Crop Marks, the object inside the art paints its own raster effects; Vector
         // Halftone samples them with the object.
-        let rfx = if effects::has_crop_marks(a) || effects::addons::halftone::has_halftone(a) || crate::picabia::has_stack(a) {
+        // PICABIA: modifier copies paint their own raster effects (`|| draws_copies`).
+        let rfx = if effects::has_crop_marks(a) || effects::addons::halftone::has_halftone(a) || crate::picabia::draws_copies(f.doc, a) {
             vec![]
         } else {
             effects::raster_effects(&a.appearance.effects)
@@ -419,7 +420,7 @@ impl Renderer {
     /// colors shaded through the color settings ([`reads_outside`]), is kept only while what it
     /// reads from outside `a` stays the same ([`Self::live_found`]).
     pub(super) fn fx_art(&mut self, doc: &vectorcraft_doc::Document, a: &Arc<Node>, cache: bool) -> Arc<Node> {
-        let cache = cache && !crate::picabia::has_targets(a); // PICABIA: copy-to-shape art follows its target
+        let cache = cache && !crate::picabia::holds_targets(a); // PICABIA: copy-to-shape art follows its target
         let key = Arc::as_ptr(a) as usize;
         let mut kept = None;
         if cache
@@ -456,10 +457,15 @@ impl Renderer {
             None if matches!(a.kind, NodeKind::Text(_) | NodeKind::Image(_) | NodeKind::Path { .. } | NodeKind::Compound { .. }) => (**a).clone(),
             None => effects::outline_art(Some(doc), a, symbol.as_ref()).unwrap_or_else(|| Node::group(a.id, vec![])),
         };
+        let art = crate::picabia::unstacked(art); // PICABIA: the art drawn never comes back to its stack
         let art = if effects::has_revolve(a) || effects::has_solid(a) { effects::evaluate_container(Some(doc), &art).unwrap_or(art) } else { art };
         // Vector Halftone samples the object with its colour adjustments: its dots keep their inks.
-        let outer =
-            if effects::addons::halftone::has_halftone(a) || crate::picabia::has_stack(a) { None } else { effects::color_map(&a.appearance.effects) };
+        // PICABIA: modifier copies are recoloured by their own adjustments (`|| draws_copies`).
+        let outer = if effects::addons::halftone::has_halftone(a) || crate::picabia::draws_copies(doc, a) {
+            None
+        } else {
+            effects::color_map(&a.appearance.effects)
+        };
         let mut art = self.adjusted_art(doc, art, outer.as_ref());
         // A path's geometry effects still apply when it is drawn.
         let path = matches!(art.kind, NodeKind::Path { .. } | NodeKind::Compound { .. });
@@ -470,7 +476,8 @@ impl Renderer {
         art.isolate = false;
         // One element: its pieces never knock each other out (a group's members still do as its
         // knockout setting says).
-        art.knockout = if container { a.knockout } else { vectorcraft_doc::Knockout::Off };
+        // PICABIA: modifier copies never knock each other out (`&& !draws_copies`).
+        art.knockout = if container && !crate::picabia::draws_copies(doc, a) { a.knockout } else { vectorcraft_doc::Knockout::Off };
         let art = Arc::new(art);
         if cache {
             let bytes = crate::lru::node_bytes(&art);

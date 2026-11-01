@@ -378,9 +378,11 @@ fn list(s: &mut Session, p: &Value) -> Result<Value> {
                 .collect();
             out["modifiers"] = json!(rows);
             let targets = vectorcraft_modifiers::DocTargets::new(doc, id);
-            let o = vectorcraft_modifiers::evaluate_with(&stack, vectorcraft_modifiers::node_bounds(node), &targets);
+            let o = vectorcraft_modifiers::evaluate_with(&stack, vectorcraft_modifiers::node_bounds_in_doc(doc, node), &targets);
             out["instances"] = json!(o.instances.len());
-            out["warnings"] = json!(o.warnings.iter().map(|w| json!({"modifier": w.modifier, "message": w.message})).collect::<Vec<_>>());
+            let mut warnings: Vec<Value> = o.warnings.iter().map(|w| json!({"modifier": w.modifier, "message": w.message})).collect();
+            warnings.extend(vectorcraft_render::picabia::too_big(doc, node).map(|m| json!({"modifier": null, "message": m})));
+            out["warnings"] = json!(warnings);
         }
     }
     Ok(out)

@@ -7,51 +7,168 @@
 //! `modifier.apply` bakes it). The renderer draws it through `fx::has_object_fx` and the `fx_art`
 //! chain; bounds, culling and dirty regions measure it in `fx::cull_bounds_in`; every vector
 //! exporter writes it through `vectorcraft_effects::picabia` (registered from the engine); hit
-//! testing tries each copy through `vectorcraft_doc::hit::set_copies`.
+//! testing tries the object under each instance transform through `vectorcraft_doc::hit` hooks.
 //!
 //! # Evaluation order
 //! Copies are made from the object's geometry first; each copy then draws with the object's
 //! fills, strokes and effects (geometry effects and raster effects such as a drop shadow apply to
 //! each copy). The object's transparency (opacity, blending mode, isolation, opacity mask) goes
-//! on the group: the copies are composited together, once. No copy carries the stack, so the art
-//! never recurses; members of a copied group keep their own stacks.
+//! on the group: the copies are composited together, once, and never knock each other out. No
+//! copy carries the stack, so the art never recurses; members of a copied group keep their own
+//! stacks, within one budget.
 //!
 //! An object whose stack makes no copies (no active row, one unmoved copy, a copy-to-shape target
-//! that is missing) has no art: it draws as itself.
+//! that is missing, or more cloned objects than [`MAX_ART_NODES`]) has no art: it draws exactly as
+//! upstream draws it, as [`plain`] (itself without the stack).
+//!
+//! # Cost when nothing has a stack
+//! [`has_stack`] is an attribute lookup. [`subtree_flags`] says whether a container holds stacks
+//! (or copy-to-shape sources), kept per container by identity, so after an edit only the changed
+//! containers are looked at again: hit testing, dirty regions and caches ask it instead of walking
+//! the document.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use vectorcraft_doc::{Document, Node, Scaling};
+use vectorcraft_doc::{Document, Node, Scaling, SymbolBoxes};
 use vectorcraft_geom::{Affine, Rect};
 use vectorcraft_modifiers::Output;
 
-/// How many arts are kept, the most recently used first.
-const KEPT: usize = 16;
+/// The most nodes the kept arts hold together (the least recently used go first).
+const MAX_CACHED_NODES: usize = 200_000;
 
 /// The most copies an object's art may draw with the copies its members' own stacks make inside
-/// each of them; past this the members draw once in each copy.
+/// each of them (the product across nesting levels); past this the members draw once in each copy.
 pub const MAX_NESTED_COPIES: usize = vectorcraft_modifiers::MAX_INSTANCES_PER_NODE;
 
-/// An art kept: the object it was made for, the evaluation it was made from (the modifiers
-/// crate's cache gives a new one when the stack, the bounds or a copy-to-shape target changes),
-/// and the art.
-type Kept = (Node, Arc<Output>, Arc<Node>);
+/// The most nodes one object's art may clone (copies × nodes in the object, as
+/// `modifier.apply`'s cap); past this the object draws once, plainly, with a warning.
+pub const MAX_ART_NODES: usize = 100_000;
 
-static CACHE: Mutex<Vec<Kept>> = Mutex::new(Vec::new());
+/// The most containers whose [`Flags`] are kept (all are dropped past it, and found again).
+const MAX_FLAGGED: usize = 200_000;
+
+/// An art kept: the address of the object it was made for, the evaluation it was made from (the
+/// modifiers crate gives a new one when the stack, the bounds or a copy-to-shape target changes),
+/// the object (compared outside the lock), the art (`None`: over [`MAX_ART_NODES`]) and its size.
+struct Kept {
+    at: usize,
+    out: Arc<Output>,
+    node: Node,
+    art: Option<Arc<Node>>,
+    nodes: usize,
+}
+
+static CACHE: Mutex<Vec<Arc<Kept>>> = Mutex::new(Vec::new());
+
+/// What a container holds below it and in itself: active stacks, and copy-to-shape sources.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Flags {
+    pub stacks: bool,
+    pub targets: bool,
+}
+
+impl Flags {
+    fn or(self, o: Flags) -> Flags {
+        Flags { stacks: self.stacks || o.stacks, targets: self.targets || o.targets }
+    }
+}
+
+/// What a container holds, in all and below itself, kept by its address with the container (so
+/// the address stays its own while the entry is kept).
+type Kept2 = (Arc<Node>, Flags, Flags);
+
+static FLAGS: Mutex<Option<HashMap<usize, Kept2>>> = Mutex::new(None);
+
+fn kept_flags(key: usize) -> Option<(Flags, Flags)> {
+    let kept = FLAGS.lock().unwrap_or_else(PoisonError::into_inner);
+    kept.as_ref().and_then(|m| m.get(&key)).map(|(_, all, below)| (*all, *below))
+}
 
 /// Whether `n` has a stack with an active row (an attribute lookup and a cached parse: cheap
 /// enough for every object on every frame). It may still make no copies ([`art`]).
 pub fn has_stack(n: &Node) -> bool {
-    matches!(vectorcraft_modifiers::node_stack(n), Some(Ok(s)) if s.is_active())
+    vectorcraft_modifiers::has_modifiers(n) && matches!(vectorcraft_modifiers::node_stack(n), Some(Ok(s)) if s.is_active())
 }
 
 /// Whether `n`'s stack copies onto another object: its art then changes with that object, so
 /// caches kept by `n`'s identity alone don't hold it.
 pub fn has_targets(n: &Node) -> bool {
-    matches!(vectorcraft_modifiers::node_stack(n), Some(Ok(s)) if s.targets().next().is_some())
+    vectorcraft_modifiers::has_modifiers(n) && matches!(vectorcraft_modifiers::node_stack(n), Some(Ok(s)) if s.targets().next().is_some())
 }
 
-/// The transform each copy `node` draws, or `None` when it draws once as itself.
+fn own_flags(n: &Node) -> Flags {
+    Flags { stacks: has_stack(n), targets: has_targets(n) }
+}
+
+/// What `a` and everything in it hold ([`Flags`]); kept per container, so it costs what changed.
+pub fn subtree_flags(a: &Arc<Node>) -> Flags {
+    subtree_flags_at(a, 0)
+}
+
+fn subtree_flags_at(a: &Arc<Node>, depth: usize) -> Flags {
+    let own = own_flags(a);
+    let Some(children) = a.children() else { return own };
+    // A kept entry holds its container: the address is this container's.
+    if let Some((all, _)) = kept_flags(Arc::as_ptr(a) as usize) {
+        return all;
+    }
+    let mut below = Flags::default();
+    if depth <= vectorcraft_doc::MAX_DEPTH {
+        for c in children {
+            below = below.or(subtree_flags_at(c, depth + 1));
+        }
+    }
+    let all = own.or(below);
+    let mut kept = FLAGS.lock().unwrap_or_else(PoisonError::into_inner);
+    let map = kept.get_or_insert_with(HashMap::new);
+    if map.len() >= MAX_FLAGGED {
+        map.clear();
+    }
+    map.insert(Arc::as_ptr(a) as usize, (a.clone(), all, below));
+    all
+}
+
+/// What every layer of `doc` holds.
+pub fn doc_flags(doc: &Document) -> Flags {
+    doc.layers.iter().fold(Flags::default(), |f, l| f.or(subtree_flags(l)))
+}
+
+/// Whether something below `n` (not `n` itself) has an active stack: a click outside `n`'s own
+/// reach may still land on its members' copies. A kept-flag lookup for a container the document
+/// was flagged with; otherwise its members' flags.
+pub fn holds_copies(n: &Node) -> bool {
+    let Some(children) = n.children() else { return false };
+    if let Some((_, below)) = kept_flags(std::ptr::from_ref(n) as usize) {
+        return below.stacks;
+    }
+    children.iter().any(|c| subtree_flags(c).stacks)
+}
+
+/// [`holds_copies`] for clicks in `symbols`' document: nothing to look at when the document has no
+/// stacks (its layers' kept flags say so; looking flags every container for the lookups after).
+fn hit_holds(symbols: &SymbolBoxes, n: &Node) -> bool {
+    has_stacks(symbols.document()) && holds_copies_kept(n)
+}
+
+fn holds_copies_kept(n: &Node) -> bool {
+    let Some(children) = n.children() else { return false };
+    if let Some((_, below)) = kept_flags(std::ptr::from_ref(n) as usize) {
+        return below.stacks;
+    }
+    children.iter().any(|c| subtree_flags(c).stacks)
+}
+
+/// Whether `a` or something in it copies onto another object: caches kept by `a`'s identity
+/// alone don't hold its drawing.
+pub fn holds_targets(a: &Arc<Node>) -> bool {
+    if a.children().is_none() {
+        return has_targets(a);
+    }
+    subtree_flags(a).targets
+}
+
+/// The evaluation of `n`'s stack when it makes copies, or `None` when it draws once as itself.
 fn copies(doc: &Document, n: &Node) -> Option<Arc<Output>> {
     if !has_stack(n) {
         return None;
@@ -61,47 +178,111 @@ fn copies(doc: &Document, n: &Node) -> Option<Arc<Output>> {
     (!out.instances.is_empty() && !unmoved).then_some(out)
 }
 
+/// Whether `n` draws as copies in `doc` (it has an active stack that makes copies within
+/// [`MAX_ART_NODES`]).
+pub fn draws_copies(doc: &Document, n: &Node) -> bool {
+    has_stack(n) && art(doc, n).is_some()
+}
+
+/// Why `n` draws once although its stack makes copies, for the panel's warnings: too many nodes.
+pub fn too_big(doc: &Document, n: &Node) -> Option<String> {
+    let out = copies(doc, n)?;
+    let wanted = node_count(n).saturating_mul(out.instances.len());
+    (wanted > MAX_ART_NODES).then(|| format!("{wanted} objects to draw (at most {MAX_ART_NODES}): drawn once"))
+}
+
 /// What a copy's transform scales besides its geometry: everything, as a copy drawn bigger.
-fn scaling() -> Scaling {
+pub fn scaling() -> Scaling {
     Scaling { strokes: true, effects: Some(vectorcraft_effects::scale_effect), keep_type_strokes: false, keep_corners: false, patterns: true }
+}
+
+fn node_count(n: &Node) -> usize {
+    n.count()
 }
 
 /// `n`'s art in `doc`: the group of its copies (see the module docs), or `None` when it draws as
 /// itself. Kept while `n` and its evaluation stay the same.
 pub fn art(doc: &Document, n: &Node) -> Option<Arc<Node>> {
     let out = copies(doc, n)?;
-    {
-        let mut cache = CACHE.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(at) = cache.iter().position(|(node, o, _)| Arc::ptr_eq(o, &out) && node == n) {
-            let kept = cache.remove(at);
-            let art = kept.2.clone();
-            cache.insert(0, kept);
-            return Some(art);
-        }
+    let at = std::ptr::from_ref(n) as usize;
+    let candidate = {
+        let cache = CACHE.lock().unwrap_or_else(PoisonError::into_inner);
+        cache.iter().find(|k| k.at == at && Arc::ptr_eq(&k.out, &out)).cloned()
+    };
+    // The object compared outside the lock (its address may have been reused).
+    if let Some(k) = candidate.filter(|k| k.node == *n) {
+        return k.art.clone();
     }
-    let art = Arc::new(make(n, &out));
+    let nodes = node_count(n).saturating_mul(out.instances.len());
+    let art = (nodes <= MAX_ART_NODES).then(|| Arc::new(make(doc, n, &out)));
+    let kept = Arc::new(Kept { at, out, node: n.clone(), art: art.clone(), nodes: if art.is_some() { nodes } else { node_count(n) } });
     let mut cache = CACHE.lock().unwrap_or_else(PoisonError::into_inner);
-    cache.insert(0, (n.clone(), out, art.clone()));
-    cache.truncate(KEPT);
-    Some(art)
+    cache.retain(|k| !(k.at == at && k.node == *n));
+    cache.insert(0, kept);
+    let mut total = 0usize;
+    cache.retain(|k| {
+        total = total.saturating_add(k.nodes);
+        total <= MAX_CACHED_NODES
+    });
+    art
 }
 
-/// [`art`] as an owned node, for the renderer's art chain and the exporters' bake: an object with
-/// an active stack that makes no copies is itself without the stack (so drawing it doesn't come
-/// back here); `None` without an active stack.
+/// [`art`] as an owned node, for the renderer's art chain and the exporters' bake.
 pub fn art_node(doc: &Document, n: &Node) -> Option<Node> {
+    art(doc, n).map(Arc::unwrap_or_clone)
+}
+
+/// `n` without its stack: what an object whose stack makes no copies draws as (exactly as
+/// upstream draws it).
+pub fn plain(n: &Node) -> Node {
+    let mut m = n.clone();
+    vectorcraft_modifiers::set_node_source(&mut m, None);
+    m
+}
+
+/// `art` without a stack of its own (an object's art is drawn as it is, never through its stack
+/// again).
+pub fn unstacked(art: Node) -> Node {
+    if vectorcraft_modifiers::has_modifiers(&art) { plain(&art) } else { art }
+}
+
+/// How many [`plain_arc`]s are kept.
+const KEPT_PLAIN: usize = 256;
+
+/// `(source, plain)` kept by the source's address (the entry holds the source).
+static PLAIN: Mutex<Vec<(Arc<Node>, Arc<Node>)>> = Mutex::new(Vec::new());
+
+/// For the renderer: `a` without its stack when it has an active one that makes no copies, kept
+/// by `a`'s identity (so the renderer's caches keyed by identity keep working); `None` otherwise
+/// (draw `a` itself).
+pub fn plain_arc(doc: &Document, a: &Arc<Node>) -> Option<Arc<Node>> {
+    if !has_stack(a) || art(doc, a).is_some() {
+        return None;
+    }
+    let mut kept = PLAIN.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(at) = kept.iter().position(|(s, _)| Arc::ptr_eq(s, a)) {
+        let e = kept.remove(at);
+        let p = e.1.clone();
+        kept.insert(0, e);
+        return Some(p);
+    }
+    let p = Arc::new(plain(a));
+    kept.insert(0, (a.clone(), p.clone()));
+    kept.truncate(KEPT_PLAIN);
+    Some(p)
+}
+
+/// What bounds measure for `n`: its copies' group, or itself without the stack when the stack
+/// makes no copies; `None` without an active stack (measure `n`).
+pub fn bounds_art(doc: &Document, n: &Node) -> Option<Arc<Node>> {
     if !has_stack(n) {
         return None;
     }
-    Some(art(doc, n).map(Arc::unwrap_or_clone).unwrap_or_else(|| {
-        let mut plain = n.clone();
-        vectorcraft_modifiers::set_node_source(&mut plain, None);
-        plain
-    }))
+    Some(art(doc, n).unwrap_or_else(|| Arc::new(plain(n))))
 }
 
 /// The group of `n`'s copies for `out`.
-fn make(n: &Node, out: &Output) -> Node {
+fn make(doc: &Document, n: &Node, out: &Output) -> Node {
     let mut object = n.clone();
     let mut g = Node::group(n.id, vec![]);
     (g.visible, g.locked) = (n.visible, n.locked);
@@ -111,11 +292,13 @@ fn make(n: &Node, out: &Output) -> Node {
     g.isolate = std::mem::take(&mut object.isolate);
     g.extras_mut().mask = object.extras_mut().mask.take();
     g.extras_mut().attrs = object.extras_mut().attrs.take();
+    // The copies never knock each other out (members inside each copy still do, as the object says).
+    g.knockout = vectorcraft_doc::Knockout::Off;
     // The art is drawn and written as it is: it carries no stack (a written copy that did would
     // be copied again when the file is read back).
     vectorcraft_modifiers::set_node_source(&mut g, None);
     // Members with stacks of their own copy inside every copy: within one budget.
-    let nested = nested_copies(&object);
+    let nested = nested_copies(doc, &object, 0);
     if nested > 0 && out.instances.len().saturating_mul(nested) > MAX_NESTED_COPIES {
         strip_nested(&mut object, 0);
     }
@@ -138,16 +321,21 @@ fn make(n: &Node, out: &Output) -> Node {
     g
 }
 
-/// How many copies the members of `n` (not `n` itself) draw through their own stacks.
-fn nested_copies(n: &Node) -> usize {
+/// How many copies the members of `n` (not `n` itself) draw through their own stacks, inside one
+/// copy of `n`: each member's instances times what its own members draw (doc-aware, so
+/// copy-to-shape members count their copies).
+fn nested_copies(doc: &Document, n: &Node, depth: usize) -> usize {
+    if depth > vectorcraft_doc::MAX_DEPTH {
+        return 0;
+    }
     let mut total = 0usize;
     for c in n.children().into_iter().flatten() {
-        c.walk(&mut |m| {
-            if has_stack(m) {
-                let k = vectorcraft_modifiers::node_instances(m).map_or(1, |o| o.instances.len());
-                total = total.saturating_add(k);
-            }
-        });
+        if has_stack(c) {
+            let k = copies(doc, c).map_or(1, |o| o.instances.len());
+            total = total.saturating_add(k.saturating_mul(1 + nested_copies(doc, c, depth + 1)));
+        } else {
+            total = total.saturating_add(nested_copies(doc, c, depth + 1));
+        }
     }
     total
 }
@@ -168,16 +356,30 @@ fn is_finite(a: Affine) -> bool {
     a.as_coeffs().iter().all(|c| c.is_finite())
 }
 
-/// For `vectorcraft_doc::hit::set_copies`: the art of `n` (its copies, each hit as `n`).
-pub fn hit_copies(symbols: &vectorcraft_doc::SymbolBoxes, n: &Node) -> Option<Arc<Node>> {
+/// The hooks `vectorcraft_doc::hit` uses: an object is clicked through its copies, as itself
+/// under each instance transform (no art is built for a click).
+pub fn hit_hooks() -> vectorcraft_doc::hit::CopyHooks {
+    vectorcraft_doc::hit::CopyHooks { has: has_stack, holds: hit_holds, transforms: hit_transforms, art: hit_art }
+}
+
+/// The transforms of `n`'s copies, the front one last (none when it draws once).
+fn hit_transforms(symbols: &SymbolBoxes, n: &Node) -> Option<Arc<[Affine]>> {
+    let doc = symbols.document();
+    if !draws_copies(doc, n) {
+        return None;
+    }
+    let out = copies(doc, n)?;
+    Some(out.instances.iter().map(|i| i.transform).filter(|t| is_finite(*t)).collect())
+}
+
+/// `n`'s art, for marquees (each copy touched as `n`).
+fn hit_art(symbols: &SymbolBoxes, n: &Node) -> Option<Arc<Node>> {
     art(symbols.document(), n)
 }
 
-/// Whether any object of `doc` has an active stack.
+/// Whether any object of `doc` has an active stack (kept per container: costs what changed).
 pub fn has_stacks(doc: &Document) -> bool {
-    let mut any = false;
-    doc.walk(|n| any |= has_stack(n));
-    any
+    doc_flags(doc).stacks
 }
 
 /// `doc` with every object that has modifier copies replaced by them, as plain objects with ids of
@@ -224,9 +426,7 @@ fn bake_tree(doc: &Document, out: &mut Document, n: &Node, depth: usize) -> Opti
     }
     if has_stack(n) {
         // Active but no copies: the object as it is, without the stack.
-        let mut m = n.clone();
-        vectorcraft_modifiers::set_node_source(&mut m, None);
-        return Some(m);
+        return Some(plain(n));
     }
     let children = n.children()?;
     let mut changed = false;
@@ -250,31 +450,42 @@ fn bake_tree(doc: &Document, out: &mut Document, n: &Node, depth: usize) -> Opti
     Some(m)
 }
 
-/// The export warning for a format that writes `doc`'s modifier copies as plain objects.
-pub fn bake_warning(doc: &Document) -> Option<String> {
-    has_stacks(doc).then(|| "modifier copies are written as plain objects: this format doesn't keep modifier stacks".to_string())
-}
-
 /// What may draw differently in `new` than in `old` because a copy-to-shape target changed while
-/// its source didn't: the sources' painted bounds before and after.
+/// its source didn't: the sources' painted bounds before and after. Looks only into the containers
+/// that hold copy-to-shape sources ([`subtree_flags`]): nothing when the document has none.
 pub(crate) fn dependents(old: &Document, new: &Document) -> Option<Rect> {
+    if !doc_flags(new).targets {
+        return None;
+    }
     let (os, ns) = (old.symbol_boxes(), new.symbol_boxes());
     let mut area: Option<Rect> = None;
-    new.walk(|n| {
+    let mut visit = |n: &Node| {
         if !has_targets(n) {
             return;
         }
-        let moved = vectorcraft_modifiers::stack_targets(Some(n)).iter().any(|t| match (old.node(*t), new.node(*t)) {
+        // The old document may be an undo step: no lookup cache is built for it.
+        let moved = vectorcraft_modifiers::stack_targets(Some(n)).iter().any(|t| match (old.node_uncached(*t), new.node(*t)) {
             (Some(a), Some(b)) => !std::ptr::eq(a, b),
             (None, None) => false,
             _ => true,
         });
-        if !moved {
+        if moved {
+            area = vectorcraft_geom::union_opt(area, crate::brush_fx::cull_bounds(&ns, n));
+            area = vectorcraft_geom::union_opt(area, old.node_uncached(n.id).and_then(|o| crate::brush_fx::cull_bounds(&os, o)));
+        }
+    };
+    fn walk(a: &Arc<Node>, depth: usize, visit: &mut dyn FnMut(&Node)) {
+        if depth > vectorcraft_doc::MAX_DEPTH || !subtree_flags(a).targets {
             return;
         }
-        area = vectorcraft_geom::union_opt(area, crate::brush_fx::cull_bounds(&ns, n));
-        area = vectorcraft_geom::union_opt(area, old.node(n.id).and_then(|o| crate::brush_fx::cull_bounds(&os, o)));
-    });
+        visit(a);
+        for c in a.children().into_iter().flatten() {
+            walk(c, depth + 1, visit);
+        }
+    }
+    for l in &new.layers {
+        walk(l, 0, &mut visit);
+    }
     area
 }
 
