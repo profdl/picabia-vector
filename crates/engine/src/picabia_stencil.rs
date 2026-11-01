@@ -113,7 +113,7 @@ fn compute_keyed(doc: &Document, node: &Node, frame: &Frame, inputs: Inputs) -> 
     // what is gathered, so they can't be skipped before it).
     let shaped = vectorcraft_modifiers::node_instances_in_doc(doc, node)
         .filter(|o| o.has_geometry())
-        .and_then(|_| vectorcraft_render::picabia::art(doc, node));
+        .and_then(|_| vectorcraft_render::picabia::copies_art(doc, node));
     let g = match shaped {
         Some(art) => {
             let copies: Vec<Node> = art.children().into_iter().flatten().map(|c| Node::clone(c)).collect();
@@ -211,8 +211,13 @@ pub fn ensure_one(doc: &Document, id: NodeId) -> Option<Arc<Sheet>> {
 }
 
 /// Compute every stale stencil of `doc` now (exports and headless renders draw fresh sheets).
+/// Inside an export's progress scope, Cancel stops it between stencils (the export then stops at
+/// its own next check).
 pub fn ensure(doc: &Document) {
     for id in stencil_objects(doc) {
+        if vectorcraft_doc::cancel::is_cancelled() {
+            return;
+        }
         ensure_one(doc, id);
     }
 }

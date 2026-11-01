@@ -504,6 +504,7 @@ fn cache_key(
         highlight_alternate_glyphs: app.session.prefs.highlight_alternate_glyphs,
         highlight_substituted_fonts: app.session.prefs.highlight_substituted_fonts,
         placed: vectorcraft_render::placed_document::generation(),
+        stencil: vectorcraft_engine::picabia_stencil::generation(), // PICABIA: a sheet computed in the background redraws
         pixel,
         smooth_images,
         isolated: st.isolation.map(|id| id.0),

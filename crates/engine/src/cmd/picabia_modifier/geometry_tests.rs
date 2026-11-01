@@ -143,6 +143,23 @@ fn apply_warns_when_a_row_was_skipped_over_the_cap() {
     assert_eq!(out["warnings"], json!([]));
 }
 
+/// A geometry row above a stencil reshapes what it cuts: a trim keeping half of each square's
+/// outline leaves each filled as the triangle under it, half the area.
+#[test]
+fn a_trim_above_a_stencil_reshapes_what_it_cuts() {
+    let mut s = session();
+    let g = super::stencil_tests::two_tone(&mut s, json!({}));
+    let white = |s: &mut Session| {
+        let i = ex(s, "modifier.stencilInfo", json!({"id": g.0}));
+        i["colours"].as_array().unwrap().iter().find(|c| c["hex"] == "#ffffff").unwrap()["area"].as_f64().unwrap()
+    };
+    let whole = white(&mut s);
+    assert!((whole - 150.0 * 150.0).abs() < 1.0, "{whole}");
+    ex(&mut s, "modifier.add", json!({"ids": [g.0], "kind": "trim", "index": 0, "props": {"start": 0, "end": 0.5}}));
+    let half = white(&mut s);
+    assert!((half - whole / 2.0).abs() < 1.0, "{half} vs {whole}");
+}
+
 #[test]
 fn the_laser_cuts_the_trimmed_design() {
     let mut s = session();

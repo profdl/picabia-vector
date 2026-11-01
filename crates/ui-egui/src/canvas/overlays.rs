@@ -141,7 +141,7 @@ pub(super) fn selection_overlay(app: &mut VectorcraftApp, p: &egui::Painter, xf:
         if !matches!(n.kind, NodeKind::Text(ref tx) if matches!(tx.kind, vectorcraft_doc::TextKind::Point)) {
             let outline = node_outline(n, &symbols);
             stroke_path(p, &outline, xf, Stroke::new(1.0, color));
-            super::picabia::copy_outlines(p, &st.doc, n, &outline, xf, Stroke::new(1.0, color.gamma_multiply(0.4))); // PICABIA: a faint outline on the copies
+            super::picabia::selected_outlines(p, &st.doc, n, &outline, xf, color); // PICABIA: a faint outline on the copies; a stencil's ties and repeat cell
         }
         // Anchors (and handles for selected anchors in direct mode); a gradient mesh's or a mesh
         // envelope's points.

@@ -21,6 +21,12 @@
 //! copy carries the stack, so the art never recurses; members of a copied group keep their own
 //! stacks, within one budget.
 //!
+//! # Stencils
+//! An object whose stack ends in a stencil row draws, once its sheet is computed (fresh, or the
+//! latest while it is computed again), as the sheet's paper or cloth preview in place of its design
+//! ([`vectorcraft_stencil::store::drawn`] / `fills`); before that, as its copies (or itself). Its
+//! bounds and clicks are the sheet's from the start ([`vectorcraft_stencil::store::frame`]).
+//!
 //! An object whose stack makes no copies (no active row, one unmoved copy, a copy-to-shape target
 //! that is missing, or more cloned objects than [`MAX_ART_NODES`]) has no art: it draws exactly as
 //! upstream draws it, as [`plain`] (itself without the stack).
@@ -124,8 +130,10 @@ pub fn has_targets(n: &Node) -> bool {
     vectorcraft_modifiers::has_modifiers(n) && matches!(vectorcraft_modifiers::node_stack(n), Some(Ok(s)) if s.targets().next().is_some())
 }
 
+/// `targets` also stands for a stencil: its drawing changes when its sheet arrives, not only with
+/// the object.
 fn own_flags(n: &Node) -> Flags {
-    Flags { stacks: has_stack(n), targets: has_targets(n) }
+    Flags { stacks: has_stack(n), targets: has_targets(n) || vectorcraft_stencil::store::is_stencil(n) }
 }
 
 /// What `a` and everything in it hold ([`Flags`]); kept per container, so it costs what changed.
@@ -189,11 +197,11 @@ fn holds_copies_kept(n: &Node) -> bool {
     children.iter().any(|c| subtree_flags(c).stacks)
 }
 
-/// Whether `a` or something in it copies onto another object: caches kept by `a`'s identity
-/// alone don't hold its drawing.
+/// Whether `a` or something in it copies onto another object or is a stencil: caches kept by
+/// `a`'s identity alone don't hold its drawing.
 pub fn holds_targets(a: &Arc<Node>) -> bool {
     if a.children().is_none() {
-        return has_targets(a);
+        return has_targets(a) || vectorcraft_stencil::store::is_stencil(a);
     }
     subtree_flags(a).targets
 }
@@ -212,7 +220,82 @@ fn copies(doc: &Document, n: &Node) -> Option<Arc<Output>> {
 /// Whether `n` draws as copies in `doc` (it has an active stack that makes copies within
 /// [`MAX_ART_NODES`]), found without building the copies.
 pub fn draws_copies(doc: &Document, n: &Node) -> bool {
-    has_stack(n) && copies(doc, n).is_some_and(|out| node_count(n).saturating_mul(out.instances.len()) <= MAX_ART_NODES)
+    has_stack(n) && (draws_sheet(doc, n) || copies(doc, n).is_some_and(|out| node_count(n).saturating_mul(out.instances.len()) <= MAX_ART_NODES))
+}
+
+/// Whether `n` is a stencil drawn as its sheet (one was computed, and it has a size to cut: what
+/// [`sheet_art`] needs).
+pub fn draws_sheet(doc: &Document, n: &Node) -> bool {
+    vectorcraft_stencil::store::is_stencil(n) && vectorcraft_stencil::store::drawn(doc, n).is_some()
+}
+
+/// How many stencil arts are kept.
+const KEPT_SHEETS: usize = 16;
+
+/// `(object address, sheet, object, art)`: a stencil's preview kept for its object and sheet.
+type KeptSheet = (usize, Arc<vectorcraft_stencil::store::Sheet>, Node, Arc<Node>);
+
+static SHEETS: Mutex<Vec<Arc<KeptSheet>>> = Mutex::new(Vec::new());
+
+/// A stencil object's sheet preview (see the module docs): a group in its place holding the fills,
+/// with its transparency; `None` before a sheet is computed.
+fn sheet_art(doc: &Document, n: &Node) -> Option<Arc<Node>> {
+    let d = vectorcraft_stencil::store::drawn(doc, n)?;
+    let at = std::ptr::from_ref(n) as usize;
+    let candidate = {
+        let kept = SHEETS.lock().unwrap_or_else(PoisonError::into_inner);
+        kept.iter().find(|k| k.0 == at && Arc::ptr_eq(&k.1, &d.sheet)).cloned()
+    };
+    if let Some(k) = candidate.filter(|k| k.2 == *n) {
+        return Some(k.3.clone());
+    }
+    let mut g = Node::group(n.id, vec![]);
+    (g.visible, g.locked) = (n.visible, n.locked);
+    g.name = n.name.clone();
+    g.opacity = n.opacity;
+    g.blend = n.blend;
+    g.isolate = n.isolate;
+    g.extras_mut().mask = n.extras().mask.clone();
+    let fills = vectorcraft_stencil::store::fills(&d)
+        .into_iter()
+        .map(|f| {
+            let [r, gr, b] = f.rgb.map(|c| f32::from(c) / 255.0);
+            let paint = vectorcraft_color::Paint::solid(vectorcraft_color::Color::rgb(r, gr, b));
+            let mut p = Node::path(
+                n.id,
+                vectorcraft_geom::PathData::from_bezpath(&f.path),
+                vectorcraft_doc::Appearance::basic(paint, vectorcraft_color::Paint::None, 0.0),
+            );
+            if let vectorcraft_doc::NodeKind::Path { rule, .. } = &mut p.kind {
+                *rule = if f.even_odd { vectorcraft_geom::FillRule::EvenOdd } else { vectorcraft_geom::FillRule::NonZero };
+            }
+            Arc::new(p)
+        })
+        .collect();
+    if let Some(ch) = g.children_mut() {
+        *ch = fills;
+    }
+    let art = Arc::new(g);
+    let mut kept = SHEETS.lock().unwrap_or_else(PoisonError::into_inner);
+    kept.retain(|k| k.0 != at);
+    kept.insert(0, Arc::new((at, d.sheet.clone(), n.clone(), art.clone())));
+    kept.truncate(KEPT_SHEETS);
+    Some(art)
+}
+
+/// A stencil object's sheet rectangle (bounds and clicks), and whether the sheet is all it draws.
+/// Known from its params before a sheet is computed (then its design or copies draw too, `false`).
+/// With a result: where it is now, and where the result drawn lies (a stale one is drawn where it
+/// was computed until the new one lands, so a moved stencil's old place repaints and clicks).
+fn sheet_box(doc: &Document, n: &Node) -> Option<(vectorcraft_geom::Rect, bool)> {
+    if !vectorcraft_stencil::store::is_stencil(n) {
+        return None;
+    }
+    let frame = vectorcraft_stencil::store::frame(doc, n)?;
+    match vectorcraft_stencil::store::lookup(doc, n) {
+        Some((sheet, _)) => Some((frame.sheet.union(sheet.sheet), true)),
+        None => Some((frame.sheet, false)),
+    }
 }
 
 /// Whether `n`'s members draw once in each of its copies, as [`make`] decides: their own copies
@@ -246,16 +329,27 @@ fn node_count(n: &Node) -> usize {
 /// `n`'s art in `doc`: the group of its copies (see the module docs), or `None` when it draws as
 /// itself. Kept while `n` and its evaluation stay the same.
 pub fn art(doc: &Document, n: &Node) -> Option<Arc<Node>> {
+    if vectorcraft_stencil::store::is_stencil(n)
+        && let Some(a) = sheet_art(doc, n)
+    {
+        return Some(a);
+    }
+    copies_art(doc, n)
+}
+
+/// The group of `n`'s copies (geometry rows applied), never a stencil's sheet: what a stencil cuts
+/// is gathered from it. `None` when `n` draws once as itself.
+pub fn copies_art(doc: &Document, n: &Node) -> Option<Arc<Node>> {
     kept(doc, n)?.art.clone()
 }
 
-/// What `n`'s geometry rows said while its art was made (a row skipped over the anchor cap, type
-/// passed over…), for the panel. Empty when it has no art.
+/// What `n`'s geometry rows said while its copies were made (a row skipped over the anchor cap,
+/// type passed over…), for the panel. Empty when it has no copies.
 pub fn notes(doc: &Document, n: &Node) -> Vec<String> {
     kept(doc, n).map(|k| k.notes.clone()).unwrap_or_default()
 }
 
-/// `n`'s kept art, made when it isn't kept (see [`art`]).
+/// `n`'s kept copies, made when they aren't kept (see [`copies_art`]).
 fn kept(doc: &Document, n: &Node) -> Option<Arc<Kept>> {
     Some(kept_for(doc, n, copies(doc, n)?))
 }
@@ -322,7 +416,7 @@ static PLAIN: Mutex<Vec<(Weak<Node>, Arc<Node>)>> = Mutex::new(Vec::new());
 /// by `a`'s identity (so the renderer's caches keyed by identity keep working); `None` otherwise
 /// (draw `a` itself).
 pub fn plain_arc(doc: &Document, a: &Arc<Node>) -> Option<Arc<Node>> {
-    if !has_stack(a) || art(doc, a).is_some() {
+    if !has_stack(a) || draws_copies(doc, a) {
         return None;
     }
     let mut kept = PLAIN.lock().unwrap_or_else(PoisonError::into_inner);
@@ -344,6 +438,18 @@ pub fn plain_arc(doc: &Document, a: &Arc<Node>) -> Option<Arc<Node>> {
 pub fn bounds_art(doc: &Document, n: &Node) -> Option<Arc<Node>> {
     if !has_stack(n) {
         return None;
+    }
+    // A stencil reaches as far as its sheet, before and after it is computed; before, as far as
+    // its design or copies too (a tile output's grid draws past the tile).
+    if let Some((r, only)) = sheet_box(doc, n) {
+        let path = vectorcraft_geom::PathData::from_bezpath(&vectorcraft_geom::kurbo::Shape::to_path(&r, 0.1));
+        let solid = vectorcraft_color::Paint::solid(vectorcraft_color::Color::BLACK);
+        let sheet = Arc::new(Node::path(n.id, path, vectorcraft_doc::Appearance::basic(solid, vectorcraft_color::Paint::None, 0.0)));
+        if only {
+            return Some(sheet);
+        }
+        let design = art(doc, n).unwrap_or_else(|| Arc::new(plain(n)));
+        return Some(Arc::new(Node::group(n.id, vec![sheet, design])));
     }
     Some(art(doc, n).unwrap_or_else(|| Arc::new(plain(n))))
 }
@@ -428,7 +534,7 @@ fn nested_anchors(doc: &Document, n: &Node, depth: usize) -> usize {
     let mut total = 0usize;
     for c in n.children().into_iter().flatten() {
         let here = match has_stack(c).then(|| copies(doc, c)).flatten() {
-            Some(o) if o.has_geometry() => art(doc, c).map_or(0, |a| anchor_count(&a)),
+            Some(o) if o.has_geometry() => copies_art(doc, c).map_or(0, |a| anchor_count(&a)),
             Some(o) => o.instances.len().saturating_mul(nested_anchors(doc, c, depth + 1)),
             None => nested_anchors(doc, c, depth + 1),
         };
@@ -457,10 +563,18 @@ fn is_finite(a: Affine) -> bool {
 /// under each instance transform (no art is built for a click), or, when geometry rows reshape the
 /// copies, as its art.
 pub fn hit_hooks() -> vectorcraft_doc::hit::CopyHooks {
-    vectorcraft_doc::hit::CopyHooks { has: has_stack, holds: hit_holds, transforms: hit_transforms, art: hit_art, shaped: hit_shaped }
+    vectorcraft_doc::hit::CopyHooks {
+        has: has_stack,
+        holds: hit_holds,
+        transforms: hit_transforms,
+        art: hit_art,
+        shaped: hit_shaped,
+        sheet: hit_sheet,
+    }
 }
 
-/// `n`'s art when geometry rows reshape its copies (a transform of `n` isn't what is drawn).
+/// `n`'s copies when geometry rows reshape them (a transform of `n` isn't what is drawn); for a
+/// stencil, tried after its sheet when the design draws too.
 fn hit_shaped(symbols: &SymbolBoxes, n: &Node) -> Option<Arc<Node>> {
     let doc = symbols.document();
     // Plain copies are clicked by their transforms: no art is built for them.
@@ -478,6 +592,11 @@ fn hit_transforms(symbols: &SymbolBoxes, n: &Node) -> Option<(Arc<[Affine]>, boo
     let out = copies(doc, n)?;
     let strip = strips_nested(doc, n, out.instances.len());
     Some((out.instances.iter().map(|i| i.transform).filter(|t| is_finite(*t)).collect(), strip))
+}
+
+/// A stencil object's sheet, clicked as the object.
+fn hit_sheet(symbols: &SymbolBoxes, n: &Node) -> Option<(vectorcraft_geom::Rect, bool)> {
+    sheet_box(symbols.document(), n)
 }
 
 /// `n`'s art, for marquees (each copy touched as `n`).

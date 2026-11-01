@@ -288,6 +288,20 @@ the new group, live.
 evaluated there; the sheet, islands, ties, preview and laser export are being ported (picabia-craft
 P8 to P12, P17). The fields below are picabia-craft's and stay the contract.
 
+**On the canvas and in exports (PIC9.5b, PIC11.10).** Once a sheet is computed (in the background;
+a stale one is shown until the new one lands), the canvas draws the object as its sheet: the paper
+preview fills the sheet with the cut taken out (even-odd), the cloth preview fills the sheet rectangle
+with cloth and the cut in paste colour. Bounds, clicks and marquees use the sheet rectangle (known
+from the stack before any result exists), so the margin selects the stencil; before the first result
+the design (or its copies, past a tile) draws and counts too, and a stale sheet counts where it is
+drawn as well as where the new one will be. Direct Selection on a stencil drawn as its sheet selects
+the stencil itself (the sheet has no members to pick). Results stay with their document: another
+open document's stencil with the same object id draws its design until its own result lands. A
+selected stencil shows its tie bars and, with a repeat, the dashed repeat cell. Every export through
+`document.serialize` and the file exporters (not the native file or a template, which keep the
+design and the stack) computes stale sheets first, then SVG, PDF and PNG draw the sheet; with tile
+output the sheet is the repeat cell's tile, placed where it is cut.
+
 **Islands and ties.** An island is a hole in the cut: the cut's contours nest (an outline, its
 holes, cut-outs in those holes...), and every hole is the outline of a piece of paper. Its depth
 counts the islands around it. In `ties` mode each island gets up to `tiesPerIsland` straight bars

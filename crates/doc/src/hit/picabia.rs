@@ -35,6 +35,9 @@ pub struct CopyHooks {
     /// The group of an object's copies when they can't be found from the object by a transform
     /// (geometry rows reshape them): a click then tries that group, as drawn.
     pub shaped: fn(&SymbolBoxes, &Node) -> Option<Arc<Node>>,
+    /// A stencil object's sheet: clicked anywhere on it, as the object. `true`: the sheet is all
+    /// it draws (a sheet was computed); `false`: its design (or copies) draws, also clicked.
+    pub sheet: fn(&SymbolBoxes, &Node) -> Option<(vectorcraft_geom::Rect, bool)>,
 }
 
 static HOOKS: OnceLock<CopyHooks> = OnceLock::new();
@@ -96,6 +99,24 @@ pub(super) fn copies(symbols: &SymbolBoxes, n: &Node) -> Option<Arc<Node>> {
     (h.art)(symbols, n)
 }
 
+/// Whether a marquee `r` touches `n` through its copies or, for a stencil, its sheet (anywhere on
+/// it, as a click); `None`: `n` has neither, test it as usual. `touch` tests the copies' group.
+pub(super) fn touches(symbols: &SymbolBoxes, n: &Node, r: vectorcraft_geom::Rect, touch: &dyn Fn(&Node) -> bool) -> Option<bool> {
+    let h = HOOKS.get()?;
+    if !(h.has)(n) || plain(n.id) {
+        return None;
+    }
+    if let Some((sheet, only)) = (h.sheet)(symbols, n) {
+        if sheet.intersect(r).area() > 0.0 || sheet.contains(r.origin()) {
+            return Some(true);
+        }
+        if only {
+            return Some(false);
+        }
+    }
+    copies(symbols, n).map(|a| touch(&a))
+}
+
 /// Direct Selection's marquee in `n`, an object with copies: `collect` on each copy (each keeps
 /// its members' ids), each id once. `false`: `n` has no copies, collect it as usual.
 pub(super) fn leaves(symbols: &SymbolBoxes, n: &Node, out: &mut Vec<NodeId>, collect: &mut dyn FnMut(&Node, &mut Vec<NodeId>)) -> bool {
@@ -126,6 +147,18 @@ pub(super) fn hit(
     let h = HOOKS.get()?;
     if !(h.has)(c) || plain(c.id) {
         return None;
+    }
+    // A stencil: its sheet, a filled rectangle with the object's id. When the sheet is all it
+    // draws, that is the answer; otherwise its design (or copies) is tried next.
+    if let Some((r, only)) = (h.sheet)(symbols, c) {
+        let paper = crate::Appearance::basic(vectorcraft_color::Paint::solid(vectorcraft_color::Color::BLACK), vectorcraft_color::Paint::None, 0.0);
+        let mut sheet = Node::path(c.id, vectorcraft_geom::PathData::from_bezpath(&vectorcraft_geom::kurbo::Shape::to_path(&r, 0.1)), paper);
+        (sheet.visible, sheet.locked) = (c.visible, c.locked);
+        let holder = Node::group(c.id, vec![Arc::new(sheet)]);
+        let found = try_at(&holder, p, opt);
+        if only || found.is_some() {
+            return Some(found);
+        }
     }
     // Reshaped copies are tried as drawn: the group of them, in place of the object (they carry
     // no stack; members' own copies are found inside them as anywhere).

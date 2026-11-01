@@ -115,6 +115,9 @@ pub struct CacheKey {
     /// The Image Trace objects drawn with their source image
     /// ([`vectorcraft_render::RenderOptions::trace_source`]).
     pub trace_source: Option<std::sync::Arc<Vec<vectorcraft_doc::NodeId>>>,
+    /// PICABIA: [`vectorcraft_engine::picabia_stencil::generation`]: a stencil sheet computed in
+    /// the background renders the whole frame again (its own counter, apart from [`Self::placed`]).
+    pub stencil: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default)]

@@ -5,6 +5,9 @@
 //! renderer (same layer as this crate) and the engine read it back with [`lookup`] / [`drawn`]:
 //! **fresh** when the document still matches the snapshot, else the object's latest result
 //! (**stale**: drawn while the engine recomputes). An object with no result yet draws its design.
+//! Object ids restart in every document, so a stale result is only taken from the same document
+//! ([`Lineage`]): another document's object with the same id draws its design until its own
+//! result lands.
 //!
 //! Two keys:
 //! - [`Inputs`], the cheap one every lookup checks: the object itself (the `Arc` the document
@@ -142,10 +145,47 @@ pub struct Sheet {
     pub info: Info,
 }
 
+/// Which document a result was computed in, across its edits: weak references to three of its
+/// rarely changed shared values (document-level foreign data, variables, saved selections). An
+/// edit copies the document and keeps them shared; another document (new, opened, or another
+/// window's) has its own. The same document while any one is still shared; weak, so a closed
+/// document's addresses aren't reused while a result names them.
+#[derive(Clone, Debug)]
+pub struct Lineage {
+    unknown: std::sync::Weak<serde_json::Map<String, serde_json::Value>>,
+    variables: std::sync::Weak<vectorcraft_doc::Variables>,
+    selections: std::sync::Weak<Vec<vectorcraft_doc::SavedSelection>>,
+}
+
+impl Lineage {
+    pub fn of(doc: &Document) -> Lineage {
+        use vectorcraft_doc::Shared;
+        Lineage {
+            unknown: Shared::downgrade(&doc.unknown),
+            variables: Shared::downgrade(&doc.variables),
+            selections: Shared::downgrade(&doc.saved_selections),
+        }
+    }
+
+    /// Whether `doc` is the document this was taken of (or an edit of it).
+    pub fn holds(&self, doc: &Document) -> bool {
+        self.same(&Lineage::of(doc))
+    }
+
+    /// Whether `self` and `other` were taken of the same document.
+    fn same(&self, other: &Lineage) -> bool {
+        std::sync::Weak::ptr_eq(&self.unknown, &other.unknown)
+            || std::sync::Weak::ptr_eq(&self.variables, &other.variables)
+            || std::sync::Weak::ptr_eq(&self.selections, &other.selections)
+    }
+}
+
 /// What a stencil was computed from, the cheap way (see the module docs).
 #[derive(Clone, Debug)]
 pub struct Inputs {
     node: Arc<Node>,
+    /// The document it was taken in: stale results are only drawn there.
+    lineage: Lineage,
     copies: Vec<Affine>,
     repeat: Option<Repeat>,
     /// Objects inside with copy-to-shape targets (which may lie outside): their copies.
@@ -217,7 +257,7 @@ impl Inputs {
                 stack.extend(kids.iter().rev().map(|k| (k, false)));
             }
         }
-        Inputs { node: node.clone(), copies, repeat, inner, symbols }
+        Inputs { node: node.clone(), lineage: Lineage::of(doc), copies, repeat, inner, symbols }
     }
 
     /// Whether object `n` of `doc` still matches this snapshot.
@@ -360,36 +400,49 @@ pub fn store(id: NodeId, inputs: Inputs, key: u64, sheet: Sheet) -> Arc<Sheet> {
         let s = g.get_or_insert_with(Store::default);
         s.stamp += 1;
         let stamp = s.stamp;
-        s.entries.retain(|e| !(e.id == id && e.key == key));
+        s.entries.retain(|e| !(e.id == id && e.key == key && e.inputs.lineage.same(&inputs.lineage)));
         s.entries.push(Entry { id, inputs, key, sheet: sheet.clone(), stamp });
-        while s.entries.len() > MAX_ENTRIES {
-            let Some((oldest, _)) = s.entries.iter().enumerate().min_by_key(|(_, e)| e.stamp) else { break };
-            s.entries.swap_remove(oldest);
-        }
+        cap(s);
     }
     bump();
     sheet
 }
 
+/// Drop the oldest results past [`MAX_ENTRIES`].
+fn cap(s: &mut Store) {
+    while s.entries.len() > MAX_ENTRIES {
+        let Some((oldest, _)) = s.entries.iter().enumerate().min_by_key(|(_, e)| e.stamp) else { break };
+        s.entries.swap_remove(oldest);
+    }
+}
+
 /// A kept result of object `id` with geometry `key`, now answering to `inputs` (and the newest);
-/// `None` when there's none (compute it).
+/// `None` when there's none (compute it). Another document's result with the same key is the
+/// same sheet: it is shared, kept for this document too.
 pub fn rekey(id: NodeId, key: u64, inputs: Inputs) -> Option<Arc<Sheet>> {
     let sheet = {
         let mut g = lock();
         let s = g.as_mut()?;
         s.stamp += 1;
         let stamp = s.stamp;
-        let e = s.entries.iter_mut().find(|e| e.id == id && e.key == key)?;
-        e.inputs = inputs;
-        e.stamp = stamp;
-        e.sheet.clone()
+        if let Some(e) = s.entries.iter_mut().find(|e| e.id == id && e.key == key && e.inputs.lineage.same(&inputs.lineage)) {
+            e.inputs = inputs;
+            e.stamp = stamp;
+            e.sheet.clone()
+        } else {
+            let sheet = s.entries.iter().find(|e| e.id == id && e.key == key)?.sheet.clone();
+            s.entries.push(Entry { id, inputs, key, sheet: sheet.clone(), stamp });
+            cap(s);
+            sheet
+        }
     };
     bump();
     Some(sheet)
 }
 
 /// Object `n`'s stencil in `doc`: the result computed from what `doc` holds now (`true`: fresh)
-/// or its latest one (`false`: stale, being recomputed). `None` when none was ever computed.
+/// or its latest one in `doc` (`false`: stale, being recomputed; see [`Lineage`]). `None` when
+/// none was computed there.
 /// The result found is marked newest, so an object that is drawn keeps its result while another
 /// one being edited fills the store.
 pub fn lookup(doc: &Document, n: &Node) -> Option<(Arc<Sheet>, bool)> {
@@ -402,7 +455,7 @@ pub fn lookup(doc: &Document, n: &Node) -> Option<(Arc<Sheet>, bool)> {
             fresh = Some(i);
             break;
         }
-        if latest.and_then(|l| s.entries.get(l)).is_none_or(|l| e.stamp > l.stamp) {
+        if e.inputs.lineage.holds(doc) && latest.and_then(|l| s.entries.get(l)).is_none_or(|l| e.stamp > l.stamp) {
             latest = Some(i);
         }
     }
