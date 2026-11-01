@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Picabia placeholder icon: original work, a dot repeated around a ring (a circular array). -->
+  <rect width="512" height="512" rx="112" fill="#1d1b3a"/>
+  <circle cx="256.0" cy="106.0" r="52" fill="#ffd23f"/>
+  <circle cx="362.1" cy="149.9" r="52" fill="#ff5a36"/>
+  <circle cx="406.0" cy="256.0" r="52" fill="#ff5a36"/>
+  <circle cx="362.1" cy="362.1" r="52" fill="#ff5a36"/>
+  <circle cx="256.0" cy="406.0" r="52" fill="#ff5a36"/>
+  <circle cx="149.9" cy="362.1" r="52" fill="#ff5a36"/>
+  <circle cx="106.0" cy="256.0" r="52" fill="#ff5a36"/>
+  <circle cx="149.9" cy="149.9" r="52" fill="#ff5a36"/>
+</svg>

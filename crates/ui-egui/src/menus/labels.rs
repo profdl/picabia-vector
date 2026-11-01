@@ -158,6 +158,8 @@ pub fn display_label(app: &VectorcraftApp, id: &str, label: &str) -> String {
     let lang = crate::i18n::current();
     let fmt = crate::i18n::fmt;
     match id {
+        // PICABIA: items that name the app (About, Quit, GitHub) say Picabia.
+        _ if crate::picabia::names_the_app(id) => crate::picabia::rename(crate::i18n::tr_id(lang, id, label)),
         "edit.undo" | "edit.redo" => {
             let last = app.session.active().and_then(|d| if id == "edit.undo" { d.history.undo.last() } else { d.history.redo.last() });
             // The step's name as the History panel lists it.

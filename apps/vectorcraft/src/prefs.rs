@@ -19,7 +19,7 @@ pub(crate) fn log_dir() -> Option<std::path::PathBuf> {
 
 /// Runs without preferences (`VECTORCRAFT_NO_PREFS`, agents' test runs) neither read nor write them.
 pub(crate) fn prefs_enabled() -> bool {
-    std::env::var_os("VECTORCRAFT_NO_PREFS").is_none()
+    prefs_dir::picabia::var_os("VECTORCRAFT_NO_PREFS").is_none() // PICABIA: PICABIA_NO_PREFS first
 }
 
 /// The saved UI preferences, read before the window opens (they hold its size and position).

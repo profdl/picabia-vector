@@ -567,6 +567,8 @@ fn run_ui_part7(app: &mut VectorcraftApp, id: &str, p: &Value) -> Option<Result<
             app.ui.about = true;
             Ok(Value::Null)
         }
+        // PICABIA: Picabia has no release feed yet; VectorCraft's would offer VectorCraft.
+        "help.checkForUpdates" if !crate::picabia::HAS_UPDATE_FEED => crate::picabia::check_for_updates(app),
         "help.checkForUpdates" => crate::updates_ui::check(app),
         "help.commandPalette" => {
             app.ui.palette_open = !app.ui.palette_open;

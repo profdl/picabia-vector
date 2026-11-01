@@ -38,7 +38,7 @@ use crate::i18n::{Lang, tr, tr_ctx};
 use crate::menus::{self, Entry};
 use crate::theme::Brightness;
 
-pub const APP_NAME: &str = "VectorCraft";
+pub const APP_NAME: &str = crate::picabia::APP_NAME; // PICABIA: app menu name
 /// Hide VectorCraft: an item of ours (AppKit's always takes ⌘H, which is View › Hide Edges).
 pub const HIDE: &str = "app.hide";
 /// Hide Others: an item of ours, so a command bound to ⌥⌘H keeps it.
@@ -312,7 +312,8 @@ pub fn mac_layout(app: &VectorcraftApp, bar: &MenuBar, lang: Lang) -> Layout {
             None => Some(sc),
         }
     };
-    let hide = Item::system(HIDE, "Hide VectorCraft", key("Ctrl+Cmd+H", "Hide"), lang);
+    let mut hide = Item::system(HIDE, "Hide VectorCraft", key("Ctrl+Cmd+H", "Hide"), lang);
+    hide.label = crate::picabia::rename(&hide.label); // PICABIA: app name
     let hide_others = Item::system(HIDE_OTHERS, "Hide Others", key("Cmd+Alt+H", "Hide Others"), lang);
     let minimize = Item::system(MINIMIZE, "Minimize", key("Ctrl+Cmd+M", "Minimize"), lang);
 
@@ -342,7 +343,7 @@ pub fn mac_layout(app: &VectorcraftApp, bar: &MenuBar, lang: Lang) -> Layout {
     app.extend([Node::Item(hide), Node::Item(hide_others), Node::Standard(Standard::ShowAll), Node::Separator]);
     // Quit is File › Exit in the window; in the App menu it reads as a Mac Quit item.
     app.extend(quit.map(|mut q| {
-        q.label = tr(lang, "Quit VectorCraft").into();
+        q.label = crate::picabia::rename(tr(lang, "Quit VectorCraft")); // PICABIA: app name
         Node::Item(q)
     }));
     bar.menus.insert(0, Menu { title: APP_NAME.into(), role: MenuRole::App, children: app });
