@@ -35,6 +35,7 @@ pub fn prefs_path(legacy: bool) -> Option<PathBuf> {
 /// `portable` is the portable settings folder, if any: only asked for when no override is set and
 /// preferences are in use.
 fn prefs_path_with(os: &str, legacy: bool, env: impl Fn(&str) -> Option<OsString>, portable: impl FnOnce() -> Option<PathBuf>) -> Option<PathBuf> {
+    let env = |key: &str| super::picabia::env_first(&env, key); // PICABIA: PICABIA_CONFIG_DIR / PICABIA_NO_PREFS first
     if let Some(root) = env("VECTORCRAFT_CONFIG_DIR") {
         // Never fall back to DrawCraft's real profile when the isolated file does not exist.
         return (!legacy && !root.is_empty()).then(|| PathBuf::from(root).join("ui.json"));
@@ -207,6 +208,20 @@ mod tests {
             assert_eq!(prefs_path_with(os, false, env, installed), Some("/isolated/ui.json".into()));
             assert_eq!(prefs_path_with(os, true, env, installed), None);
         }
+    }
+
+    // PICABIA: Picabia's own override wins over a VectorCraft one, so the two don't share a folder.
+    #[test]
+    fn picabia_config_dir_wins_over_vectorcrafts() {
+        let env = |key: &str| match key {
+            "PICABIA_CONFIG_DIR" => Some("/picabia-only".into()),
+            "VECTORCRAFT_CONFIG_DIR" => Some("/every-vectorcraft".into()),
+            _ => environment(key),
+        };
+        assert_eq!(prefs_path_with("macos", false, env, installed), Some("/picabia-only/ui.json".into()));
+        let no_prefs = |key: &str| if key == "PICABIA_NO_PREFS" { Some("1".into()) } else { environment(key) };
+        let portable = || -> Option<PathBuf> { panic!("the portable folder is not looked for under PICABIA_NO_PREFS") };
+        assert_eq!(prefs_path_with("windows", false, no_prefs, portable), Some("/roaming/Picabia/ui.json".into()));
     }
 
     #[test]

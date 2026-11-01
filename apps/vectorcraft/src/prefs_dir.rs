@@ -8,7 +8,7 @@ use std::path::PathBuf;
 mod profile;
 // PICABIA: Picabia's settings folder names, read by `profile`.
 #[path = "picabia.rs"]
-mod picabia;
+pub(crate) mod picabia;
 
 /// The settings file `ui.json` of the app `name`: in a folder named `name` in ~/Library/Application
 /// Support (macOS) or %APPDATA% (Windows), or `lower` in $XDG_CONFIG_HOME or ~/.config (Linux and
@@ -30,7 +30,8 @@ pub fn install_fonts() {
 /// The folder `name` next to the settings, for what the user keeps: none in a run without
 /// preferences (`VECTORCRAFT_NO_PREFS`), which keeps nothing.
 fn store_dir(name: &str) -> Option<PathBuf> {
-    if std::env::var_os("VECTORCRAFT_NO_PREFS").is_some() {
+    if picabia::var_os("VECTORCRAFT_NO_PREFS").is_some() {
+        // PICABIA: PICABIA_NO_PREFS first
         return None;
     }
     Some(prefs_path_for("VectorCraft", "vectorcraft")?.parent()?.join(name))

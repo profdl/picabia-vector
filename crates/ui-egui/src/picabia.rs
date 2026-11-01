@@ -20,6 +20,12 @@ pub const REPO_URL: &str = "https://github.com/profdl/picabia-vector";
 pub const UPSTREAM_NAME: &str = "VectorCraft";
 /// VectorCraft's source code.
 pub const UPSTREAM_URL: &str = "https://github.com/storytold/vectorcraft";
+/// Where Picabia's releases are published (Help ▸ Check for Updates opens it).
+pub const RELEASES_URL: &str = "https://github.com/profdl/picabia-vector/releases";
+/// Whether Picabia has a release feed of its own for VectorCraft's update checker (not yet).
+pub const HAS_UPDATE_FEED: bool = false;
+/// VectorCraft's Discord button (its community, not Picabia's) is left out of the app bar.
+pub const SHOWS_DISCORD: bool = false;
 
 /// `text` with VectorCraft's name replaced by Picabia's, for an upstream label that names the app
 /// ("About VectorCraft"), translated first so languages that keep the Latin name read right.
@@ -27,18 +33,37 @@ pub fn rename(text: &str) -> String {
     text.replace(UPSTREAM_NAME, APP_NAME)
 }
 
+/// Menu items whose label names the app (About, Quit, the GitHub link), by command id: their
+/// translated label gets Picabia's name.
+pub fn names_the_app(id: &str) -> bool {
+    matches!(id, "help.about" | "app.quit" | "help.github")
+}
+
+/// Help ▸ Check for Updates. VectorCraft's checker reads VectorCraft's release feed, whose download
+/// would replace Picabia with VectorCraft, and Picabia has no feed of its own yet: open Picabia's
+/// releases page instead. (Picabia follows VectorCraft by merging upstream.)
+pub fn check_for_updates(app: &mut crate::VectorcraftApp) -> Result<serde_json::Value, String> {
+    app.open_url(RELEASES_URL);
+    Ok(serde_json::json!({ "url": RELEASES_URL }))
+}
+
+/// Picabia's two links (its repository and VectorCraft's), for the About window and the home screen.
+pub fn links(ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    ui.hyperlink_to(RichText::new("github.com/profdl/picabia-vector").color(t.accent), REPO_URL);
+    ui.hyperlink_to(RichText::new(format!("{UPSTREAM_NAME}, the open-source app {APP_NAME} is built on")).color(t.accent), UPSTREAM_URL);
+}
+
 /// The About tab's middle part: what Picabia is, its links and the upstream credit (in place of
 /// VectorCraft's community links and "Part of ArtCraft" line). The ArtCraft name and logos are
 /// upstream's trademarks, so Picabia neither shows nor links them as its own.
 pub fn about_credits(ui: &mut Ui) {
-    let t = Tokens::get(ui.ctx());
     ui.label(format!(
         "{APP_NAME} is built on {UPSTREAM_NAME}: vector illustration with a live modifier stack (arrays, mirrors and \
          randomised repeats that stay editable)."
     ));
     ui.add_space(8.0);
-    ui.hyperlink_to(RichText::new("github.com/profdl/picabia-vector").color(t.accent), REPO_URL);
-    ui.hyperlink_to(RichText::new(format!("{UPSTREAM_NAME}, the open-source app {APP_NAME} is built on")).color(t.accent), UPSTREAM_URL);
+    links(ui);
     ui.add_space(12.0);
     ui.label(
         RichText::new(format!(
@@ -59,6 +84,29 @@ mod tests {
         assert_eq!(rename("About VectorCraft"), "About Picabia");
         assert_eq!(rename("À propos de VectorCraft"), "À propos de Picabia");
         assert_eq!(rename("Swatches"), "Swatches");
+    }
+
+    #[test]
+    fn check_for_updates_opens_picabias_releases_not_vectorcrafts_feed() {
+        let mut app = crate::VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+        let r = app.run("help.checkForUpdates", serde_json::json!({}));
+        assert_eq!(r, Ok(serde_json::json!({ "url": RELEASES_URL })));
+        assert_eq!(app.pending_url.as_deref(), Some(RELEASES_URL));
+        assert!(!app.updates_rt.manual_window_open, "VectorCraft's update window stays closed");
+    }
+
+    #[test]
+    fn menu_items_that_name_the_app_say_picabia() {
+        let app = crate::VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+        for (id, label, want) in [
+            ("help.about", "About VectorCraft", "About Picabia"),
+            ("app.quit", "Quit VectorCraft", "Quit Picabia"),
+            ("help.github", "VectorCraft on GitHub", "Picabia on GitHub"),
+        ] {
+            assert_eq!(crate::menus::display_label(&app, id, label), want);
+        }
+        // Upstream's own page keeps its name: it is a link to VectorCraft.
+        assert_eq!(crate::menus::display_label(&app, "help.appPage", "VectorCraft on getartcraft.com"), "VectorCraft on getartcraft.com");
     }
 
     #[test]

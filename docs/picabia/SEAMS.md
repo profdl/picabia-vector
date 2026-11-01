@@ -20,3 +20,14 @@ When an upstream merge conflicts, resolve it seam by seam with this table, then 
 | `NOTICE` | top of file | Picabia's copyright, fork and icon notice above VectorCraft's, which follows unchanged | Keep our block on top |
 | `ASSETS.md` | rows after `assets/app-icon/` | Rows for `assets/picabia/app-icon/*` | Keep the 6 rows |
 | `crates/ui-egui/src/tests/nativemenu.rs`, `crates/ui-egui/src/i18n/tests.rs` | `vectorcraft_gets_a_mac_app_menu`, `language_command_sets_the_preference` | The macOS app menu is titled "Picabia" | Expect `"Picabia"` / `crate::picabia::APP_NAME` as the app menu's title |
+| `crates/ui-egui/src/menus/labels.rs` | `display_label` | Items that name the app (`help.about`, `app.quit`, `help.github`) say Picabia, translated first | Re-add the first match arm `_ if crate::picabia::names_the_app(id) => …rename(tr_id(…))` |
+| `crates/ui-egui/src/native_menu.rs` | `mac_layout` hide and quit items | macOS app menu "Hide Picabia", "Quit Picabia" | Wrap the two labels in `crate::picabia::rename` |
+| `crates/ui-egui/src/dialogs/recovery.rs` | `SPEC.body` | "Picabia didn't quit normally…" | Wrap the `tl!` text in `crate::picabia::rename` |
+| `crates/engine/src/cmd/help.rs` | `github_url`, its test | Help ▸ GitHub opens github.com/profdl/picabia-vector; the getartcraft.com page stays VectorCraft's (the upstream link) | Return Picabia's URL; the test expects it |
+| `crates/ui-egui/src/community.rs` | `link_clicks_open_the_right_urls` test | Expects Picabia's GitHub URL | Change the last expected URL |
+| `crates/ui-egui/src/chrome.rs` | `app_bar` `discord` | No VectorCraft Discord button in the app bar | Prefix the condition with `crate::picabia::SHOWS_DISCORD &&` |
+| `crates/ui-egui/src/canvas/home.rs` | Community links | Home screen shows Picabia's and VectorCraft's links, not ArtCraft's Discord and website | Call `crate::picabia::links(ui)` instead of `community::links` |
+| `crates/ui-egui/src/menus/run.rs` | `help.checkForUpdates` (PIC16.1) | VectorCraft's checker would offer VectorCraft's releases: open Picabia's releases page instead | Re-add the guarded arm `if !crate::picabia::HAS_UPDATE_FEED` above upstream's |
+| `apps/vectorcraft/src/main.rs` | `set_startup_update_check` (PIC16.1) | No update check at startup | Pass `false` |
+| `apps/vectorcraft/src/main.rs`, `prefs.rs`, `prefs_dir.rs` (`store_dir`), `profile.rs` (`prefs_path_with` + a test) | `VECTORCRAFT_NO_PREFS` / `VECTORCRAFT_CONFIG_DIR` reads | `PICABIA_NO_PREFS` / `PICABIA_CONFIG_DIR` read first, so a global VectorCraft override needn't make Picabia share a folder | Read through `picabia::var_os` / `picabia::env_first`; `prefs_dir`'s `mod picabia` is `pub(crate)` |
+| `crates/ui-egui/src/tests/nativemenu.rs`, `crates/ui-egui/src/titlebar.rs` (test) | `vectorcraft_gets_a_mac_app_menu`, `caption_buttons_take_the_right_end…` | Expect "About/Quit/Hide Picabia" and no Discord button | Re-apply the expected strings and the `SHOWS_DISCORD &&` |

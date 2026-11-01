@@ -30,7 +30,7 @@ they still apply.
 | P8–P11 | Stencil: path ops, sheet, islands and ties, repeat, limits and materials | — | Not yet ported (the `stencil` kind parses in the P1 crate). picabia-craft gaps: ties layer and text option not built; in fix mode narrow checks only look near ties, registration holes and edges; pattern ties ignore the repeat; material presets are guesses until measured with the test card |
 | P12 | Stencil laser export and test card | — | Not yet ported. picabia-craft gaps: never opened in laser software or cut; score lines cross cut-outs; contour direction not normalised; no DXF |
 | P13, P14 | Image Trace and Pathfinder generator rows | n/a | Not ported: VectorCraft's own Image Trace and live Pathfinder are used. The trace to stencil path must still work |
-| P16 | Interface scope (hide prototyping etc.) | n/a | Not ported: Picabia on VectorCraft hides nothing |
+| P16 | Interface scope (hide prototyping etc.) | n/a | Not ported: Picabia on VectorCraft hides nothing. PIC16.1 (no VectorCraft update check) is ported, see P0 |
 | P17 | Laser control: G-code and a GRBL sender | — | Not yet ported. picabia-craft gaps: never connected to a real GRBL or cut; no canvas overlay of the head and job; browser build has no laser control |
 
 ## P0 identity, as built
@@ -46,8 +46,9 @@ they still apply.
   Recovery, Fonts, Swatches, Graphic Styles, Symbols, Brushes, Libraries, Color Profiles, Plug-ins,
   PDF Presets, the single-instance lock), so Picabia and VectorCraft never read or overwrite each
   other's. The one-time read of DrawCraft's settings (VectorCraft's former name) is off for Picabia;
-  VectorCraft's migration code is untouched. `VECTORCRAFT_CONFIG_DIR` and `VECTORCRAFT_NO_PREFS`
-  still work as overrides.
+  VectorCraft's migration code is untouched. `PICABIA_CONFIG_DIR` and `PICABIA_NO_PREFS` override
+  it and win over `VECTORCRAFT_CONFIG_DIR` / `VECTORCRAFT_NO_PREFS`, which still apply when no
+  Picabia variable is set (agents' isolated runs use them).
 - **About.** Picabia's icon and name, the version, what Picabia is, links to Picabia's repository and
   to VectorCraft, and the credit "Includes VectorCraft by the ArtCraft team and community (MIT OR
   Apache-2.0)" with the font and icon credits. No ArtCraft logo, Discord or website links.
@@ -65,16 +66,24 @@ they still apply.
   and the web build's title and favicon are still VectorCraft's. The Linux `.desktop` file's
   `StartupWMClass` no longer matches the window's app id, so a Wayland dock won't match a launched
   window to an installed launcher until Picabia ships its own desktop entry.
-- **Menu labels.** "About VectorCraft", "Hide VectorCraft", "Quit VectorCraft", "VectorCraft Help…"
-  and the Help menu's "VectorCraft on GitHub" / "VectorCraft on getartcraft.com" items keep
-  VectorCraft's name: the labels are translation keys in 30+ catalogs whose menus must stay complete.
-  A rename at display time (as the About window title does) is the next step.
-- **Other texts naming the app.** Messages such as "restart VectorCraft" and log lines keep the
-  upstream name. The Picabia About texts are English only.
-- **Home screen and app bar.** VectorCraft's Discord button and ArtCraft links still show in the app
-  bar and on the home screen.
-- **Updates.** VectorCraft's update check would offer VectorCraft's releases; Picabia has no release
-  feed yet (picabia-craft hid the check, PIC16.1).
+- **Packaged window class.** Packaging still uses VectorCraft's ids: `packaging/linux`
+  (`ai.storyteller.vectorcraft.desktop` with `StartupWMClass=ai.storyteller.vectorcraft`, metainfo,
+  mime, `hicolor/`), the FreeBSD and Flatpak manifests, the desktop-file test in
+  `apps/vectorcraft/src/tests.rs`, and `xtask/src/bundle.rs` (macOS bundle id and `CFBundleName`).
+  The window's app id is now `org.picabia.Picabia`, so a packaged install's launcher won't match
+  the running window until packaging is rebranded.
+- **Texts still naming VectorCraft.** Done (PIC0.6a): the macOS app menu (About, Hide, Quit), Help ▸
+  About, Help ▸ GitHub (now "Picabia on GitHub", opening github.com/profdl/picabia-vector), the
+  Recover Documents text. Left: "VectorCraft Help…" (not built), Help ▸ "VectorCraft on
+  getartcraft.com" (kept as the upstream link), the "ArtCraft Website" and "Join Our Discord" Help
+  items, the "VectorCraft Updates" web window title, messages such as "restart VectorCraft", the
+  file-type name "VectorCraft" for `.vectorcraft` files, and log lines. The Picabia About texts are
+  English only.
+- **Discord.** Hidden from the app bar and the home screen (PIC0.6a); Help ▸ Join Our Discord and the
+  macOS app menu's Discord item remain (they are upstream's community).
+- **Updates (PIC16.1).** No check at startup; Help ▸ Check for Updates opens
+  github.com/profdl/picabia-vector/releases instead of VectorCraft's checker, whose feed would
+  offer VectorCraft. Picabia's own feed comes with its release packaging.
 - **Binary name.** Still `vectorcraft`; a `[[bin]] name = "picabia"` entry is the least invasive
   rename, at the first release.
 

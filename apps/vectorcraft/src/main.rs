@@ -424,7 +424,8 @@ fn main() -> std::process::ExitCode {
                 }
                 // Data Recovery copies live next to the preferences too (none for runs without
                 // preferences, such as agents' test runs, unless the recoveryFolder preference is set).
-                if std::env::var_os("VECTORCRAFT_NO_PREFS").is_none() {
+                if prefs_dir::picabia::var_os("VECTORCRAFT_NO_PREFS").is_none() {
+                    // PICABIA: PICABIA_NO_PREFS first
                     let recovery = prefs_path().and_then(|p| Some(p.parent()?.join("Data Recovery").to_string_lossy().to_string()));
                     app.session.recovery.set_default_folder(recovery);
                 }

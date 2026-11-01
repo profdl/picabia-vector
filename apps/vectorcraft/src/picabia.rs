@@ -18,3 +18,42 @@ pub const PORTABLE_DATA_DIR: &str = "PicabiaData";
 /// once. Off: those are another app's settings, and Picabia never had a DrawCraft profile.
 /// VectorCraft's migration code stays as it is, so upstream merges and its tests are untouched.
 pub const READS_DRAWCRAFT_PREFS: bool = false;
+
+/// The environment variable `key` as the settings code reads it, with Picabia's own name for it
+/// first: `PICABIA_CONFIG_DIR` before `VECTORCRAFT_CONFIG_DIR`, `PICABIA_NO_PREFS` before
+/// `VECTORCRAFT_NO_PREFS`. A user who points every VectorCraft at one folder can give Picabia its
+/// own; without a Picabia variable the VectorCraft one still applies (agents' and tests' isolated
+/// runs set it).
+pub fn env_first(env: &impl Fn(&str) -> Option<std::ffi::OsString>, key: &str) -> Option<std::ffi::OsString> {
+    let own = match key {
+        "VECTORCRAFT_CONFIG_DIR" => Some("PICABIA_CONFIG_DIR"),
+        "VECTORCRAFT_NO_PREFS" => Some("PICABIA_NO_PREFS"),
+        _ => None,
+    };
+    own.and_then(env).or_else(|| env(key))
+}
+
+/// [`env_first`] on the process environment.
+pub fn var_os(key: &str) -> Option<std::ffi::OsString> {
+    env_first(&|k: &str| std::env::var_os(k), key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env(vars: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<std::ffi::OsString> {
+        move |k| vars.iter().find(|(n, _)| *n == k).map(|(_, v)| (*v).into())
+    }
+
+    #[test]
+    fn picabias_own_variables_win_over_vectorcrafts() {
+        let both = env(&[("PICABIA_CONFIG_DIR", "/p"), ("VECTORCRAFT_CONFIG_DIR", "/v"), ("PICABIA_NO_PREFS", "1")]);
+        assert_eq!(env_first(&both, "VECTORCRAFT_CONFIG_DIR"), Some("/p".into()));
+        assert_eq!(env_first(&both, "VECTORCRAFT_NO_PREFS"), Some("1".into()));
+        let upstream_only = env(&[("VECTORCRAFT_CONFIG_DIR", "/v")]);
+        assert_eq!(env_first(&upstream_only, "VECTORCRAFT_CONFIG_DIR"), Some("/v".into()));
+        assert_eq!(env_first(&upstream_only, "VECTORCRAFT_NO_PREFS"), None);
+        assert_eq!(env_first(&both, "HOME"), None, "other variables are read as they are");
+    }
+}

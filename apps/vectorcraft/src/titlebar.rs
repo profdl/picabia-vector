@@ -3,8 +3,10 @@ use super::window;
 use super::xwayland;
 
 /// The window, Dock, taskbar and app-switcher icon (`assets/app-icon/`, see its README). macOS gets
-/// the version with Apple's transparent margin; elsewhere the full-bleed tile. The app ID matches
-/// `packaging/linux/ai.storyteller.vectorcraft.desktop` so Wayland docks find the launcher icon.
+/// the version with Apple's transparent margin; elsewhere the full-bleed tile. PICABIA: the icon is
+/// Picabia's (`assets/picabia/app-icon/`) and the app ID is `org.picabia.Picabia`, which VectorCraft's
+/// `packaging/linux/ai.storyteller.vectorcraft.desktop` doesn't match yet (Picabia's packaging isn't
+/// built), so a Wayland dock won't tie the window to an installed launcher.
 fn app_icon() -> egui::IconData {
     #[cfg(target_os = "macos")]
     let png: &[u8] = include_bytes!("../../../assets/picabia/app-icon/picabia-macos-512.png"); // PICABIA: Picabia's icon
