@@ -198,9 +198,10 @@ pub fn draws_copies(doc: &Document, n: &Node) -> bool {
     has_stack(n) && (draws_sheet(doc, n) || copies(doc, n).is_some_and(|out| node_count(n).saturating_mul(out.instances.len()) <= MAX_ART_NODES))
 }
 
-/// Whether `n` is a stencil drawn as its sheet (one was computed).
+/// Whether `n` is a stencil drawn as its sheet (one was computed, and it has a size to cut: what
+/// [`sheet_art`] needs).
 pub fn draws_sheet(doc: &Document, n: &Node) -> bool {
-    vectorcraft_stencil::store::is_stencil(n) && vectorcraft_stencil::store::lookup(doc, n).is_some()
+    vectorcraft_stencil::store::is_stencil(n) && vectorcraft_stencil::store::drawn(doc, n).is_some()
 }
 
 /// How many stencil arts are kept.
@@ -257,13 +258,19 @@ fn sheet_art(doc: &Document, n: &Node) -> Option<Arc<Node>> {
     Some(art)
 }
 
-/// A stencil object's sheet as an unpainted rectangle (bounds and clicks): known from its params
-/// before a sheet is computed.
-fn sheet_box(doc: &Document, n: &Node) -> Option<vectorcraft_geom::Rect> {
+/// A stencil object's sheet rectangle (bounds and clicks), and whether the sheet is all it draws.
+/// Known from its params before a sheet is computed (then its design or copies draw too, `false`).
+/// With a result: where it is now, and where the result drawn lies (a stale one is drawn where it
+/// was computed until the new one lands, so a moved stencil's old place repaints and clicks).
+fn sheet_box(doc: &Document, n: &Node) -> Option<(vectorcraft_geom::Rect, bool)> {
     if !vectorcraft_stencil::store::is_stencil(n) {
         return None;
     }
-    vectorcraft_stencil::store::frame(doc, n).map(|f| f.sheet)
+    let frame = vectorcraft_stencil::store::frame(doc, n)?;
+    match vectorcraft_stencil::store::lookup(doc, n) {
+        Some((sheet, _)) => Some((frame.sheet.union(sheet.sheet), true)),
+        None => Some((frame.sheet, false)),
+    }
 }
 
 /// Whether `n`'s members draw once in each of its copies (their own copies over the budget), as
@@ -374,11 +381,17 @@ pub fn bounds_art(doc: &Document, n: &Node) -> Option<Arc<Node>> {
     if !has_stack(n) {
         return None;
     }
-    // A stencil reaches as far as its sheet, before and after it is computed.
-    if let Some(r) = sheet_box(doc, n) {
+    // A stencil reaches as far as its sheet, before and after it is computed; before, as far as
+    // its design or copies too (a tile output's grid draws past the tile).
+    if let Some((r, only)) = sheet_box(doc, n) {
         let path = vectorcraft_geom::PathData::from_bezpath(&vectorcraft_geom::kurbo::Shape::to_path(&r, 0.1));
         let solid = vectorcraft_color::Paint::solid(vectorcraft_color::Color::BLACK);
-        return Some(Arc::new(Node::path(n.id, path, vectorcraft_doc::Appearance::basic(solid, vectorcraft_color::Paint::None, 0.0))));
+        let sheet = Arc::new(Node::path(n.id, path, vectorcraft_doc::Appearance::basic(solid, vectorcraft_color::Paint::None, 0.0)));
+        if only {
+            return Some(sheet);
+        }
+        let design = art(doc, n).unwrap_or_else(|| Arc::new(plain(n)));
+        return Some(Arc::new(Node::group(n.id, vec![sheet, design])));
     }
     Some(art(doc, n).unwrap_or_else(|| Arc::new(plain(n))))
 }
@@ -476,7 +489,7 @@ fn hit_transforms(symbols: &SymbolBoxes, n: &Node) -> Option<(Arc<[Affine]>, boo
 }
 
 /// A stencil object's sheet, clicked as the object.
-fn hit_sheet(symbols: &SymbolBoxes, n: &Node) -> Option<vectorcraft_geom::Rect> {
+fn hit_sheet(symbols: &SymbolBoxes, n: &Node) -> Option<(vectorcraft_geom::Rect, bool)> {
     sheet_box(symbols.document(), n)
 }
 

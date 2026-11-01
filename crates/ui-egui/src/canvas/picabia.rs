@@ -2,6 +2,8 @@
 //! faint outline on a selected object's copies (the selection box stays on the object itself); a
 //! selected stencil's tie bars and repeat cell.
 
+use std::sync::{Arc, Mutex, PoisonError};
+
 use egui::Stroke;
 use vectorcraft_doc::{Document, Node};
 use vectorcraft_geom::{Affine, BezPath};
@@ -53,24 +55,46 @@ const MAX_MARKER_ELEMENTS: usize = 50_000;
 /// repeat cell its tile is cut from (dashed).
 pub(super) fn selected_outlines(p: &egui::Painter, doc: &Document, n: &Node, outline: &BezPath, xf: &Xf, color: egui::Color32) {
     copy_outlines(p, doc, n, outline, xf, Stroke::new(1.0, color.gamma_multiply(0.4)));
-    for (bp, dashed) in stencil_markers(doc, n) {
-        if dashed {
-            for pts in super::outline::to_screen_path(&bp, xf) {
+    for (bp, dashed) in stencil_markers(doc, n).iter() {
+        if *dashed {
+            for pts in super::outline::to_screen_path(bp, xf) {
                 p.extend(egui::Shape::dashed_line(&pts, Stroke::new(1.0, color), 4.0, 3.0));
             }
         } else {
-            stroke_path(p, &bp, xf, Stroke::new(1.0, color.gamma_multiply(0.85)));
+            stroke_path(p, bp, xf, Stroke::new(1.0, color.gamma_multiply(0.85)));
         }
     }
 }
 
+/// How many sheets' markers are kept (one per selected stencil, a few selected at once).
+const KEPT_MARKERS: usize = 8;
+
+type Markers = Arc<Vec<(BezPath, bool)>>;
+
+/// Markers kept per sheet, so a selected stencil's ties aren't copied every frame.
+static MARKERS: Mutex<Vec<(Arc<vectorcraft_engine::picabia_stencil::Sheet>, Markers)>> = Mutex::new(Vec::new());
+
 /// A stencil object's markers: its tie bars, and its repeat cell (dashed); none without a sheet,
-/// or past [`MAX_MARKER_ELEMENTS`].
-pub(super) fn stencil_markers(doc: &Document, n: &Node) -> Vec<(BezPath, bool)> {
+/// or past [`MAX_MARKER_ELEMENTS`]. Kept per sheet.
+pub(super) fn stencil_markers(doc: &Document, n: &Node) -> Markers {
     if !vectorcraft_engine::picabia_stencil::is_stencil(n) {
-        return Vec::new();
+        return Markers::default();
     }
-    let Some((sheet, _)) = vectorcraft_engine::picabia_stencil::lookup(doc, n) else { return Vec::new() };
+    let Some((sheet, _)) = vectorcraft_engine::picabia_stencil::lookup(doc, n) else { return Markers::default() };
+    let mut kept = MARKERS.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(at) = kept.iter().position(|(s, _)| Arc::ptr_eq(s, &sheet)) {
+        let hit = kept.remove(at);
+        let m = hit.1.clone();
+        kept.insert(0, hit);
+        return m;
+    }
+    let m = Arc::new(markers_of(&sheet));
+    kept.insert(0, (sheet, m.clone()));
+    kept.truncate(KEPT_MARKERS);
+    m
+}
+
+fn markers_of(sheet: &vectorcraft_engine::picabia_stencil::Sheet) -> Vec<(BezPath, bool)> {
     let mut out = Vec::new();
     if !sheet.info.ties.elements().is_empty() && sheet.info.ties.elements().len() <= MAX_MARKER_ELEMENTS {
         out.push((sheet.info.ties.clone(), false));
@@ -109,5 +133,42 @@ mod tests {
         let copies = super::copy_outline_paths(&d, &n, &outline);
         let xs: Vec<f64> = copies.iter().map(|bp| vectorcraft_geom::Shape::bounding_box(bp).x0).collect();
         assert_eq!(xs, [40.0, 80.0], "the two copies besides the object");
+    }
+
+    /// A stencil sheet computed since the frame shown renders the whole frame again, whatever
+    /// placed documents' bitmaps did: the stencil counter is its own key field, never read as a
+    /// placed-bitmap generation (where a range with no bitmaps made in it repaints nothing).
+    #[test]
+    fn a_stencil_sheet_computed_since_the_frame_shown_renders_the_whole_frame() {
+        use serde_json::json;
+        use vectorcraft_geom::Affine;
+
+        use crate::VectorcraftApp;
+        use crate::caches::CacheKey;
+        let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+        app.ui.task_bar = false;
+        app.ui.view.rulers = false;
+        app.canvas.worker_started = true; // every frame on this thread
+        app.run("shape.rectangle", json!({"x": 50, "y": 50, "width": 60, "height": 40})).unwrap();
+        let ctx = egui::Context::default();
+        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), ..Default::default() };
+        let mut out = ctx.run_ui(raw, |ui| super::super::show(&mut app, ui));
+        out.textures_delta.clear();
+        let key = app.canvas.key.clone().unwrap();
+        assert_eq!(key.stencil, vectorcraft_engine::picabia_stencil::generation());
+        let (_, opts) = app.canvas.shown.clone().unwrap();
+        let view = Affine::translate((f64::from(key.w) / 2.0, f64::from(key.h) / 2.0))
+            * Affine::rotate(key.rot.to_radians())
+            * Affine::scale(key.zoom * f64::from(key.ppp))
+            * Affine::translate((-key.cx, -key.cy));
+        let doc = app.session.active().unwrap().doc.clone();
+        let changed = |k: &CacheKey| super::super::raster::changed_pixels(&app, k, &doc, &opts, view, k.w, k.h);
+        assert_eq!(changed(&key), Some(None), "nothing changed: nothing to render again");
+        let sheet = CacheKey { stencil: key.stencil.wrapping_add(1), ..key.clone() };
+        assert_eq!(changed(&sheet), None, "a new sheet: the whole frame");
+        // The bug this guards: the stencil counter folded into `placed`, read as a range of
+        // placed bitmaps made (none were), so nothing rendered again.
+        assert_eq!(sheet.placed, key.placed);
     }
 }

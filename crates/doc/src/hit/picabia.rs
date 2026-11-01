@@ -32,8 +32,9 @@ pub struct CopyHooks {
     pub transforms: fn(&SymbolBoxes, &Node) -> Option<Placements>,
     /// The group of an object's copies, for marquees.
     pub art: fn(&SymbolBoxes, &Node) -> Option<Arc<Node>>,
-    /// A stencil object's sheet: clicked anywhere on it, as the object.
-    pub sheet: fn(&SymbolBoxes, &Node) -> Option<vectorcraft_geom::Rect>,
+    /// A stencil object's sheet: clicked anywhere on it, as the object. `true`: the sheet is all
+    /// it draws (a sheet was computed); `false`: its design (or copies) draws, also clicked.
+    pub sheet: fn(&SymbolBoxes, &Node) -> Option<(vectorcraft_geom::Rect, bool)>,
 }
 
 static HOOKS: OnceLock<CopyHooks> = OnceLock::new();
@@ -102,8 +103,13 @@ pub(super) fn touches(symbols: &SymbolBoxes, n: &Node, r: vectorcraft_geom::Rect
     if !(h.has)(n) || plain(n.id) {
         return None;
     }
-    if let Some(sheet) = (h.sheet)(symbols, n) {
-        return Some(sheet.intersect(r).area() > 0.0 || sheet.contains(r.origin()));
+    if let Some((sheet, only)) = (h.sheet)(symbols, n) {
+        if sheet.intersect(r).area() > 0.0 || sheet.contains(r.origin()) {
+            return Some(true);
+        }
+        if only {
+            return Some(false);
+        }
     }
     copies(symbols, n).map(|a| touch(&a))
 }
@@ -140,12 +146,15 @@ pub(super) fn hit(
         return None;
     }
     // A stencil: its sheet, a filled rectangle with the object's id.
-    if let Some(r) = (h.sheet)(symbols, c) {
+    if let Some((r, only)) = (h.sheet)(symbols, c) {
         let paper = crate::Appearance::basic(vectorcraft_color::Paint::solid(vectorcraft_color::Color::BLACK), vectorcraft_color::Paint::None, 0.0);
         let mut sheet = Node::path(c.id, vectorcraft_geom::PathData::from_bezpath(&vectorcraft_geom::kurbo::Shape::to_path(&r, 0.1)), paper);
         (sheet.visible, sheet.locked) = (c.visible, c.locked);
         let holder = Node::group(c.id, vec![Arc::new(sheet)]);
-        return Some(try_at(&holder, p, opt));
+        let found = try_at(&holder, p, opt);
+        if only || found.is_some() {
+            return Some(found);
+        }
     }
     let (ts, strip) = (h.transforms)(symbols, c)?;
     // A top-level object with copies (none is being tried yet): count its placements afresh.

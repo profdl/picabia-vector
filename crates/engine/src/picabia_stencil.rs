@@ -197,8 +197,13 @@ pub fn ensure_one(doc: &Document, id: NodeId) -> Option<Arc<Sheet>> {
 }
 
 /// Compute every stale stencil of `doc` now (exports and headless renders draw fresh sheets).
+/// Inside an export's progress scope, Cancel stops it between stencils (the export then stops at
+/// its own next check).
 pub fn ensure(doc: &Document) {
     for id in stencil_objects(doc) {
+        if vectorcraft_doc::cancel::is_cancelled() {
+            return;
+        }
         ensure_one(doc, id);
     }
 }

@@ -13,9 +13,8 @@ use crate::Session;
 use crate::picabia_stencil as ps;
 
 /// Pixel `(x, y)` of `doc` drawn over `region` at 1 px a point, transparent where nothing is. The
-/// sheets are computed just before: the store is keyed by object id and shared by the tests
-/// running at once, whose documents reuse the same ids, so another test can replace this one's
-/// result between a compute and a draw.
+/// sheets are computed just before: the store is shared by the tests running at once and drops
+/// its oldest results past its cap.
 fn px(doc: &std::sync::Arc<vectorcraft_doc::Document>, region: Rect, x: f64, y: f64) -> [u8; 4] {
     ps::ensure(doc);
     let r = vectorcraft_render::Renderer::new().render_region(doc, region, 1.0, false);
@@ -68,11 +67,13 @@ fn the_sheet_counts_for_bounds_and_hit_testing() {
 fn exports_compute_stale_stencils_first() {
     let mut s = session();
     let g = two_tone(&mut s, json!({}));
-    // Moved where no other test's stencil is: the store keeps one result per object id and
-    // geometry, shared by the tests running at once (whose documents reuse the same ids).
     ex(&mut s, "object.move", json!({"ids": [g.0], "dx": 13, "dy": 0}));
     let d = s.doc().unwrap().doc.clone();
     assert!(ps::lookup(&d, d.node(g).unwrap()).is_none_or(|(_, f)| !f));
+    // The native file keeps the design and the stack, not the sheet: nothing to compute.
+    ex(&mut s, "document.serialize", json!({"format": "vectorcraft"}));
+    let d = s.doc().unwrap().doc.clone();
+    assert!(ps::lookup(&d, d.node(g).unwrap()).is_none_or(|(_, f)| !f), "a native save computes nothing");
     let out = ex(&mut s, "document.serialize", json!({"format": "png"}));
     assert!(out["dataBase64"].as_str().is_some_and(|d| !d.is_empty()));
     let d = s.doc().unwrap().doc.clone();
@@ -185,8 +186,16 @@ fn svg_and_pdf_exports_write_the_tile_where_it_is_cut() {
     // The tile: the 20-unit cell plus a 3-unit margin each side, not the 66-unit sheet.
     assert!(svg.contains("width=\"26\"") && svg.contains("height=\"26\""), "{svg}");
     assert!(svg.contains("#c8a165") && !svg.contains("#000000"), "{svg}");
-    let out = ex(&mut s, "document.serialize", json!({"format": "pdf"}));
-    assert!(out["dataBase64"].as_str().is_some_and(|d| !d.is_empty()));
+    // Where: on the artboard (at the origin), the paper starts with the tile's rectangle, the
+    // repeat cell (17, 17)-(43, 43) the stencil computed.
+    let d = s.doc().unwrap().doc.clone();
+    assert_eq!(ps::lookup(&d, d.node(g).unwrap()).unwrap().0.sheet, Rect::new(17.0, 17.0, 43.0, 43.0));
+    let on_board = ex(&mut s, "document.serialize", json!({"format": "svg", "useArtboards": true}))["text"].as_str().unwrap().to_string();
+    assert!(on_board.contains("<path d=\"M17 17 L43 17 L43 43 L17 43 Z M"), "{on_board}");
+    // The PDF of the art alone: the page is the tile.
+    let pdf = ex(&mut s, "document.serialize", json!({"format": "pdf", "useArtboards": false}));
+    let bytes = vectorcraft_format::base64_decode(pdf["dataBase64"].as_str().unwrap()).unwrap();
+    assert!(String::from_utf8_lossy(&bytes).contains("MediaBox[0 0 26 26]"));
 }
 
 #[test]
@@ -203,4 +212,75 @@ fn tile_output_exports_the_tile_for_the_laser() {
     // The 130 mm tile (not the 330 mm sheet) plus paper's kerf.
     let close = |v: &Value, want: f64| v.as_f64().is_some_and(|x| (x - want).abs() < 1e-6);
     assert!(close(&r["files"][0]["wMm"], 130.1) && close(&r["files"][0]["hMm"], 130.1), "{r}");
+}
+
+/// A moved stencil's stale sheet is drawn where it was computed until the new one lands: bounds
+/// (so the old place repaints) and clicks cover both places.
+#[test]
+fn a_stale_sheet_counts_where_it_is_drawn() {
+    let mut s = session();
+    let g = two_tone(&mut s, json!({}));
+    ps::compute_now(&s.doc().unwrap().doc.clone(), g).unwrap();
+    ex(&mut s, "object.move", json!({"ids": [g.0], "dx": 300, "dy": 0}));
+    let d = s.doc().unwrap().doc.clone();
+    assert!(ps::lookup(&d, d.node(g).unwrap()).is_some_and(|(_, fresh)| !fresh));
+    let b = vectorcraft_render::painted_bounds(&d, d.node(g).unwrap()).unwrap();
+    assert_eq!(b, Rect::new(-10.0, -10.0, 510.0, 110.0), "the old sheet and the new frame");
+    assert_eq!(hit_test(&d, Point::new(-5.0, 50.0), HitOptions::default()).map(|h| h.leaf), Some(g), "the stale sheet");
+    assert_eq!(hit_test(&d, Point::new(505.0, 50.0), HitOptions::default()).map(|h| h.leaf), Some(g), "the new frame");
+}
+
+/// Before a tile output stencil is computed its gridded design draws, past the tile: bounds and
+/// clicks cover the grid.
+#[test]
+fn before_its_sheet_a_tile_stencil_counts_its_design() {
+    let mut s = session();
+    let g = corner_motif(&mut s, json!({"output": "tile", "tieSeed": 7}));
+    let d = s.doc().unwrap().doc.clone();
+    let n = d.node(g).unwrap();
+    assert!(ps::lookup(&d, n).is_none(), "nothing computed yet");
+    let tile = vectorcraft_stencil::store::frame(&d, n).unwrap().sheet;
+    let b = vectorcraft_render::painted_bounds(&d, n).unwrap();
+    assert!(b.contains(Point::new(0.5, 0.5)) && b.contains(Point::new(59.5, 59.5)) && b.union(tile) == b, "{b:?} {tile:?}");
+    // The first copy's corner, outside the tile, draws and is clicked.
+    assert!(!tile.contains(Point::new(1.0, 1.0)), "{tile:?}");
+    assert!(hit_test(&d, Point::new(1.0, 1.0), HitOptions::default()).is_some(), "the design outside the tile");
+    // Once computed, the tile is all it draws.
+    ps::compute_now(&d, g).unwrap();
+    assert!(hit_test(&d, Point::new(1.0, 1.0), HitOptions::default()).is_none(), "outside the tile");
+}
+
+/// A stencil with no size to cut draws its design: no sheet, no copies of its stack.
+#[test]
+fn a_stencil_with_no_size_draws_its_design() {
+    let mut s = session();
+    let a = id_of(&ex(&mut s, "shape.line", json!({"x1": 0, "y1": 0, "x2": 0, "y2": 0}))["id"]);
+    let g = id_of(&ex(&mut s, "modifier.stencilFromSelection", json!({"ids": [a.0]}))["id"]);
+    let d = s.doc().unwrap().doc.clone();
+    let n = d.node(g).unwrap();
+    assert!(ps::compute_now(&d, g).is_none(), "no size to cut");
+    assert!(ps::lookup(&d, n).is_some(), "the no-size result is kept");
+    assert!(!vectorcraft_render::picabia::draws_sheet(&d, n));
+    assert!(!vectorcraft_render::picabia::draws_copies(&d, n));
+}
+
+/// Object ids restart in every document: another document's stencil with the same id never draws
+/// this one's sheet, stale or not, and an edit of this one still finds its own (stale) sheet.
+#[test]
+fn a_sheet_stays_with_its_document() {
+    let mut a = session();
+    let ga = two_tone(&mut a, json!({}));
+    let da = a.doc().unwrap().doc.clone();
+    let sheet_a = ps::compute_now(&da, ga).unwrap();
+    let mut b = session();
+    let gb = two_tone(&mut b, json!({"marginMm": 40}));
+    assert_eq!(ga, gb, "the same id in both documents");
+    let db = b.doc().unwrap().doc.clone();
+    assert!(ps::lookup(&db, db.node(gb).unwrap()).is_none(), "nothing computed in this document yet");
+    assert!(!vectorcraft_render::picabia::draws_sheet(&db, db.node(gb).unwrap()), "draws its design");
+    // An edit of the first document: its own sheet, stale, until the new one lands.
+    ex(&mut a, "object.move", json!({"ids": [ga.0], "dx": 31, "dy": 0}));
+    let da = a.doc().unwrap().doc.clone();
+    let (kept, fresh) = ps::lookup(&da, da.node(ga).unwrap()).unwrap();
+    assert!(!fresh && std::sync::Arc::ptr_eq(&kept, &sheet_a), "its own stale sheet");
 }
