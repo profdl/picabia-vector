@@ -22,6 +22,8 @@ impl Session {
         vectorcraft_doc::hit::set_image_paint(vectorcraft_render::effects::image_paint);
         // Exports bake Vector Halftone into the dots the renderer samples.
         vectorcraft_render::effects::addons::halftone::set_art(vectorcraft_render::addons::halftone::art);
+        // PICABIA: exports write modifier copies the renderer draws.
+        vectorcraft_render::effects::picabia::set_hooks(vectorcraft_render::picabia::has_stack, vectorcraft_render::picabia::art_node);
         // OpenType SVG glyphs are drawn as the SVG importer reads their documents.
         vectorcraft_text::set_svg_glyph_reader(vectorcraft_svg::glyph_art);
         Self {

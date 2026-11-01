@@ -173,7 +173,7 @@ fn redraw_matches(old: &Document, new: &Document, what: &str) {
         .map(|i| (i % W, i / W, at(&patched, i), at(&after.pixels, i)))
         .take(5)
         .collect();
-    assert!(diff.is_empty(),"{what}: drawn again only where it changed ({:?}), it differs from drawing it all at {diff:?}", changed(old, new));
+    assert!(diff.is_empty(), "{what}: drawn again only where it changed ({:?}), it differs from drawing it all at {diff:?}", changed(old, new));
 }
 
 #[test]

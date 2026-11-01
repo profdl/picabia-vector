@@ -12,7 +12,8 @@ impl Renderer {
         let key = Arc::as_ptr(a) as usize;
         if let Some(e) = self.geom.get_mut(&key)
             && Arc::ptr_eq(&e.node, a)
-            && !crate::picabia::has_targets(a) // PICABIA: copy-to-shape copies follow their target
+            && !crate::picabia::has_targets(a)
+        // PICABIA: copy-to-shape copies follow their target
         {
             e.stamp = self.stamp;
             return e.bounds;

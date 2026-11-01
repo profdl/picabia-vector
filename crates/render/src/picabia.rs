@@ -173,6 +173,88 @@ pub fn hit_copies(symbols: &vectorcraft_doc::SymbolBoxes, n: &Node) -> Option<Ar
     art(symbols.document(), n)
 }
 
+/// Whether any object of `doc` has an active stack.
+pub fn has_stacks(doc: &Document) -> bool {
+    let mut any = false;
+    doc.walk(|n| any |= has_stack(n));
+    any
+}
+
+/// `doc` with every object that has modifier copies replaced by them, as plain objects with ids of
+/// their own and no stack (what `modifier.apply` makes, without the names): for writers that read
+/// the document tree themselves (plug-in exporters, legacy .ai). `None` when nothing has copies.
+pub fn baked(doc: &Document) -> Option<Document> {
+    if !has_stacks(doc) {
+        return None;
+    }
+    let mut out = doc.clone();
+    let layers = doc.layers.clone();
+    let mut changed = false;
+    out.layers = layers
+        .iter()
+        .map(|l| match bake_tree(doc, &mut out, l, 0) {
+            Some(n) => {
+                changed = true;
+                Arc::new(n)
+            }
+            None => l.clone(),
+        })
+        .collect();
+    changed.then_some(out)
+}
+
+/// `n` with the objects in it that have copies replaced by them (fresh ids from `out`), `None`
+/// when nothing in it has copies. Copies are read from `doc` (copy-to-shape targets resolve there).
+fn bake_tree(doc: &Document, out: &mut Document, n: &Node, depth: usize) -> Option<Node> {
+    if depth > vectorcraft_doc::MAX_DEPTH {
+        return None;
+    }
+    if let Some(a) = art(doc, n) {
+        let mut m = Arc::unwrap_or_clone(a);
+        let mut seen = std::collections::HashSet::from([m.id]);
+        for c in m.children_mut().into_iter().flatten() {
+            let c = Arc::make_mut(c);
+            // Members' own copies, inside each copy (their stacks were kept within the budget).
+            if let Some(b) = bake_tree(doc, out, c, depth + 1) {
+                *c = b;
+            }
+            vectorcraft_effects::fresh_ids(out, c, &mut seen);
+        }
+        return Some(m);
+    }
+    if has_stack(n) {
+        // Active but no copies: the object as it is, without the stack.
+        let mut m = n.clone();
+        vectorcraft_modifiers::set_node_source(&mut m, None);
+        return Some(m);
+    }
+    let children = n.children()?;
+    let mut changed = false;
+    let baked: Vec<Arc<Node>> = children
+        .iter()
+        .map(|c| match bake_tree(doc, out, c, depth + 1) {
+            Some(b) => {
+                changed = true;
+                Arc::new(b)
+            }
+            None => c.clone(),
+        })
+        .collect();
+    if !changed {
+        return None;
+    }
+    let mut m = n.clone();
+    if let Some(ch) = m.children_mut() {
+        *ch = baked;
+    }
+    Some(m)
+}
+
+/// The export warning for a format that writes `doc`'s modifier copies as plain objects.
+pub fn bake_warning(doc: &Document) -> Option<String> {
+    has_stacks(doc).then(|| "modifier copies are written as plain objects: this format doesn't keep modifier stacks".to_string())
+}
+
 /// What may draw differently in `new` than in `old` because a copy-to-shape target changed while
 /// its source didn't: the sources' painted bounds before and after.
 pub(crate) fn dependents(old: &Document, new: &Document) -> Option<Rect> {

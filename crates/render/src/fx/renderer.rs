@@ -458,7 +458,8 @@ impl Renderer {
         };
         let art = if effects::has_revolve(a) || effects::has_solid(a) { effects::evaluate_container(Some(doc), &art).unwrap_or(art) } else { art };
         // Vector Halftone samples the object with its colour adjustments: its dots keep their inks.
-        let outer = if effects::addons::halftone::has_halftone(a) || crate::picabia::has_stack(a) { None } else { effects::color_map(&a.appearance.effects) };
+        let outer =
+            if effects::addons::halftone::has_halftone(a) || crate::picabia::has_stack(a) { None } else { effects::color_map(&a.appearance.effects) };
         let mut art = self.adjusted_art(doc, art, outer.as_ref());
         // A path's geometry effects still apply when it is drawn.
         let path = matches!(art.kind, NodeKind::Path { .. } | NodeKind::Compound { .. });

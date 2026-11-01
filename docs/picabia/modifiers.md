@@ -19,3 +19,12 @@ once in each copy).
 
 An object whose stack makes no copies (no active row, a single unmoved copy, a missing copy-to-shape
 target) draws as itself.
+
+## Exports
+
+Every vector export (SVG, PDF, print, EPS, DXF, EMF, WMF, legacy .ai, plug-in exporters) writes the
+copies as plain objects, with a warning; raster exports draw them. **The written copies carry no
+stack**, so reading such a file back gives the copies as plain objects, never copies of copies.
+The live stack survives only where the format carries VectorCraft's own document: the native
+`.vectorcraft` file, SVG and PDF saved with Preserve Editing, and an EPS that VectorCraft wrote.
+(picabia-craft's FigCraft SVG never carried plugin data, so it had no such choice to make.)

@@ -400,11 +400,15 @@ fn remove_all(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 mod apply;
+mod export;
 mod targets;
+pub(crate) use export::{bake_copies, baked_export, export_warning};
 pub use targets::{check_target, target_choices};
 pub(crate) use targets::{remap_copies, remap_pasted, snapshot};
 #[cfg(test)]
 mod apply_tests;
+#[cfg(test)]
+mod export_tests;
 #[cfg(test)]
 mod targets_tests;
 #[cfg(test)]
