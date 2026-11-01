@@ -250,6 +250,7 @@ pub fn menu_tree_named(english_names: bool) -> Vec<(&'static str, Vec<Item>)> {
                         c("Options…", "object.repeat.options"),
                     ],
                 ),
+                sub("Modifiers", crate::picabia::menu::object_items()), // PICABIA: Object ▸ Modifiers
                 sub(
                     "Intertwine",
                     vec![c("Make", "object.intertwine.make"), c("Edit", "object.intertwine.edit"), c("Release", "object.intertwine.release")],

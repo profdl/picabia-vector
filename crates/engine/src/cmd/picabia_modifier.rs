@@ -27,6 +27,13 @@ pub(crate) struct PicabiaState {
     pub(crate) copied_modifiers: Vec<Value>,
 }
 
+impl Session {
+    /// The modifier rows `modifier.copy` copied, for `modifier.paste` (the panel enables Paste by it).
+    pub fn picabia_copied_modifiers(&self) -> &[Value] {
+        &self.picabia.copied_modifiers
+    }
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(

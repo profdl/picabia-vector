@@ -538,6 +538,7 @@ fn stack(app: &mut VectorcraftApp, ui: &mut Ui, n: &Node, sel: Sel, object_row: 
         rows.push((Slot::Contents, r));
         track(&resp, Dragged::Contents);
     }
+    crate::picabia::appearance::rows(app, ui, n, only.is_some()); // PICABIA: modifier rows, above the effects drawn on each copy
     // Object-level effects.
     for (k, e) in n.appearance.effects.iter().enumerate() {
         if only.is_some_and(|m| !m.shared.has_effect(k)) {
@@ -1043,6 +1044,7 @@ pub(crate) fn fx_menu(app: &mut VectorcraftApp, ui: &mut Ui) {
             });
         });
     }
+    crate::picabia::appearance::add_menu(app, ui); // PICABIA: modifier kinds
 }
 
 pub fn menu(app: &mut VectorcraftApp, ui: &mut Ui) {

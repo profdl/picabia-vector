@@ -6,6 +6,9 @@
 //! Crate, package, binary and file-format names stay VectorCraft's (`.vectorcraft` files, the
 //! `vectorcraft` executable): renaming them would conflict on every upstream merge.
 
+pub mod appearance;
+pub mod menu;
+
 use egui::{RichText, Ui};
 
 use crate::theme::Tokens;
