@@ -32,6 +32,8 @@ pub struct CopyHooks {
     pub transforms: fn(&SymbolBoxes, &Node) -> Option<Placements>,
     /// The group of an object's copies, for marquees.
     pub art: fn(&SymbolBoxes, &Node) -> Option<Arc<Node>>,
+    /// A stencil object's sheet: clicked anywhere on it, as the object.
+    pub sheet: fn(&SymbolBoxes, &Node) -> Option<vectorcraft_geom::Rect>,
 }
 
 static HOOKS: OnceLock<CopyHooks> = OnceLock::new();
@@ -93,6 +95,19 @@ pub(super) fn copies(symbols: &SymbolBoxes, n: &Node) -> Option<Arc<Node>> {
     (h.art)(symbols, n)
 }
 
+/// Whether a marquee `r` touches `n` through its copies or, for a stencil, its sheet (anywhere on
+/// it, as a click); `None`: `n` has neither, test it as usual. `touch` tests the copies' group.
+pub(super) fn touches(symbols: &SymbolBoxes, n: &Node, r: vectorcraft_geom::Rect, touch: &dyn Fn(&Node) -> bool) -> Option<bool> {
+    let h = HOOKS.get()?;
+    if !(h.has)(n) || plain(n.id) {
+        return None;
+    }
+    if let Some(sheet) = (h.sheet)(symbols, n) {
+        return Some(sheet.intersect(r).area() > 0.0 || sheet.contains(r.origin()));
+    }
+    copies(symbols, n).map(|a| touch(&a))
+}
+
 /// Direct Selection's marquee in `n`, an object with copies: `collect` on each copy (each keeps
 /// its members' ids), each id once. `false`: `n` has no copies, collect it as usual.
 pub(super) fn leaves(symbols: &SymbolBoxes, n: &Node, out: &mut Vec<NodeId>, collect: &mut dyn FnMut(&Node, &mut Vec<NodeId>)) -> bool {
@@ -123,6 +138,14 @@ pub(super) fn hit(
     let h = HOOKS.get()?;
     if !(h.has)(c) || plain(c.id) {
         return None;
+    }
+    // A stencil: its sheet, a filled rectangle with the object's id.
+    if let Some(r) = (h.sheet)(symbols, c) {
+        let paper = crate::Appearance::basic(vectorcraft_color::Paint::solid(vectorcraft_color::Color::BLACK), vectorcraft_color::Paint::None, 0.0);
+        let mut sheet = Node::path(c.id, vectorcraft_geom::PathData::from_bezpath(&vectorcraft_geom::kurbo::Shape::to_path(&r, 0.1)), paper);
+        (sheet.visible, sheet.locked) = (c.visible, c.locked);
+        let holder = Node::group(c.id, vec![Arc::new(sheet)]);
+        return Some(try_at(&holder, p, opt));
     }
     let (ts, strip) = (h.transforms)(symbols, c)?;
     // A top-level object with copies (none is being tried yet): count its placements afresh.

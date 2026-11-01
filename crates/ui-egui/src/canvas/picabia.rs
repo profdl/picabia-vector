@@ -1,5 +1,6 @@
 //! PICABIA: outlines on an object's modifier copies: the hover highlight on every copy, and a
-//! faint outline on a selected object's copies (the selection box stays on the object itself).
+//! faint outline on a selected object's copies (the selection box stays on the object itself); a
+//! selected stencil's tie bars and repeat cell.
 
 use egui::Stroke;
 use vectorcraft_doc::{Document, Node};
@@ -42,6 +43,48 @@ pub(super) fn copy_outlines(p: &egui::Painter, doc: &Document, n: &Node, outline
     for bp in copy_outline_paths(doc, n, outline) {
         stroke_path(p, &bp, xf, stroke);
     }
+}
+
+/// The most path elements the stencil markers draw for one object (a fine lattice has many).
+const MAX_MARKER_ELEMENTS: usize = 50_000;
+
+/// What a selected object shows besides its own outline: a faint outline on its copies, and,
+/// for a stencil with a computed sheet, its tie bars (thin, in the selection colour) and the
+/// repeat cell its tile is cut from (dashed).
+pub(super) fn selected_outlines(p: &egui::Painter, doc: &Document, n: &Node, outline: &BezPath, xf: &Xf, color: egui::Color32) {
+    copy_outlines(p, doc, n, outline, xf, Stroke::new(1.0, color.gamma_multiply(0.4)));
+    for (bp, dashed) in stencil_markers(doc, n) {
+        if dashed {
+            for pts in super::outline::to_screen_path(&bp, xf) {
+                p.extend(egui::Shape::dashed_line(&pts, Stroke::new(1.0, color), 4.0, 3.0));
+            }
+        } else {
+            stroke_path(p, &bp, xf, Stroke::new(1.0, color.gamma_multiply(0.85)));
+        }
+    }
+}
+
+/// A stencil object's markers: its tie bars, and its repeat cell (dashed); none without a sheet,
+/// or past [`MAX_MARKER_ELEMENTS`].
+pub(super) fn stencil_markers(doc: &Document, n: &Node) -> Vec<(BezPath, bool)> {
+    if !vectorcraft_engine::picabia_stencil::is_stencil(n) {
+        return Vec::new();
+    }
+    let Some((sheet, _)) = vectorcraft_engine::picabia_stencil::lookup(doc, n) else { return Vec::new() };
+    let mut out = Vec::new();
+    if !sheet.info.ties.elements().is_empty() && sheet.info.ties.elements().len() <= MAX_MARKER_ELEMENTS {
+        out.push((sheet.info.ties.clone(), false));
+    }
+    if let Some(c) = sheet.info.cell {
+        let mut bp = BezPath::new();
+        bp.move_to(c[0]);
+        for q in &c[1..] {
+            bp.line_to(*q);
+        }
+        bp.close_path();
+        out.push((bp, true));
+    }
+    out
 }
 
 #[cfg(test)]

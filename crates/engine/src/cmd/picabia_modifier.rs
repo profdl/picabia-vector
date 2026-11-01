@@ -522,6 +522,8 @@ mod export_tests;
 #[cfg(test)]
 mod laser_tests;
 #[cfg(test)]
+mod stencil_render_tests;
+#[cfg(test)]
 mod stencil_tests;
 #[cfg(test)]
 mod targets_tests;

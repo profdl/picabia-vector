@@ -503,7 +503,8 @@ fn cache_key(
         anti_alias: app.session.prefs.anti_aliased_artwork,
         highlight_alternate_glyphs: app.session.prefs.highlight_alternate_glyphs,
         highlight_substituted_fonts: app.session.prefs.highlight_substituted_fonts,
-        placed: vectorcraft_render::placed_document::generation(),
+        // PICABIA: a stencil sheet computed in the background also redraws (both counters only grow).
+        placed: vectorcraft_render::placed_document::generation().wrapping_add(vectorcraft_engine::picabia_stencil::generation()),
         pixel,
         smooth_images,
         isolated: st.isolation.map(|id| id.0),
