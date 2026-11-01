@@ -72,6 +72,7 @@ pub(crate) fn stage(kind: &ModifierKind, ctx: &Ctx, targets: &dyn TargetResolver
         ModifierKind::Stencil(_) => StageResult::unchanged(),
         // Geometry rows place no copies: the evaluator collects them (`crate::shape`).
         ModifierKind::Resample(_) | ModifierKind::Trim(_) | ModifierKind::Tidy(_) => StageResult::unchanged(),
+        ModifierKind::Displace(_) => StageResult::unchanged(),
         ModifierKind::Other { .. } => StageResult::unchanged(),
     }
 }

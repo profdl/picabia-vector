@@ -59,7 +59,7 @@ differences:
   wherever their row sits in the stack: each copy gets its own values, and `i`/`n` count all the
   copies. (Their position among the arrays doesn't change the result; their order among
   themselves does.)
-- **Geometry steps** (resample, trim, tidy; PIC20) change paths instead of placing copies. A
+- **Geometry steps** (resample, trim, tidy, displace; PIC20) change paths instead of placing copies. A
   geometry step **above every copy step** (array or per-instance) changes the object itself before
   it is copied: every copy is a copy of the changed object. A geometry step **below a copy step**
   runs on **each finished copy, after its transform**, in document space, in stack order (whether
@@ -357,7 +357,7 @@ read too; they are written lowercase).
 Numbers outside their range are clamped when evaluating (a warning names the field); a colour that
 doesn't read takes its default. `cutColours` can't be bound to a variable.
 
-### Geometry rows: resample, trim, tidy (PIC20)
+### Geometry rows: resample, trim, tidy, displace (PIC20)
 
 Ported from tlprocedural (the owner's TypeScript app): its Subdivide and Rebuild Points become
 **Resample**, Trim Path becomes **Trim**, Close Path and Sort Points become **Tidy** (the owner's
@@ -407,6 +407,55 @@ straight line, as anywhere in VectorCraft (tlprocedural's trims drew no fill).
 | `reverse` | on/off | | off | Reverse the order; with `sort: none`, the subpath's direction (curves kept) |
 | `seed` | | 0 to 999999 | 1 | `sort: random` only |
 
+#### displace
+
+Ported from tlprocedural's **Noise** modifier (PIC20.4; `NoiseModifierProcessor`, its
+`NOISE_DEFAULTS` and `NOISE_SCHEMA`). Every anchor moves; its handles move with it.
+
+| Field | Unit | Range | Default | Meaning |
+|---|---|---|---|---|
+| `mode` | choice | `spatial`, `radial` | `spatial` | `spatial`: each anchor moves by fractal simplex noise sampled where it sits: x by `fbm(x·scale, y·scale)`, y by `fbm(x·scale + 100, y·scale + 100)`, each times `amplitude`. `radial`: each anchor moves along the line from the centre of the anchors (their mean) by `distance × amplitude/100 × 0.25 × sin(rippleCount·angle + phase)`: `rippleCount` bumps round the centre |
+| `amplitude` | points | 0 to 100 | 10 | Spatial: the most an anchor moves on each axis. Radial: percent of its distance from the centre (times a quarter). 0 leaves the path alone |
+| `scale` | per point | 0.01 to 1 | 0.05 | `spatial` only: the noise frequency (smaller: broader waves) |
+| `octaves` | | 1 to 6 | 3 | `spatial` only: layers of noise, each twice as fine and half as strong, summed and normalised |
+| `rippleCount` | | 2 to 12 | 4 | `radial` only |
+| `seed` | | 0 to 999999 | 42 | Spatial: shuffles the noise's permutation table. Radial: the ripple's phase, drawn per copy from `seed` and the copy's index |
+| `progressive` | on/off | | on | Ramp the amplitude across the copies of the rows above: none on the first copy, `progressiveAmount` of it on the last, in a straight line. On the object (no copy row above), or with one copy, the whole amplitude |
+| `progressiveAmount` | fraction | 0 to 1 | 1 | `progressive` only: the last copy's share (the panel shows a percentage) |
+| `progressiveReverse` | on/off | | off | `progressive` only: the first copy gets the most |
+
+**Copies differ.** Below a copy row each copy is displaced in document space after its transform:
+in `spatial` mode where it sits (copies in different places get different noise; a copy exactly on
+top of another gets the same), in `radial` mode with its own seeded phase (copies
+numbered as `modifier.list` and Apply number them). Above every copy row the object is displaced
+once and every copy is that same shape. This is tlprocedural's behaviour (it sampled page space
+and seeded radial by clone index).
+
+**Deterministic.** The noise is a seeded simplex (after Stefan Gustavson's public-domain
+description, as tlprocedural's own self-contained one; no noise library), its permutation table
+shuffled by an integer LCG; the radial ripple uses only `+ − × ÷ √` (the angle's multiple by complex
+powers, the phase's sine by series), so the same stack gives the same bits on every platform and in
+wasm.
+
+Differences from tlprocedural, on purpose:
+
+- **Curves stay curves.** tlprocedural flattened the shape to a polygon first (an ellipse became
+  32 straight sides, a Bézier its sampled points) and displaced those vertices. Here each anchor
+  moves with its handles, so a smooth path stays smooth. Straight-sided paths (rectangles,
+  polygons) move exactly as tlprocedural's did; for a rougher outline put a Resample row above
+  (by count or spacing), as tlprocedural's Subdivide before Noise.
+- **The permutation table** is shuffled with exact integer arithmetic. tlprocedural's
+  `buildPermTable` multiplied in doubles past 2^53 and lost bits, so one seed gives a different
+  (equally stable) pattern here than there.
+- **The radial phase** is drawn per copy from the crate's seeded stream for `(seed, copy index)`.
+  tlprocedural took one LCG step of `seed + index`; its step is a fixed 0.514 of a turn, so
+  copies alternated between two nearly equal phases (copies 0, 2, 4… looked alike) instead of
+  each getting its own.
+- **Not ported:** `animated` and `animationSpeed` (tlprocedural's panel showed them, its processor
+  never read them; Picabia has no time line).
+- Progressive copies are numbered by the stack's copy order (every copy of every array above, in
+  `modifier.list` order); tlprocedural read the nearest array's own index.
+
 #### What geometry rows change
 
 - Paths, the members of compound paths and the paths inside groups. A live shape (rectangle,
@@ -416,7 +465,7 @@ straight line, as anywhere in VectorCraft (tlprocedural's trims drew no fill).
 - **Cap:** the anchors the rows make for one object, all its copies together, stay within 200 000
   (`MAX_GEOMETRY_ANCHORS`): each copy may hold its share (200 000 ÷ copies). A row that would make
   more, and more than it was given, is skipped for that copy, with a note; so is a row that gives a
-  point that isn't finite. Trim and Tidy never make more anchors than they are given (a cut adds
+  point that isn't finite. Trim, Tidy and Displace never make more anchors than they are given (a cut adds
   at most two), so they are never skipped. Nesting doesn't multiply the cap: when the members of a
   copied object have geometry rows whose anchors, times the object's copies, pass 200 000, the
   members draw without their modifiers in each copy (with a note). `modifier.apply` returns what a

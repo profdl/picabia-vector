@@ -489,13 +489,15 @@ fn make(doc: &Document, n: &Node, out: &Output) -> (Node, Vec<String>) {
     let copies = out
         .instances
         .iter()
-        .filter(|i| is_finite(i.transform))
-        .map(|i| {
+        .enumerate()
+        .filter(|(_, i)| is_finite(i.transform))
+        .map(|(k, i)| {
             let mut c = object.clone();
             if i.transform != Affine::IDENTITY {
                 c.transform(i.transform, sc);
             }
-            shaper.copy(&mut c);
+            // The copy's index: a displace varies by copy.
+            shaper.copy_at(&mut c, k);
             Arc::new(c)
         })
         .collect();

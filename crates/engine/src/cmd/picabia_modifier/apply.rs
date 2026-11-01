@@ -24,7 +24,7 @@
 //! A stencil row is never baked here: `upTo` stops above it, and it moves onto the group with the
 //! rows after it (it cuts the same copies there).
 //!
-//! Geometry rows (`resample`, `trim`, `tidy`) are baked too: the copies get the reshaped paths the
+//! Geometry rows (`resample`, `trim`, `tidy`, `displace`) are baked too: the copies get the reshaped paths the
 //! renderer draws (`vectorcraft_modifiers::Shaper`), so a stack of geometry rows alone applies as a
 //! group of one reshaped copy.
 //!
@@ -206,7 +206,8 @@ fn bake(d: &mut Document, plan: &Plan) -> Result<(Node, Vec<NodeId>, Vec<String>
         if *t != Affine::IDENTITY {
             super::super::object::transform_node(&mut c, *t, sc, true);
         }
-        shaper.copy(&mut c);
+        // Copy k, as the renderer numbers it (a displace varies by copy).
+        shaper.copy_at(&mut c, k);
         vectorcraft_modifiers::set_node_source(&mut c, None);
         if let Some(name) = &node.name {
             c.name = Some(format!("{name} {}", k + 1));

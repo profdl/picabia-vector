@@ -218,3 +218,25 @@ fn geometry_rows_show_the_fields_their_mode_uses() {
     assert_eq!(stack.modifiers[2].kind.params()["start"], 0.1);
     assert!(shown.iter().any(|s| s.starts_with("10")), "10% shown: {shown:?}");
 }
+
+/// The displace row (PIC20.4): spatial shows scale and octaves, radial the ripple count; the
+/// progressive amount and reverse only while progressive is on.
+#[test]
+fn the_displace_row_shows_the_fields_its_mode_uses() {
+    let (mut app, ctx, a) = arrayed();
+    app.run("modifier.add", json!({"ids": [a], "kind": "displace"})).unwrap();
+    set_pstate(&ctx, &format!("pc-open-{a}-m2"), true);
+    let shown = texts(&mut app, &ctx);
+    for want in ["Displace", "Mode", "Amplitude", "Scale", "Octaves", "Seed", "Progressive", "Amount", "Reverse"] {
+        assert!(shown.iter().any(|s| s == want), "{want} in {shown:?}");
+    }
+    assert!(!shown.iter().any(|s| s == "Ripple count"), "{shown:?}");
+    // Scale reads with two decimals.
+    assert!(shown.iter().any(|s| s.starts_with("0.05")), "{shown:?}");
+    app.run("modifier.set", json!({"ids": [a], "index": 1, "props": {"mode": "radial", "progressive": false}})).unwrap();
+    let shown = texts(&mut app, &ctx);
+    assert!(shown.iter().any(|s| s == "Ripple count"), "{shown:?}");
+    for hidden in ["Scale", "Octaves", "Amount", "Reverse"] {
+        assert!(!shown.iter().any(|s| s == hidden), "{hidden} hidden in {shown:?}");
+    }
+}

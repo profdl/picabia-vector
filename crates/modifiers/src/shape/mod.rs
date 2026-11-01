@@ -1,5 +1,5 @@
 //! Geometry rows: modifiers that change the object's paths instead of placing copies
-//! (`resample`, `trim`, `tidy`).
+//! (`resample`, `trim`, `tidy`, `displace`).
 //!
 //! # Where they run
 //! Rows run top to bottom. A geometry row above every copy row (arrays, mirror, wallpaper, copy
@@ -22,6 +22,9 @@
 //! than it was given) is skipped for that copy, with a note; so is one that gives a point that
 //! isn't finite. Nothing here panics.
 
+mod displace;
+#[cfg(test)]
+mod displace_tests;
 mod pieces;
 mod resample;
 #[cfg(test)]
@@ -32,11 +35,11 @@ mod trim;
 use std::sync::Arc;
 
 use vectorcraft_doc::{Node, NodeKind};
-use vectorcraft_geom::{PathData, SubPath};
+use vectorcraft_geom::{PathData, Point, SubPath, Vec2};
 
 use crate::eval::Output;
 use crate::kinds::Clamp;
-use crate::model::{ModifierKind, Resample, Tidy, Trim};
+use crate::model::{Displace, ModifierKind, Resample, Tidy, Trim};
 
 /// The most anchors the geometry rows make for one object, all its copies together.
 pub const MAX_GEOMETRY_ANCHORS: usize = 200_000;
@@ -47,6 +50,7 @@ pub enum GeometryOp {
     Resample(Resample),
     Trim(Trim),
     Tidy(Tidy),
+    Displace(Displace),
 }
 
 impl GeometryOp {
@@ -56,6 +60,7 @@ impl GeometryOp {
             GeometryOp::Resample(_) => "Resample",
             GeometryOp::Trim(_) => "Trim",
             GeometryOp::Tidy(_) => "Tidy",
+            GeometryOp::Displace(_) => "Displace",
         }
     }
 }
@@ -102,6 +107,16 @@ pub(crate) fn clamped(kind: &ModifierKind) -> Option<(GeometryOp, Vec<String>)> 
             p.seed = whole(&mut c, "seed", p.seed, 0, 999_999);
             GeometryOp::Tidy(p)
         }
+        ModifierKind::Displace(p) => {
+            let mut p = p.clone();
+            p.amplitude = c.within("amplitude", p.amplitude, 0.0, 100.0, 10.0);
+            p.scale = c.within("scale", p.scale, 0.01, 1.0, 0.05);
+            p.octaves = whole(&mut c, "octaves", p.octaves, 1, 6);
+            p.ripple_count = whole(&mut c, "rippleCount", p.ripple_count, 2, 12);
+            p.seed = whole(&mut c, "seed", p.seed, 0, 999_999);
+            p.progressive_amount = c.within("progressiveAmount", p.progressive_amount, 0.0, 1.0, 1.0);
+            GeometryOp::Displace(p)
+        }
         _ => return None,
     };
     Some((op, warnings))
@@ -125,6 +140,9 @@ pub struct Shaper<'a> {
     rows: &'a [GeometryRow],
     /// The anchors one copy may hold after a row that adds anchors.
     budget: usize,
+    /// How many copies the evaluation makes, and the index [`Shaper::copy`] gives the next one.
+    copies: usize,
+    next: usize,
     /// What went wrong, each said once.
     pub notes: Vec<String>,
 }
@@ -133,7 +151,7 @@ impl<'a> Shaper<'a> {
     /// A shaper for `out`'s rows, the budget shared by its copies.
     pub fn new(out: &'a Output) -> Shaper<'a> {
         let copies = out.instances.len().max(1);
-        Shaper { rows: &out.geometry, budget: MAX_GEOMETRY_ANCHORS / copies, notes: Vec::new() }
+        Shaper { rows: &out.geometry, budget: MAX_GEOMETRY_ANCHORS / copies, copies, next: 0, notes: Vec::new() }
     }
 
     /// Whether there is anything to run.
@@ -143,18 +161,26 @@ impl<'a> Shaper<'a> {
 
     /// Run the rows above the copy rows on `n`, the object before it is copied.
     pub fn source(&mut self, n: &mut Node) {
-        self.run(n, RowAt::Source);
+        self.run(n, RowAt::Source, None);
     }
 
-    /// Run the rows below a copy row on `n`, one copy after its transform.
+    /// Run the rows below a copy row on `n`, one copy after its transform: the copy after the
+    /// last one given (the first: 0).
     pub fn copy(&mut self, n: &mut Node) {
-        self.run(n, RowAt::Copies);
+        self.copy_at(n, self.next);
     }
 
-    fn run(&mut self, n: &mut Node, at: RowAt) {
+    /// Run the rows below a copy row on `n`, copy `index` of [`Output::instances`] after its
+    /// transform (a displace varies by copy).
+    pub fn copy_at(&mut self, n: &mut Node, index: usize) {
+        self.next = index.saturating_add(1);
+        self.run(n, RowAt::Copies, Some((index, self.copies)));
+    }
+
+    fn run(&mut self, n: &mut Node, at: RowAt, copy: Option<(usize, usize)>) {
         let rows = self.rows;
         for row in rows.iter().filter(|r| r.at == at) {
-            self.row(n, row);
+            self.row(n, row, copy);
         }
     }
 
@@ -165,7 +191,7 @@ impl<'a> Shaper<'a> {
     }
 
     /// One row on `n`, or none of it (over the budget, or a point that isn't finite).
-    fn row(&mut self, n: &mut Node, row: &GeometryRow) {
+    fn row(&mut self, n: &mut Node, row: &GeometryRow, copy: Option<(usize, usize)>) {
         let label = row.op.label();
         let (before, after) = (anchors(n, 0), projected(n, &row.op, 0));
         if after > self.budget && after > before {
@@ -173,9 +199,10 @@ impl<'a> Shaper<'a> {
             self.note(format!("{label} would make more than {total} anchors for this object and its copies; it is skipped"));
             return;
         }
+        let field = field(n, &row.op, copy);
         let mut changed = n.clone();
         let mut skipped = false;
-        apply(&mut changed, &row.op, 0, &mut skipped);
+        apply(&mut changed, &row.op, field.as_ref(), 0, &mut skipped);
         if skipped {
             self.note(format!("{label} changes paths only: type, images, symbols and live objects are drawn as they are"));
         }
@@ -217,7 +244,8 @@ fn projected(n: &Node, op: &GeometryOp, depth: usize) -> usize {
                 // A trim makes at most two more anchors than it was given (an anchor at each cut;
                 // through a closed path's start, its first anchor once more) and a tidy none:
                 // counted as what they were given, so they are never refused.
-                GeometryOp::Trim(_) | GeometryOp::Tidy(_) => sp.anchors.len(),
+                // A displace moves anchors, never adds them.
+                GeometryOp::Trim(_) | GeometryOp::Tidy(_) | GeometryOp::Displace(_) => sp.anchors.len(),
             })
             .fold(0usize, usize::saturating_add),
         NodeKind::Group { children, .. } | NodeKind::Layer { children, .. } | NodeKind::Compound { children, .. } => {
@@ -228,14 +256,14 @@ fn projected(n: &Node, op: &GeometryOp, depth: usize) -> usize {
 }
 
 /// `op` on every path in `n`; `skipped` is set when something it can't change is passed over.
-fn apply(n: &mut Node, op: &GeometryOp, depth: usize, skipped: &mut bool) {
+fn apply(n: &mut Node, op: &GeometryOp, field: Option<&displace::Field>, depth: usize, skipped: &mut bool) {
     if depth > vectorcraft_doc::MAX_DEPTH {
         return;
     }
     match &mut n.kind {
         NodeKind::Path { guide: true, .. } => {}
         NodeKind::Path { path, live, .. } => {
-            if let Some(new) = shaped(path, op) {
+            if let Some(new) = shaped(path, op, field) {
                 *path = new;
                 // The copy is a plain path now: a live shape would redraw its old outline.
                 *live = None;
@@ -243,21 +271,54 @@ fn apply(n: &mut Node, op: &GeometryOp, depth: usize, skipped: &mut bool) {
         }
         NodeKind::Group { children, .. } | NodeKind::Layer { children, .. } | NodeKind::Compound { children, .. } => {
             for c in children.iter_mut() {
-                apply(Arc::make_mut(c), op, depth + 1, skipped);
+                apply(Arc::make_mut(c), op, field, depth + 1, skipped);
             }
         }
         _ => *skipped = true,
     }
 }
 
+/// A displace's field for `n` (the radial centre is the mean of `n`'s anchors) and copy `copy`;
+/// `None` for the other rows.
+fn field(n: &Node, op: &GeometryOp, copy: Option<(usize, usize)>) -> Option<displace::Field> {
+    field_from(anchor_sum(n, 0), op, copy)
+}
+
+fn field_from((sum, count): (Vec2, usize), op: &GeometryOp, copy: Option<(usize, usize)>) -> Option<displace::Field> {
+    let GeometryOp::Displace(p) = op else { return None };
+    let centre = if count > 0 { (sum / count as f64).to_point() } else { Point::ZERO };
+    Some(displace::Field::new(p, centre, copy))
+}
+
+/// The sum of the anchor points of the plain paths in `n`, and how many.
+fn anchor_sum(n: &Node, depth: usize) -> (Vec2, usize) {
+    let zero = (Vec2::ZERO, 0);
+    if depth > vectorcraft_doc::MAX_DEPTH {
+        return zero;
+    }
+    match &n.kind {
+        NodeKind::Path { guide: true, .. } => zero,
+        NodeKind::Path { path, .. } => path_sum(path),
+        NodeKind::Group { children, .. } | NodeKind::Layer { children, .. } | NodeKind::Compound { children, .. } => {
+            children.iter().map(|c| anchor_sum(c, depth + 1)).fold(zero, |(s, k), (s2, k2)| (s + s2, k.saturating_add(k2)))
+        }
+        _ => zero,
+    }
+}
+
+fn path_sum(path: &PathData) -> (Vec2, usize) {
+    path.subpaths.iter().flat_map(|s| &s.anchors).filter(|a| a.p.is_finite()).fold((Vec2::ZERO, 0), |(s, k), a| (s + a.p.to_vec2(), k + 1))
+}
+
 /// `path` after `op`, `None` when nothing changes.
-fn shaped(path: &PathData, op: &GeometryOp) -> Option<PathData> {
+fn shaped(path: &PathData, op: &GeometryOp, field: Option<&displace::Field>) -> Option<PathData> {
     let mut changed = false;
     let mut subpaths: Vec<SubPath> = Vec::with_capacity(path.subpaths.len());
     for sp in &path.subpaths {
         let new = match op {
             GeometryOp::Resample(p) => resample::resample(sp, p),
             GeometryOp::Tidy(p) => tidy::tidy(sp, p),
+            GeometryOp::Displace(_) => field.and_then(|f| f.displace(sp)),
             GeometryOp::Trim(p) => match trim::trim(sp, p) {
                 trim::Trimmed::Whole => None,
                 trim::Trimmed::Part(t) => Some(t),
@@ -306,20 +367,23 @@ pub fn shaped_copies(n: &Node, out: &Output) -> (Vec<Node>, Vec<String>) {
     let copies = out
         .instances
         .iter()
-        .filter(|i| i.transform.is_finite())
-        .map(|i| {
+        .enumerate()
+        .filter(|(_, i)| i.transform.is_finite())
+        .map(|(k, i)| {
             let mut c = object.clone();
             if i.transform != vectorcraft_geom::Affine::IDENTITY {
                 c.transform(i.transform, true);
             }
-            shaper.copy(&mut c);
+            shaper.copy_at(&mut c, k);
             c
         })
         .collect();
     (copies, shaper.notes)
 }
 
-/// `path` after `op` (as it is when `op` leaves it alone): bare geometry, without the caps.
+/// `path` after `op` (as it is when `op` leaves it alone): bare geometry, without the caps (a
+/// displace as on the object: its radial centre the mean of `path`'s anchors, no copy ramp).
 pub fn shape_path(path: &PathData, op: &GeometryOp) -> PathData {
-    shaped(path, op).unwrap_or_else(|| path.clone())
+    let field = field_from(path_sum(path), op, None);
+    shaped(path, op, field.as_ref()).unwrap_or_else(|| path.clone())
 }
