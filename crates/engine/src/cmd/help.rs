@@ -17,7 +17,8 @@ pub fn app_page_url() -> String {
 
 /// This app's source repository.
 pub fn github_url() -> String {
-    format!("https://github.com/storytold/{APP_ID}")
+    // PICABIA: Help ▸ GitHub opens Picabia's repository (the getartcraft.com page stays VectorCraft's).
+    "https://github.com/profdl/picabia-vector".to_string()
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -46,7 +47,7 @@ mod tests {
         let mut s = Session::new();
         assert_eq!(s.execute("help.discord", &json!({})).unwrap()["url"], "https://discord.gg/artcraft");
         assert_eq!(s.execute("help.appPage", &json!({})).unwrap()["url"], "https://getartcraft.com/apps/vectorcraft");
-        assert_eq!(s.execute("help.github", &json!({})).unwrap()["url"], "https://github.com/storytold/vectorcraft");
+        assert_eq!(s.execute("help.github", &json!({})).unwrap()["url"], "https://github.com/profdl/picabia-vector"); // PICABIA: Picabia's repo
         assert_eq!(s.execute("help.links", &json!({})).unwrap()["website"], "https://getartcraft.com");
     }
 }

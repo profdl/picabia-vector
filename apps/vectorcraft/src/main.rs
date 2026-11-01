@@ -373,11 +373,11 @@ fn main() -> std::process::ExitCode {
     let run = |options: eframe::NativeOptions, app_creator: eframe::AppCreator<'_>| {
         #[cfg(target_os = "linux")]
         {
-            linux_stylus::run_native("VectorCraft", options, app_creator)
+            linux_stylus::run_native(vectorcraft_ui_egui::picabia::APP_NAME, options, app_creator) // PICABIA: app name
         }
         #[cfg(not(target_os = "linux"))]
         {
-            eframe::run_native("VectorCraft", options, app_creator)
+            eframe::run_native(vectorcraft_ui_egui::picabia::APP_NAME, options, app_creator) // PICABIA: app name
         }
     };
     let outcome = vectorcraft_engine::guard::catch_panic(|| {
@@ -390,7 +390,7 @@ fn main() -> std::process::ExitCode {
                 prefs_dir::attach_profile_store(&mut session);
                 prefs_dir::attach_plugin_store(&mut session);
                 let mut app = VectorcraftApp::new(session, services(cc.winit_window().cloned(), cc.egui_ctx.clone()));
-                app.set_startup_update_check(true);
+                app.set_startup_update_check(false); // PICABIA: VectorCraft's release feed would replace Picabia
                 load_prefs(&mut app, saved);
                 // The saved PDF presets live in their own folder (also read by vectorcraft-cli),
                 // which takes over from the copy the preferences file used to hold.
@@ -424,7 +424,8 @@ fn main() -> std::process::ExitCode {
                 }
                 // Data Recovery copies live next to the preferences too (none for runs without
                 // preferences, such as agents' test runs, unless the recoveryFolder preference is set).
-                if std::env::var_os("VECTORCRAFT_NO_PREFS").is_none() {
+                if prefs_dir::picabia::var_os("VECTORCRAFT_NO_PREFS").is_none() {
+                    // PICABIA: PICABIA_NO_PREFS first
                     let recovery = prefs_path().and_then(|p| Some(p.parent()?.join("Data Recovery").to_string_lossy().to_string()));
                     app.session.recovery.set_default_folder(recovery);
                 }

@@ -3,13 +3,15 @@ use super::window;
 use super::xwayland;
 
 /// The window, Dock, taskbar and app-switcher icon (`assets/app-icon/`, see its README). macOS gets
-/// the version with Apple's transparent margin; elsewhere the full-bleed tile. The app ID matches
-/// `packaging/linux/ai.storyteller.vectorcraft.desktop` so Wayland docks find the launcher icon.
+/// the version with Apple's transparent margin; elsewhere the full-bleed tile. PICABIA: the icon is
+/// Picabia's (`assets/picabia/app-icon/`) and the app ID is `org.picabia.Picabia`, which VectorCraft's
+/// `packaging/linux/ai.storyteller.vectorcraft.desktop` doesn't match yet (Picabia's packaging isn't
+/// built), so a Wayland dock won't tie the window to an installed launcher.
 fn app_icon() -> egui::IconData {
     #[cfg(target_os = "macos")]
-    let png: &[u8] = include_bytes!("../../../assets/app-icon/vectorcraft-macos-512.png");
+    let png: &[u8] = include_bytes!("../../../assets/picabia/app-icon/picabia-macos-512.png"); // PICABIA: Picabia's icon
     #[cfg(not(target_os = "macos"))]
-    let png: &[u8] = include_bytes!("../../../assets/app-icon/hicolor/256x256/apps/ai.storyteller.vectorcraft.png");
+    let png: &[u8] = include_bytes!("../../../assets/picabia/app-icon/picabia-256.png"); // PICABIA: Picabia's icon
     eframe::icon_data::from_png_bytes(png).unwrap_or_default()
 }
 
@@ -105,7 +107,7 @@ pub(crate) fn custom_titlebar(saved: Option<&vectorcraft_ui_egui::UiState>) -> b
 pub(crate) fn native_options(custom_titlebar: bool) -> eframe::NativeOptions {
     eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("VectorCraft")
+            .with_title(vectorcraft_ui_egui::picabia::APP_NAME) // PICABIA: app name
             .with_inner_size(window::DEFAULT_SIZE)
             .with_min_inner_size(window::MIN_SIZE)
             .with_drag_and_drop(true)
@@ -114,7 +116,7 @@ pub(crate) fn native_options(custom_titlebar: bool) -> eframe::NativeOptions {
             .with_titlebar_shown(false)
             .with_title_shown(false)
             .with_icon(app_icon())
-            .with_app_id("ai.storyteller.vectorcraft"),
+            .with_app_id(vectorcraft_ui_egui::picabia::APP_ID), // PICABIA: app id
         ..Default::default()
     }
 }
