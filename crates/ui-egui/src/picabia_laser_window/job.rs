@@ -136,11 +136,7 @@ impl JobState {
         };
         let mut out = vec![what];
         if let Some(s) = self.chosen_sheet() {
-            out.push(format!(
-                "{} · {}",
-                i18n::fmt(tl!("{w} × {h} mm"), &[("w", &num(s.w_mm)), ("h", &num(s.h_mm))]),
-                i18n::tn(s.lines, "{n} line", "{n} lines")
-            ));
+            out.push(size_text(s.w_mm, s.h_mm, s.lines));
         }
         if !matches!(self.source, Source::File(_)) {
             out.push(format!("{}: {}", tl!("Material"), super::ops::material_label(self.material_shown())));
@@ -149,6 +145,20 @@ impl JobState {
             }
         }
         out
+    }
+
+    /// What Start's job comes to now, to check again at confirm: the dry run of `start` (Start's
+    /// params, [`JobState::start_params`]) and the chosen sheet's size and lines. `None` for a
+    /// G-code file (it runs as it is) or before a dry run.
+    pub fn expected(&self, sel: &[NodeId], start: &Value) -> Option<super::run::Expected> {
+        let (cmd, mut p) = self.dry_run(sel)?;
+        for k in ["material", "cut", "score", "engrave", "sheet"] {
+            if let Some(v) = start.get(k) {
+                p[k] = v.clone();
+            }
+        }
+        let s = self.chosen_sheet()?;
+        Some(super::run::Expected { cmd, params: p, sheet: self.sheet.max(1), w_mm: s.w_mm, h_mm: s.h_mm, lines: s.lines })
     }
 
     /// The dry run: its command and params, or `None` when there's nothing to ask.
@@ -388,6 +398,11 @@ pub fn settings(app: &mut VectorcraftApp, ui: &mut Ui, j: &mut JobState, locked:
         }
     });
     changed
+}
+
+/// "270.1 × 174.1 mm · 908 lines": a job's size and lines as the checklist shows them.
+pub fn size_text(w: f64, h: f64, lines: u64) -> String {
+    format!("{} · {}", i18n::fmt(tl!("{w} × {h} mm"), &[("w", &num(w)), ("h", &num(h))]), i18n::tn(lines, "{n} line", "{n} lines"))
 }
 
 /// "1 of 2 · 600 × 400 mm".
