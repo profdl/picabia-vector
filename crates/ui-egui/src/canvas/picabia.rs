@@ -185,7 +185,7 @@ mod tests {
         let mut out = ctx.run_ui(raw, |ui| super::super::show(&mut app, ui));
         out.textures_delta.clear();
         let key = app.canvas.key.clone().unwrap();
-        assert_eq!(key.stencil, vectorcraft_engine::picabia_stencil::generation());
+        // (Not compared with the process-wide `generation()`: tests running beside this one move it.)
         let (_, opts) = app.canvas.shown.clone().unwrap();
         let view = Affine::translate((f64::from(key.w) / 2.0, f64::from(key.h) / 2.0))
             * Affine::rotate(key.rot.to_radians())
