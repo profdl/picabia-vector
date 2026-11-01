@@ -6297,6 +6297,7 @@ dependencies = [
  "vectorcraft-format",
  "vectorcraft-geom",
  "vectorcraft-metafile",
+ "vectorcraft-modifiers",
  "vectorcraft-pathops",
  "vectorcraft-pdf",
  "vectorcraft-plugins",
