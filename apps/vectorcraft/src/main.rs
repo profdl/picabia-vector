@@ -373,11 +373,11 @@ fn main() -> std::process::ExitCode {
     let run = |options: eframe::NativeOptions, app_creator: eframe::AppCreator<'_>| {
         #[cfg(target_os = "linux")]
         {
-            linux_stylus::run_native("VectorCraft", options, app_creator)
+            linux_stylus::run_native(vectorcraft_ui_egui::picabia::APP_NAME, options, app_creator) // PICABIA: app name
         }
         #[cfg(not(target_os = "linux"))]
         {
-            eframe::run_native("VectorCraft", options, app_creator)
+            eframe::run_native(vectorcraft_ui_egui::picabia::APP_NAME, options, app_creator) // PICABIA: app name
         }
     };
     let outcome = vectorcraft_engine::guard::catch_panic(|| {

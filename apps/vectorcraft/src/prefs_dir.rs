@@ -6,6 +6,9 @@ use std::path::PathBuf;
 
 #[path = "profile.rs"]
 mod profile;
+// PICABIA: Picabia's settings folder names, read by `profile`.
+#[path = "picabia.rs"]
+mod picabia;
 
 /// The settings file `ui.json` of the app `name`: in a folder named `name` in ~/Library/Application
 /// Support (macOS) or %APPDATA% (Windows), or `lower` in $XDG_CONFIG_HOME or ~/.config (Linux and

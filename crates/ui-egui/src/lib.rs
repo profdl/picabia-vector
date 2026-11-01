@@ -54,6 +54,7 @@ pub mod opening;
 pub mod palette;
 mod panel_docking;
 pub mod panels;
+pub mod picabia; // PICABIA: Picabia's name, app id and About credits
 pub mod picks;
 pub mod place;
 pub mod placing;

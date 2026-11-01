@@ -22,9 +22,13 @@ use std::sync::OnceLock;
 /// Files in the install folder that switch on portable mode (either one; contents are ignored).
 pub const PORTABLE_MARKERS: [&str; 2] = ["portable.txt", "VectorCraft.portable"];
 /// The settings folder created in the install folder in portable mode.
-pub const PORTABLE_DATA_DIR: &str = "VectorCraftData";
+pub const PORTABLE_DATA_DIR: &str = super::picabia::PORTABLE_DATA_DIR; // PICABIA: own portable folder
 
 pub fn prefs_path(legacy: bool) -> Option<PathBuf> {
+    // PICABIA: Picabia never reads DrawCraft's (VectorCraft's former) settings.
+    if legacy && !super::picabia::READS_DRAWCRAFT_PREFS {
+        return None;
+    }
     prefs_path_with(std::env::consts::OS, legacy, |key| std::env::var_os(key), portable_dir)
 }
 
@@ -47,7 +51,7 @@ fn prefs_path_with(os: &str, legacy: bool, env: impl Fn(&str) -> Option<OsString
 
 /// The platform's settings folder of VectorCraft, or of DrawCraft (`legacy`).
 fn platform_dir(os: &str, legacy: bool, env: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
-    let (name, lower) = if legacy { ("DrawCraft", "drawcraft") } else { ("VectorCraft", "vectorcraft") };
+    let (name, lower) = if legacy { ("DrawCraft", "drawcraft") } else { (super::picabia::CONFIG_DIR, super::picabia::CONFIG_DIR_LOWER) }; // PICABIA: own folder
     match os {
         "macos" => env("HOME").map(|p| PathBuf::from(p).join("Library/Application Support").join(name)),
         "windows" => env("APPDATA").map(|p| PathBuf::from(p).join(name)),
@@ -214,10 +218,10 @@ mod tests {
 
     #[test]
     fn unset_override_keeps_platform_paths_and_legacy_migration() {
-        assert_eq!(prefs_path_with("macos", false, environment, installed), Some("/user/Library/Application Support/VectorCraft/ui.json".into()));
+        assert_eq!(prefs_path_with("macos", false, environment, installed), Some("/user/Library/Application Support/Picabia/ui.json".into())); // PICABIA: own folder
         assert_eq!(prefs_path_with("macos", true, environment, installed), Some("/user/Library/Application Support/DrawCraft/ui.json".into()));
-        assert_eq!(prefs_path_with("windows", false, environment, installed), Some("/roaming/VectorCraft/ui.json".into()));
-        assert_eq!(prefs_path_with("linux", false, environment, installed), Some("/xdg-config/vectorcraft/ui.json".into()));
+        assert_eq!(prefs_path_with("windows", false, environment, installed), Some("/roaming/Picabia/ui.json".into())); // PICABIA: own folder
+        assert_eq!(prefs_path_with("linux", false, environment, installed), Some("/xdg-config/picabia/ui.json".into())); // PICABIA: own folder
         assert_eq!(
             prefs_path_with("linux", true, |key| if key == "HOME" { environment(key) } else { None }, installed),
             Some("/user/.config/drawcraft/ui.json".into())
@@ -246,7 +250,7 @@ mod tests {
     fn a_run_without_preferences_never_looks_for_the_portable_folder() {
         let env = |key: &str| if key == "VECTORCRAFT_NO_PREFS" { Some("1".into()) } else { environment(key) };
         let portable = || -> Option<PathBuf> { panic!("the portable folder is not looked for under VECTORCRAFT_NO_PREFS") };
-        assert_eq!(prefs_path_with("windows", false, env, portable), Some("/roaming/VectorCraft/ui.json".into()));
+        assert_eq!(prefs_path_with("windows", false, env, portable), Some("/roaming/Picabia/ui.json".into())); // PICABIA: own folder
         assert_eq!(prefs_path_with("windows", true, env, portable), Some("/roaming/DrawCraft/ui.json".into()));
     }
 
