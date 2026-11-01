@@ -58,9 +58,18 @@ fn binding_expressions_read_parameters_and_the_clock() {
 #[test]
 fn names_in_lists_parameters_only() {
     assert_eq!(names_in("gap * sin(i * Angle) + value + pi + t + n + gap"), vec!["gap", "angle"]);
-    assert!(names_in("1 + ").is_empty() || names_in("1 + ") == Vec::<String>::new());
+    assert!(names_in("1 + ").is_empty());
     assert!(names_in(&"a".repeat(MAX_EXPR_LEN + 1)).is_empty());
     assert!(names_in("$").is_empty(), "text that doesn't lex reads nothing");
+}
+
+#[test]
+fn renaming_rewrites_reads_of_the_name_only() {
+    assert_eq!(expr::rename_in("Gap*2 + gapx + max(gap, 1)", "gap", "space"), "space*2 + gapx + max(space, 1)");
+    assert_eq!(expr::rename_in("min(1) + i", "min", "x"), "min(1) + i", "a function call isn't the name");
+    assert_eq!(expr::rename_in("gap $", "gap", "x"), "gap $", "text that doesn't lex is left alone");
+    assert_eq!(Binding::Param("Gap".into()).renamed("gap", "space"), Some(Binding::Param("space".into())));
+    assert_eq!(Binding::Expr("i * 2".into()).renamed("gap", "space"), None);
 }
 
 #[test]

@@ -102,6 +102,19 @@ impl Binding {
         }
     }
 
+    /// The binding with parameter `from` renamed `to` (a parameter binding naming it, or the name
+    /// wherever an expression reads it); `None` when it doesn't read `from`.
+    pub fn renamed(&self, from: &str, to: &str) -> Option<Binding> {
+        if !self.reads(from) {
+            return None;
+        }
+        Some(match self {
+            Binding::Param(_) => Binding::Param(to.to_string()),
+            Binding::Expr(e) => Binding::Expr(crate::expr::rename_in(e, from, to)),
+            Binding::Other(v) => Binding::Other(v.clone()),
+        })
+    }
+
     /// Whether it reads parameter `name` (any case).
     pub fn reads(&self, name: &str) -> bool {
         let lower = name.to_ascii_lowercase();

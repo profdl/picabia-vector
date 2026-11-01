@@ -136,7 +136,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "List Modifiers",
             [],
             None,
-            "{id?: the object (default: the first selected)} → {id, modifiers: [{id, enabled, kind, label, …params}], instances: copies drawn (0 = drawn normally), warnings: [{modifier?, message}], error?: why the modifier data can't be read}",
+            "{id?: the object (default: the first selected)} → {id, modifiers: [{id, enabled, kind, label, …params, bind?: {field: {param} | {expr}}}], instances: copies drawn (0 = drawn normally), bound: [{modifier, field, value (null: per copy or failed), perCopy, error}], warnings: [{modifier?, message}], error?: why the modifier data can't be read}",
             has_doc,
             list
         ),
@@ -240,6 +240,10 @@ pub fn specs() -> Vec<CommandSpec> {
             laser_gcode::profile
         ),
     ]
+    .into_iter()
+    // Parameters and field bindings (PIC6).
+    .chain(params::specs())
+    .collect()
 }
 
 /// The objects a command edits: `ids`/`id` or the selection; layers and sublayers are refused.
@@ -473,8 +477,16 @@ fn list(s: &mut Session, p: &Value) -> Result<Value> {
                 .collect();
             out["modifiers"] = json!(rows);
             let targets = vectorcraft_modifiers::DocTargets::new(doc, id);
-            let o = vectorcraft_modifiers::evaluate_with(&stack, vectorcraft_modifiers::node_bounds_in_doc(doc, node), &targets);
+            let scope = vectorcraft_modifiers::Scope::of_doc(doc);
+            let o = vectorcraft_modifiers::evaluate_in(&stack, vectorcraft_modifiers::node_bounds_in_doc(doc, node), &targets, &scope);
             out["instances"] = json!(o.instances.len());
+            // What each bound field resolved to (the rows' own `bind` say what they're bound to).
+            out["bound"] = json!(
+                o.bound
+                    .iter()
+                    .map(|b| json!({"modifier": b.modifier, "field": b.field, "value": b.value, "perCopy": b.per_copy, "error": b.error}))
+                    .collect::<Vec<_>>()
+            );
             let mut warnings: Vec<Value> = o.warnings.iter().map(|w| json!({"modifier": w.modifier, "message": w.message})).collect();
             warnings.extend(vectorcraft_render::picabia::too_big(doc, node).map(|m| json!({"modifier": null, "message": m})));
             out["warnings"] = json!(warnings);
@@ -509,6 +521,9 @@ mod laser;
 mod laser_design;
 pub mod laser_gcode;
 pub(crate) mod laser_run;
+pub(crate) mod params;
+#[cfg(test)]
+mod params_tests;
 mod stencil;
 mod targets;
 pub(crate) use export::{bake_copies, baked_export, export_warning};

@@ -91,6 +91,27 @@ pub fn names_in(text: &str) -> Vec<String> {
     out
 }
 
+/// `text` with the parameter name `from` (any case) replaced by `to` wherever it is read as a
+/// name (not as a function); unchanged when it doesn't lex.
+pub fn rename_in(text: &str, from: &str, to: &str) -> String {
+    let Ok(tokens) = lex(text) else { return text.to_string() };
+    let from = from.to_ascii_lowercase();
+    let mut out = String::with_capacity(text.len() + to.len());
+    let mut last = 0;
+    for (k, (tok, at)) in tokens.iter().enumerate() {
+        let Tok::Name(name) = tok else { continue };
+        if *name != from || matches!(tokens.get(k + 1), Some((Tok::Open, _))) {
+            continue;
+        }
+        out.push_str(text.get(last..*at).unwrap_or_default());
+        out.push_str(to);
+        // Names are ASCII: the lowercase name has the source's length.
+        last = at + name.len();
+    }
+    out.push_str(text.get(last..).unwrap_or_default());
+    out
+}
+
 /// Whether `name` (any case) means something in an expression already (`i`, `n`, `t`, `value`,
 /// `pi` or a function), so a parameter can't take it.
 pub fn reserved(name: &str) -> bool {
