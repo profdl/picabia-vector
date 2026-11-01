@@ -1,0 +1,17 @@
+[package]
+name = "vectorcraft-physics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Picabia physics: per-object rigid-body settings (a foreign attribute on the object), colliders from document geometry, and a deterministic drop-and-settle simulation on rapier2d"
+
+[lints]
+workspace = true
+
+[dependencies]
+vectorcraft-geom = { workspace = true }
+vectorcraft-doc = { workspace = true }
+serde_json = { workspace = true }
+# Rigid bodies only: no `parallel` (no threads), no `fem`. `enhanced-determinism`: libm maths, so
+# native and wasm builds give the same bits.
+rapier2d = { version = "0.36.1", default-features = false, features = ["dim2", "f32", "std", "block-solver", "enhanced-determinism"] }
