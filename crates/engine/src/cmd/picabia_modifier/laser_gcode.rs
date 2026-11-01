@@ -261,6 +261,12 @@ pub(super) fn sheet_gcode(cmd: &str, sheet: &LaserSheet, gp: &GcodeParams) -> Re
     Ok(g)
 }
 
+/// The lines of G-code `text` a job sends: what is left of each line once GRBL's comments and
+/// spaces are taken out (the header's `;` comment lines aren't sent), as the laser link counts them.
+pub(crate) fn sent_lines(text: &str) -> usize {
+    text.lines().filter(|l| vectorcraft_grbl::clean_line(l).is_ok_and(|c| !c.is_empty())).count()
+}
+
 /// Write (or encode) each file and describe it.
 fn emit(sheets: &[(&LaserSheet, Gcode)], out: &Out, base: &str, rapid: f64) -> Result<Vec<Value>> {
     let n = sheets.len();
@@ -270,7 +276,7 @@ fn emit(sheets: &[(&LaserSheet, Gcode)], out: &Out, base: &str, rapid: f64) -> R
             "sheet": sheet.name,
             "wMm": finite(sheet.w_mm),
             "hMm": finite(sheet.h_mm),
-            "lines": g.lines,
+            "lines": sent_lines(&g.text),
             "estimatedSec": secs(vectorcraft_stencil::estimate_sec(g, rapid)),
             "burnMm": finite(g.burn_mm),
             "travelMm": finite(g.travel_mm),

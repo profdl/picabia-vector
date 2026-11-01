@@ -394,3 +394,24 @@ fn a_motion_just_sent_holds_file_dialogs_off() {
     assert!(crate::picks::open(&mut app, &pick).is_some(), "a while later, idle: it opens");
     app.run("laser.disconnect", json!({})).unwrap();
 }
+
+#[test]
+fn the_ladders_checklist_shows_its_grid_and_the_line_count_is_what_is_sent() {
+    let mut app = app();
+    connect(&mut app, json!({"speedFactor": 1000, "timeScale": 100}));
+    let mut j = JobState::default();
+    j.source = Source::PowerLadder;
+    let (cmd, p) = j.dry_run(&[]).unwrap();
+    j.take_result(app.session.execute(cmd, &p).map_err(|e| e.to_string()));
+    let lines = j.checklist_lines("");
+    assert!(lines.iter().any(|l| l == "Squares at 20–100 % power (5 steps) × 150–1200 mm/min (4 steps), 1 pass each"), "{lines:?}");
+    assert!(lines.iter().all(|l| !l.starts_with("Cut:") && !l.starts_with("Score:")), "the table's cut and score aren't the ladder's: {lines:?}");
+    assert!(lines.iter().any(|l| l.starts_with("Engrave:")), "its labels are engraved: {lines:?}");
+    assert_eq!(job::ladder_text(&json!({"powersPct": "x"})), None, "junk: no line");
+    // The dry run's line count is what the job sends.
+    let shown = j.chosen_sheet().unwrap().lines;
+    run::confirm(&mut app, &mut ticked(Confirm::Start, j.start_params(j.params(&[]).unwrap())), false).unwrap();
+    let st = wait(&mut app, "done", |s| s.job.as_ref().is_some_and(|j| j.state == "done"));
+    assert_eq!(st.job.unwrap().lines, shown);
+    app.run("laser.disconnect", json!({})).unwrap();
+}

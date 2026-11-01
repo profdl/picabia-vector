@@ -523,3 +523,24 @@ fn a_huge_design_is_refused_before_it_is_flattened() {
     let r = ex(&mut s, "laser.gcode", json!({"ids": [a.0], "dryRun": true, "widthMm": 100}));
     assert!(close(&r["files"][0]["wMm"], 100.0), "{r}");
 }
+
+/// Every G-code reply counts the lines a job sends: the header's comment lines don't count, so
+/// the Laser window's dry run and the job agree (stencil, test card, power ladder, any design).
+#[test]
+fn gcode_line_counts_are_the_lines_a_job_sends() {
+    let mut s = session();
+    let g = two_tone(&mut s, json!({}));
+    for (cmd, p) in [
+        ("modifier.stencilGcode", json!({"id": g.0, "data": true})),
+        ("modifier.stencilTestCard", json!({"format": "gcode", "data": true})),
+        ("modifier.stencilTestCard", json!({"kind": "powerLadder", "data": true})),
+        ("laser.gcode", json!({"ids": [g.0], "data": true})),
+    ] {
+        let r = ex(&mut s, cmd, p);
+        let f = &r["files"][0];
+        let text = decode(f);
+        let sent = crate::cmd::picabia_laser_link::check_gcode(&text).unwrap().len() as u64;
+        assert_eq!(f["lines"].as_u64(), Some(sent), "{cmd}");
+        assert!(text.lines().count() as u64 > sent, "{cmd}: the header's comments aren't counted");
+    }
+}
