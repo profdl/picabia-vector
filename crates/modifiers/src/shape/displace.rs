@@ -36,13 +36,49 @@ pub(super) struct Field {
 
 enum How {
     Spatial { scale: f64, octaves: u32, perm: Vec<u8> },
-    Radial { centre: Point, ripples: u32, phase_cos: f64, phase_sin: f64 },
+    Radial { centre: Point, ripples: u32, phase_cos: f64, phase_sin: f64, frame: Frame },
+}
+
+/// The frame a copy's radial ripple is read in: its turn (the direction of its transform's x axis)
+/// and whether it is reflected, so a rotated copy's ripple turns with it and a mirrored copy's is
+/// the mirror image of its partner's (as Deform reads each copy in its frame). Found with plain
+/// arithmetic, no `atan2`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Frame {
+    cos: f64,
+    sin: f64,
+    flip: bool,
+}
+
+impl Frame {
+    /// The object's own frame (no turn, no reflection).
+    pub const IDENTITY: Frame = Frame { cos: 1.0, sin: 0.0, flip: false };
+
+    /// The frame of copy transform `t`; the identity when its x axis has no direction.
+    pub fn of(t: vectorcraft_geom::Affine) -> Frame {
+        let [a, b, c, d, ..] = t.as_coeffs();
+        let len = (a * a + b * b).sqrt();
+        if !(len.is_finite() && len > 1e-12) {
+            return Frame::IDENTITY;
+        }
+        let det = a * d - b * c;
+        Frame { cos: a / len, sin: b / len, flip: det.is_finite() && det < 0.0 }
+    }
+
+    /// `v` read in the frame: turned back, then unreflected.
+    fn local(&self, v: Vec2) -> (f64, f64) {
+        let x = self.cos * v.x + self.sin * v.y;
+        let y = self.cos * v.y - self.sin * v.x;
+        (x, if self.flip { -y } else { y })
+    }
 }
 
 impl Field {
-    /// `p` (clamped) for an object whose anchors centre on `centre` (read in radial mode only); `copy`: the copy's index and
-    /// the number of copies when the row runs on the copies (`None`: on the object).
-    pub fn new(p: &Displace, centre: Point, copy: Option<(usize, usize)>) -> Field {
+    /// `p` (clamped) for an object whose anchors centre on `centre` (read in radial mode only);
+    /// `copy`: the copy's place among the array copies and their number
+    /// ([`crate::Output::ramp_position`]; `None`: the whole effect, phase of place 0); `frame`:
+    /// the copy's frame for the radial ripple.
+    pub fn new(p: &Displace, centre: Point, copy: Option<(usize, usize)>, frame: Frame) -> Field {
         let amplitude = p.amplitude * ramp(p, copy);
         // The loops are capped here too: `GeometryOp` and `shape_path` are public, so `p` may not
         // have been through `clamped`.
@@ -50,7 +86,7 @@ impl Field {
             DisplaceMode::Spatial => How::Spatial { scale: p.scale, octaves: p.octaves.min(MAX_OCTAVES), perm: perm_table(p.seed) },
             DisplaceMode::Radial => {
                 let (phase_sin, phase_cos) = sin_cos(phase(p.seed, copy.map_or(0, |c| c.0)));
-                How::Radial { centre, ripples: p.ripple_count.min(MAX_RIPPLES), phase_cos, phase_sin }
+                How::Radial { centre, ripples: p.ripple_count.min(MAX_RIPPLES), phase_cos, phase_sin, frame }
             }
         };
         Field { amplitude, how }
@@ -81,16 +117,18 @@ impl Field {
                 let ny = fbm(x + 100.0, y + 100.0, *octaves, perm);
                 Vec2::new(nx * self.amplitude, ny * self.amplitude)
             }
-            How::Radial { centre, ripples, phase_cos, phase_sin } => {
+            How::Radial { centre, ripples, phase_cos, phase_sin, frame } => {
                 let v = p - *centre;
                 // Plain √ (correctly rounded everywhere), not the platform's `hypot`.
                 let dist = (v.x * v.x + v.y * v.y).sqrt();
                 if dist <= 0.0 || !dist.is_finite() {
                     return Vec2::ZERO;
                 }
-                // sin(ripples·θ + phase), θ the anchor's angle round the centre: the unit vector
-                // raised to the ripples-th power (complex), turned by the phase.
-                let (c, s) = (v.x / dist, v.y / dist);
+                // sin(ripples·θ + phase), θ the anchor's angle round the centre in the copy's
+                // frame: the unit vector raised to the ripples-th power (complex), turned by the
+                // phase. The move itself is along `v`, in document space.
+                let (lx, ly) = frame.local(v);
+                let (c, s) = (lx / dist, ly / dist);
                 let (mut re, mut im) = (1.0, 0.0);
                 for _ in 0..*ripples {
                     (re, im) = (re * c - im * s, re * s + im * c);

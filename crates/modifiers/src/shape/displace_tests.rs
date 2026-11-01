@@ -3,9 +3,9 @@
 
 use serde_json::{Value, json};
 use vectorcraft_doc::{Appearance, Node, NodeId};
-use vectorcraft_geom::{Anchor, PathData, Point, Rect, SubPath, shapes};
+use vectorcraft_geom::{Anchor, PathData, Point, Rect, SubPath, Vec2, shapes};
 
-use super::displace::{Field, fbm, perm_table, ramp, simplex, sin_cos};
+use super::displace::{Field, Frame, fbm, perm_table, ramp, simplex, sin_cos};
 use super::{GeometryOp, GeometryRow, RowAt, Shaper, shape_path};
 use crate::model::{Displace, DisplaceMode, ModifierKind};
 use crate::{Output, evaluate, parse};
@@ -119,7 +119,7 @@ fn sin_cos_is_the_platforms_to_the_last_few_bits() {
 #[test]
 fn spatial_moves_each_anchor_by_noise_where_it_sits_with_its_handles() {
     let c = circle();
-    let f = Field::new(&spatial(), Point::ZERO, None);
+    let f = Field::new(&spatial(), Point::ZERO, None, Frame::IDENTITY);
     let d = f.displace(&c).unwrap();
     assert_eq!(d.anchors.len(), c.anchors.len());
     assert!(d.closed);
@@ -145,7 +145,7 @@ fn radial_ripples_along_each_anchors_direction_from_the_centre() {
         (0..24).map(|i| f64::from(i) / 24.0 * std::f64::consts::TAU).map(|t| Point::new(100.0 * t.cos(), 100.0 * t.sin())).collect();
     let sp = SubPath::polyline(&pts, true);
     let p = Displace { amplitude: 40.0, ripple_count: 4, ..radial() };
-    let d = Field::new(&p, Point::ZERO, None).displace(&sp).unwrap();
+    let d = Field::new(&p, Point::ZERO, None, Frame::IDENTITY).displace(&sp).unwrap();
     let mut radii = vec![];
     for (a, b) in sp.anchors.iter().zip(&d.anchors) {
         // Along the radius: the cross product of where it was and where it moved is zero.
@@ -168,7 +168,7 @@ fn radial_ripples_along_each_anchors_direction_from_the_centre() {
     assert!((b.to_vec2().hypot() - 100.0 - want).abs() < 1e-9, "{} vs {want}", b.to_vec2().hypot() - 100.0);
     // A point at the centre doesn't move.
     let at_centre = SubPath::polyline(&[Point::ZERO, Point::new(10.0, 0.0)], false);
-    let moved = Field::new(&p, Point::ZERO, None).displace(&at_centre).unwrap();
+    let moved = Field::new(&p, Point::ZERO, None, Frame::IDENTITY).displace(&at_centre).unwrap();
     assert_eq!(moved.anchors[0].p, Point::ZERO);
 }
 
@@ -197,10 +197,10 @@ fn radial_phases_differ_copy_by_copy() {
 fn the_same_seed_gives_the_same_bits_and_another_seed_another_shape() {
     let c = circle();
     for p in [spatial(), radial()] {
-        let one = Field::new(&p, Point::new(100.0, 100.0), None).displace(&c).unwrap();
-        let two = Field::new(&p, Point::new(100.0, 100.0), None).displace(&c).unwrap();
+        let one = Field::new(&p, Point::new(100.0, 100.0), None, Frame::IDENTITY).displace(&c).unwrap();
+        let two = Field::new(&p, Point::new(100.0, 100.0), None, Frame::IDENTITY).displace(&c).unwrap();
         assert_eq!(bits(&one), bits(&two));
-        let other = Field::new(&Displace { seed: 7, ..p.clone() }, Point::new(100.0, 100.0), None).displace(&c).unwrap();
+        let other = Field::new(&Displace { seed: 7, ..p.clone() }, Point::new(100.0, 100.0), None, Frame::IDENTITY).displace(&c).unwrap();
         assert_ne!(bits(&one), bits(&other), "{:?}", p.mode);
     }
     // A pinned value, so a change to the maths (or a platform that computes it differently) shows.
@@ -209,7 +209,9 @@ fn the_same_seed_gives_the_same_bits_and_another_seed_another_shape() {
     let d = shape_path(&PathData::new(vec![square()]), &GeometryOp::Displace(spatial()));
     let a = d.subpaths[0].anchors[2].p;
     assert_eq!((a.x.to_bits(), a.y.to_bits()), (SPATIAL_BITS.0, SPATIAL_BITS.1), "spatial {a:?}");
-    let r = Field::new(&Displace { amplitude: 60.0, ripple_count: 3, ..radial() }, Point::new(50.0, 50.0), Some((2, 4))).displace(&square()).unwrap();
+    let r = Field::new(&Displace { amplitude: 60.0, ripple_count: 3, ..radial() }, Point::new(50.0, 50.0), Some((2, 4)), Frame::IDENTITY)
+        .displace(&square())
+        .unwrap();
     let b = r.anchors[1].p;
     assert_eq!((b.x.to_bits(), b.y.to_bits()), (RADIAL_BITS.0, RADIAL_BITS.1), "radial {b:?}");
 }
@@ -221,14 +223,14 @@ const RADIAL_BITS: (u64, u64) = (4636237433407583925, 4619683745580225710);
 #[test]
 fn zero_amplitude_and_degenerate_paths_are_left_alone() {
     let zero = Displace { amplitude: 0.0, ..spatial() };
-    assert!(Field::new(&zero, Point::ZERO, None).displace(&square()).is_none());
-    let f = Field::new(&spatial(), Point::ZERO, None);
+    assert!(Field::new(&zero, Point::ZERO, None, Frame::IDENTITY).displace(&square()).is_none());
+    let f = Field::new(&spatial(), Point::ZERO, None, Frame::IDENTITY);
     assert!(f.displace(&SubPath::new(vec![], true)).is_none());
     // One point, or all on one point: moved like any anchor (radial: not at all, at the centre).
     let one = SubPath::polyline(&[Point::new(3.0, 4.0)], false);
     assert_eq!(f.displace(&one).unwrap().anchors.len(), 1);
     let same = SubPath::polyline(&[Point::new(3.0, 4.0); 3], true);
-    let r = Field::new(&radial(), Point::new(3.0, 4.0), None).displace(&same).unwrap();
+    let r = Field::new(&radial(), Point::new(3.0, 4.0), None, Frame::IDENTITY).displace(&same).unwrap();
     assert!(r.anchors.iter().all(|a| a.p == Point::new(3.0, 4.0)));
 }
 
@@ -270,7 +272,7 @@ fn junk_geometry_never_panics_and_stays_finite() {
                 moved += usize::from(n != before);
             }
             // Straight to the field and to `shape_path`, without the shaper's checks: no panic.
-            let _ = Field::new(p, Point::new(1.0, 1.0), Some((7, 3))).displace(sp);
+            let _ = Field::new(p, Point::new(1.0, 1.0), Some((7, 3)), Frame::IDENTITY).displace(sp);
             let _ = shape_path(&PathData::new(vec![sp.clone()]), &GeometryOp::Displace(p.clone()));
         }
     }
@@ -340,18 +342,145 @@ fn copies_below_an_array_differ_and_above_it_match() {
     }
 }
 
-#[test]
-fn shaper_copy_counts_the_copies_it_is_given() {
-    let out = evaluate(
-        &stack(json!([{"id": "a", "kind": "linearArray", "count": 3}, {"id": "d", "kind": "displace", "mode": "radial"}])),
-        Rect::new(0.0, 0.0, 100.0, 100.0),
-    );
-    let mut by_copy = Shaper::new(&out);
-    let mut by_index = Shaper::new(&out);
-    for k in 0..3 {
-        let (mut a, mut b) = (path_node(circle()), path_node(circle()));
-        by_copy.copy(&mut a);
-        by_index.copy_at(&mut b, k);
-        assert_eq!(a, b, "copy {k}");
+/// A lopsided 14-point outline in 0..100 (no mirror symmetry of its own).
+fn lopsided() -> SubPath {
+    let pts: Vec<Point> = (0..14)
+        .map(|i| {
+            let t = f64::from(i) / 14.0 * std::f64::consts::TAU;
+            let r = 30.0 + 15.0 * f64::from(i % 3) + f64::from(i);
+            Point::new(50.0 + r * t.cos(), 50.0 + r * t.sin())
+        })
+        .collect();
+    SubPath::polyline(&pts, true)
+}
+
+/// `rows`' copies of [`lopsided`], with their instances.
+fn copies_of(rows: Value) -> (Output, Vec<Vec<Point>>) {
+    let out = evaluate(&stack(rows), Rect::new(0.0, 0.0, 100.0, 100.0));
+    let (copies, notes) = super::shaped_copies(&path_node(lopsided()), &out);
+    assert!(notes.is_empty(), "{notes:?}");
+    let pts = copies.iter().map(|c| c.path_data().unwrap().subpaths[0].anchors.iter().map(|a| a.p).collect()).collect();
+    (out, pts)
+}
+
+/// How far `a`'s points are from `b`'s, one by one, at most.
+fn apart(a: &[Point], b: &[Point]) -> f64 {
+    assert_eq!(a.len(), b.len());
+    a.iter().zip(b).map(|(p, q)| p.distance(*q)).fold(0.0, f64::max)
+}
+
+/// Each mirrored copy against its partner (the copy at the same array place, not reflected): the
+/// reflection that takes the partner's placement to the mirrored copy's, applied to the partner.
+fn mirror_pairs(out: &Output, pts: &[Vec<Point>]) -> Vec<(usize, usize, f64)> {
+    let det = |t: vectorcraft_geom::Affine| {
+        let [a, b, c, d, ..] = t.as_coeffs();
+        a * d - b * c
+    };
+    let mut pairs = vec![];
+    for (i, a) in out.instances.iter().enumerate() {
+        if det(a.transform) > 0.0 {
+            for (j, b) in out.instances.iter().enumerate() {
+                if det(b.transform) < 0.0 && out.ramp_position(a) == out.ramp_position(b) {
+                    let m = b.transform * a.transform.inverse();
+                    let mapped: Vec<Point> = pts[i].iter().map(|p| m * *p).collect();
+                    pairs.push((i, j, apart(&mapped, &pts[j])));
+                }
+            }
+        }
     }
+    pairs
+}
+
+/// A lone mirror: both halves get the whole effect (no array to ramp over), and in radial mode
+/// the mirrored half is the mirror image of the other (same phase, read in its reflected frame).
+#[test]
+fn a_lone_mirror_displaces_both_halves_fully_and_radial_stays_symmetric() {
+    let plain = lopsided().anchors.iter().map(|a| a.p).collect::<Vec<_>>();
+    for mode in ["spatial", "radial"] {
+        let (out, pts) = copies_of(json!([{"id": "m", "kind": "mirror"}, {"id": "d", "kind": "displace", "mode": mode, "amplitude": 40}]));
+        assert_eq!(pts.len(), 2);
+        assert!(out.instances.iter().all(|i| out.ramp_position(i).is_none()));
+        // The unreflected half moved (the ramp would have left a first copy alone).
+        let first = out.instances.iter().position(|i| i.transform == vectorcraft_geom::Affine::IDENTITY).unwrap();
+        assert!(apart(&pts[first], &plain) > 1.0, "{mode}: moved");
+        let pairs = mirror_pairs(&out, &pts);
+        assert_eq!(pairs.len(), 1, "{mode}");
+        if mode == "radial" {
+            assert!(pairs[0].2 < 1e-9, "radial: a mirror image, {pairs:?}");
+        } else {
+            // Spatial noise is read where each copy lies: the halves differ.
+            assert!(pairs[0].2 > 0.1, "spatial: {pairs:?}");
+        }
+    }
+}
+
+/// An array then a mirror: the ramp steps over the array copies only, each mirror pair sharing a
+/// place (the same amount and, radial, the same phase: symmetric pairs); the first pair is left
+/// alone.
+#[test]
+fn an_array_then_a_mirror_ramps_the_pairs_together() {
+    let (out, pts) = copies_of(json!([
+        {"id": "a", "kind": "linearArray", "count": 3, "offsetX": 150},
+        {"id": "m", "kind": "mirror", "offset": 400},
+        {"id": "d", "kind": "displace", "mode": "radial", "amplitude": 60, "rippleCount": 3},
+    ]));
+    assert_eq!(pts.len(), 6);
+    let pairs = mirror_pairs(&out, &pts);
+    assert_eq!(pairs.len(), 3, "{pairs:?}");
+    for (i, j, gap) in &pairs {
+        assert!(*gap < 1e-9, "pair {i}/{j} symmetric: {gap}");
+    }
+    // Place 0 (both halves) unmoved, the others moved.
+    for (k, inst) in out.instances.iter().enumerate() {
+        let (place, total) = out.ramp_position(inst).unwrap();
+        assert_eq!(total, 3);
+        let mut unmoved = path_node(lopsided());
+        unmoved.transform(inst.transform, true);
+        let base: Vec<Point> = unmoved.path_data().unwrap().subpaths[0].anchors.iter().map(|a| a.p).collect();
+        assert_eq!(apart(&pts[k], &base) < 1e-9, place == 0, "copy {k} at place {place}");
+    }
+}
+
+/// The radial phase is seeded by the array place: each array copy its own phase (ramp off), and a
+/// mirror then an array keeps each mirrored pair together.
+#[test]
+fn the_radial_phase_follows_the_array_place() {
+    let (_, pts) = copies_of(json!([
+        {"id": "a", "kind": "linearArray", "count": 3, "offsetX": 150},
+        {"id": "d", "kind": "displace", "mode": "radial", "amplitude": 60, "progressive": false},
+    ]));
+    let at_home: Vec<Vec<Point>> = pts.iter().enumerate().map(|(k, c)| c.iter().map(|p| *p - Vec2::new(150.0 * k as f64, 0.0)).collect()).collect();
+    assert!(apart(&at_home[0], &at_home[1]) > 0.5 && apart(&at_home[1], &at_home[2]) > 0.5);
+    let (out, pts) = copies_of(json!([
+        {"id": "m", "kind": "mirror", "offset": 60},
+        {"id": "a", "kind": "linearArray", "count": 3, "offsetY": 200},
+        {"id": "d", "kind": "displace", "mode": "radial", "amplitude": 60, "progressive": false},
+    ]));
+    let pairs = mirror_pairs(&out, &pts);
+    assert_eq!(pairs.len(), 3, "{pairs:?}");
+    assert!(pairs.iter().all(|p| p.2 < 1e-9), "{pairs:?}");
+    // Without a copy (on the object, or a public `shape_path`), the phase of place 0.
+    let alone = Field::new(&radial(), Point::new(50.0, 50.0), None, Frame::IDENTITY).displace(&lopsided()).unwrap();
+    let first = Field::new(&radial(), Point::new(50.0, 50.0), Some((0, 3)), Frame::IDENTITY).displace(&lopsided()).unwrap();
+    assert_eq!(alone, first);
+}
+
+/// A copy's frame: a turned copy reads its ripple turned with it, a reflected one mirrored.
+#[test]
+fn the_frame_turns_and_reflects_the_ripple() {
+    use vectorcraft_geom::Affine;
+    let p = Displace { amplitude: 60.0, ripple_count: 3, ..radial() };
+    let sp = lopsided();
+    let c = Point::new(50.0, 50.0);
+    for t in [Affine::rotate_about(0.7, c), Affine::rotate_about(-2.0, c) * Affine::FLIP_X, Affine::scale_non_uniform(1.0, -1.0)] {
+        let mean = (sp.anchors.iter().fold(Vec2::ZERO, |s, a| s + a.p.to_vec2()) / sp.anchors.len() as f64).to_point();
+        let here = Field::new(&p, mean, None, Frame::IDENTITY).displace(&sp).unwrap();
+        let moved: Vec<Point> = sp.anchors.iter().map(|a| t * a.p).collect();
+        let centre = moved.iter().fold(Vec2::ZERO, |s, q| s + q.to_vec2()) / moved.len() as f64;
+        let there = Field::new(&p, centre.to_point(), None, Frame::of(t)).displace(&SubPath::polyline(&moved, true)).unwrap();
+        let mapped: Vec<Point> = here.anchors.iter().map(|a| t * a.p).collect();
+        let got: Vec<Point> = there.anchors.iter().map(|a| a.p).collect();
+        assert!(apart(&mapped, &got) < 1e-9, "{t:?}: {}", apart(&mapped, &got));
+    }
+    assert_eq!(Frame::of(Affine::scale(0.0)), Frame::IDENTITY);
 }

@@ -62,10 +62,23 @@ pub struct Output {
     /// or `randomize` row anywhere: those vary every copy). `None` otherwise, without a warning; a
     /// stencil with `output: tile` then evaluates as `sheet`, with a warning.
     pub repeat: Option<Repeat>,
-    /// The enabled geometry rows (`resample`, `trim`, `tidy`, `displace`), in stack order, each with where it
+    /// The enabled geometry rows (`resample`, `trim`, `tidy`, `deform`, `displace`), in stack order, each with where it
     /// runs: on the object before it is copied, or on every copy after its transform
     /// ([`crate::shape`]). Empty: the copies are the object's geometry, transformed.
     pub geometry: Vec<GeometryRow>,
+    /// The rows that repeated the copies, in stack order, one per entry of
+    /// [`Instance::stage_indices`]: whether each is an array (linear, circular, grid: the rows a
+    /// deform's ramp steps over) and how many copies it made ([`Output::ramp_position`]).
+    pub array_stages: Vec<ArrayStage>,
+}
+
+/// A row that repeated the copies ([`Output::array_stages`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ArrayStage {
+    /// A linear, circular or grid array (not a mirror, wallpaper or copy to shape).
+    pub array: bool,
+    /// How many copies of the set before it it made.
+    pub copies: u32,
 }
 
 /// A translation lattice in the layer's parent space (like [`Instance::transform`]): the copies
@@ -99,6 +112,22 @@ impl Output {
     /// not just placed (and a single unmoved copy still differs from the object).
     pub fn has_geometry(&self) -> bool {
         !self.geometry.is_empty()
+    }
+
+    /// Where `inst` stands among the array copies (tlprocedural's progressive index): its copy
+    /// number in the array rows only, stacked arrays read as one combined array (the first array's
+    /// copies counting fastest, as [`Instance::index`] does), and how many array copies there are
+    /// in all. Copies a mirror, wallpaper or copy to shape made share the position of the copy they
+    /// came from. `None` without an array row, or with one array copy.
+    pub fn ramp_position(&self, inst: &Instance) -> Option<(usize, usize)> {
+        let (mut pos, mut total) = (0usize, 1usize);
+        for (stage, k) in self.array_stages.iter().zip(&inst.stage_indices) {
+            if stage.array {
+                pos = pos.saturating_add((*k as usize).saturating_mul(total));
+                total = total.saturating_mul(stage.copies as usize);
+            }
+        }
+        (total > 1).then_some((pos.min(total - 1), total))
     }
 
     fn set_stencil(&mut self, id: &str, p: &Stencil) {
@@ -207,6 +236,8 @@ pub fn evaluate_with(stack: &Stack, bounds: Rect, targets: &dyn TargetResolver) 
                 if !copies.iter().all(|t| *t == Affine::IDENTITY) {
                     lattice = kinds::repeat(&m.kind, &ctx);
                 }
+                let array = matches!(m.kind, ModifierKind::LinearArray(_) | ModifierKind::CircularArray(_) | ModifierKind::GridArray(_));
+                out.array_stages.push(ArrayStage { array, copies: u32::try_from(copies.len()).unwrap_or(u32::MAX) });
                 set = repeat_block(&set, &copies);
             }
             Stage::TooMany(copies) => {

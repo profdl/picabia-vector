@@ -227,7 +227,7 @@ fn the_displace_row_shows_the_fields_its_mode_uses() {
     app.run("modifier.add", json!({"ids": [a], "kind": "displace"})).unwrap();
     set_pstate(&ctx, &format!("pc-open-{a}-m2"), true);
     let shown = texts(&mut app, &ctx);
-    for want in ["Displace", "Mode", "Amplitude", "Scale", "Octaves", "Seed", "Progressive", "Amount", "Reverse"] {
+    for want in ["Displace", "Mode", "Amplitude", "Scale", "Octaves", "Seed", "Ramp copies", "Ramp amount", "Ramp reversed"] {
         assert!(shown.iter().any(|s| s == want), "{want} in {shown:?}");
     }
     assert!(!shown.iter().any(|s| s == "Ripple count"), "{shown:?}");
@@ -236,7 +236,33 @@ fn the_displace_row_shows_the_fields_its_mode_uses() {
     app.run("modifier.set", json!({"ids": [a], "index": 1, "props": {"mode": "radial", "progressive": false}})).unwrap();
     let shown = texts(&mut app, &ctx);
     assert!(shown.iter().any(|s| s == "Ripple count"), "{shown:?}");
-    for hidden in ["Scale", "Octaves", "Amount", "Reverse"] {
+    for hidden in ["Scale", "Octaves", "Ramp amount", "Ramp reversed"] {
         assert!(!shown.iter().any(|s| s == hidden), "{hidden} hidden in {shown:?}");
     }
+}
+
+/// The deform row shows the fields its mode uses (tlprocedural's fields per deformer), and the
+/// ramp's amount only with the ramp on.
+#[test]
+fn the_deform_row_shows_its_modes_fields() {
+    let (mut app, ctx, a) = arrayed();
+    app.run("modifier.add", json!({"ids": [a], "kind": "deform"})).unwrap();
+    set_pstate(&ctx, &format!("pc-open-{a}-m2"), true);
+    let shown = texts(&mut app, &ctx);
+    for want in ["Deform", "Mode", "Axis", "Falloff", "Start scale", "End scale", "Ramp copies", "Ramp amount"] {
+        assert!(shown.iter().any(|s| s == want), "{want} in {shown:?}");
+    }
+    for hidden in ["Angle", "Bend point", "Shear X", "Origin", "Strength", "Radius"] {
+        assert!(!shown.iter().any(|s| s == hidden), "{hidden} hidden in {shown:?}");
+    }
+    app.run("modifier.set", json!({"ids": [a], "index": 1, "props": {"mode": "bulge", "progressive": false}})).unwrap();
+    let shown = texts(&mut app, &ctx);
+    for want in ["Strength", "Radius", "Falloff"] {
+        assert!(shown.iter().any(|s| s == want), "{want} in {shown:?}");
+    }
+    for hidden in ["Axis", "Start scale", "Ramp amount"] {
+        assert!(!shown.iter().any(|s| s == hidden), "{hidden} hidden in {shown:?}");
+    }
+    // Strength 0.35 reads as 35%.
+    assert!(shown.iter().any(|s| s.starts_with("35")), "35% shown: {shown:?}");
 }

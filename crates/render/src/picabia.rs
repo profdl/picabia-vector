@@ -496,7 +496,7 @@ fn make(doc: &Document, n: &Node, out: &Output) -> (Node, Vec<String>) {
             if i.transform != Affine::IDENTITY {
                 c.transform(i.transform, sc);
             }
-            // The copy's index: a displace varies by copy.
+            // Which copy: a deform and a displace ramp across them (a deform bends each in its own frame).
             shaper.copy_at(&mut c, k);
             Arc::new(c)
         })
