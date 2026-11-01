@@ -374,3 +374,100 @@ fn guides_and_non_paths_are_left_alone_with_a_note() {
     assert_eq!(sh.notes.len(), 1, "{:?}", sh.notes);
     assert!(sh.notes[0].contains("Deform"));
 }
+
+// ---- Mirrors and the ramp over array copies (PIC20.3a) ----
+
+/// An asymmetric object: a 100 × 40 rectangle at (0, 0).
+const OBJ: Rect = Rect::new(0.0, 0.0, 100.0, 40.0);
+
+fn copies_of(rows: Value) -> Vec<Node> {
+    let out = evaluate(&stack(rows), OBJ);
+    let (copies, notes) = super::shaped_copies(&node(rect(OBJ)), &out);
+    assert!(notes.is_empty(), "{notes:?}");
+    copies
+}
+
+/// Whether `b` is `a` reflected by `m`: the same number of anchors, each of `m · a` on one of `b`.
+fn mirrors(a: &Node, b: &Node, m: Affine) -> bool {
+    let (pa, pb) = (anchors(a), anchors(b));
+    pa.len() == pb.len() && pa.iter().all(|p| pb.iter().any(|q| q.distance(m * *p) < 1e-6))
+}
+
+/// `x' = 2·ax − x` and `y' = 2·ay − y` about the mirror lines through the box's centre (50, 20),
+/// each moved 80 along its normal.
+fn flips() -> (Affine, Affine) {
+    (Affine::new([-1.0, 0.0, 0.0, 1.0, 2.0 * 130.0, 0.0]), Affine::new([1.0, 0.0, 0.0, -1.0, 0.0, 2.0 * 100.0]))
+}
+
+/// Taper, Twist and Bend below a Mirror across both axes: every reflected copy is the mirror image
+/// of the first (the frame keeps the reflection), and a lone mirror makes no ramp: each copy gets
+/// the whole effect.
+#[test]
+fn a_mirrored_copy_is_the_mirror_image_of_the_deformed_object() {
+    let (fx, fy) = flips();
+    for mode in ["taper", "twist", "bend"] {
+        let c = copies_of(json!([{"id": "m", "kind": "mirror", "axis": "both", "offset": 80}, {"id": "d", "kind": "deform", "mode": mode}]));
+        assert_eq!(c.len(), 4);
+        let whole = source(rect(OBJ), Deform { mode: serde_json::from_value(json!(mode)).unwrap(), ..Deform::default() });
+        assert!(mirrors(&whole, &c[0], Affine::IDENTITY), "{mode}: the original gets the whole effect");
+        for (k, m) in [(1, fx), (2, fy), (3, fy * fx)] {
+            assert!(mirrors(&c[0], &c[k], m), "{mode}: copy {k} mirrors copy 0");
+        }
+    }
+    // The reflection is in the frame: x mirrored, y mirrored.
+    let close = |a: Affine, b: [f64; 6]| a.as_coeffs().iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-12);
+    assert!(close(deform::frame_of(Affine::new([-1.0, 0.0, 0.0, 1.0, 9.0, 0.0])), [-1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
+    assert!(close(deform::frame_of(Affine::new([1.0, 0.0, 0.0, -1.0, 0.0, 9.0])), [1.0, 0.0, 0.0, -1.0, 0.0, 0.0]));
+}
+
+/// tlprocedural's ramp steps over array copies: a mirror after an array repeats the ramp in its
+/// reflected half; a mirror before an array is ramped as a pair.
+#[test]
+fn the_ramp_steps_over_array_copies_and_mirrors_share_it() {
+    let pos = |rows: Value| {
+        let out = evaluate(&stack(rows), OBJ);
+        out.instances.iter().map(|i| out.ramp_position(i)).collect::<Vec<_>>()
+    };
+    let array = json!({"id": "a", "kind": "linearArray", "count": 3, "offsetX": 300});
+    let mirror = json!({"id": "m", "kind": "mirror", "offset": 80});
+    assert_eq!(pos(json!([mirror])), [None, None], "a lone mirror: no ramp");
+    let three = |i| Some((i, 3));
+    assert_eq!(pos(json!([array, mirror])), [three(0), three(1), three(2), three(0), three(1), three(2)]);
+    assert_eq!(pos(json!([mirror, array])), [three(0), three(0), three(1), three(1), three(2), three(2)]);
+    // Two arrays read as one combined array, the first counting fastest.
+    let grid2 = json!({"id": "b", "kind": "linearArray", "count": 2, "offsetY": 300});
+    assert_eq!(pos(json!([array, grid2]))[4], Some((4, 6)));
+    // Array then mirror, deformed: the first copy and its reflection untouched, the last pair
+    // fully twisted and mirror images of each other.
+    let c = copies_of(json!([array, mirror, {"id": "d", "kind": "deform", "mode": "twist"}]));
+    assert_eq!(c.len(), 6);
+    assert_eq!((anchors(&c[0]).len(), anchors(&c[3]).len()), (4, 4));
+    let (fx, _) = flips();
+    // The reflection of copy 2 (moved 600 by the array) is about the same mirror line.
+    assert!(mirrors(&c[2], &c[5], fx), "the last pair mirror each other");
+    assert!(mirrors(&c[1], &c[4], fx));
+    // Mirror then array: each mirrored pair shares its ramp.
+    let c = copies_of(json!([mirror, array, {"id": "d", "kind": "deform", "mode": "twist"}]));
+    assert_eq!((anchors(&c[0]).len(), anchors(&c[1]).len()), (4, 4));
+    assert!(anchors(&c[2]).len() > 4 && anchors(&c[3]).len() > 4);
+}
+
+/// A copy whose transform isn't finite is skipped by whoever builds the copies; the ones after it
+/// keep their own ramp (the index is the copy's place among all the copies).
+#[test]
+fn a_skipped_copy_leaves_the_ramp_aligned() {
+    let p = Deform { mode: DeformMode::Taper, ..Deform::default() };
+    let inst = |k: u32, t: Affine| crate::Instance { transform: t, index: k, stage_indices: vec![k], ..crate::Instance::identity() };
+    let bad = Affine::new([f64::NAN, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    let out = Output {
+        instances: vec![inst(0, Affine::IDENTITY), inst(1, bad), inst(2, Affine::IDENTITY)],
+        geometry: vec![super::GeometryRow { modifier: "d".into(), op: GeometryOp::Deform(p.clone()), at: RowAt::Copies }],
+        array_stages: vec![crate::ArrayStage { array: true, copies: 3 }],
+        ..Output::default()
+    };
+    let (copies, _) = super::shaped_copies(&node(rect(OBJ)), &out);
+    assert_eq!(copies.len(), 2);
+    assert_eq!(anchors(&copies[0]).len(), 4, "copy 0: nothing");
+    let whole = source(rect(OBJ), p);
+    assert!(mirrors(&whole, &copies[1], Affine::IDENTITY), "copy 2 (the second built): the whole taper, not half");
+}

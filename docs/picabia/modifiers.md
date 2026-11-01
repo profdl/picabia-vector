@@ -430,25 +430,39 @@ row (PIC20.4); Attractor Field isn't ported.
 | `origin` | choice | `center`, `topLeft`, `bottomLeft`, `topRight`, `bottomRight` | `center` | shear | The point that stays |
 | `strength` | factor | −3 to 3 | 0.35 | bulge | Each point within the radius moves out from the centre by strength × extent × ½ × falloff (negative pinches in); the extent is how far the shape reaches from the centre |
 | `radius` | factor | 0.01 to 2 | 1 | bulge | How far it reaches, a fraction of the extent (1 reaches the farthest point; the size of the push doesn't depend on it) |
-| `progressive` | on/off | | on | all | Ramp across the copies made above the row: the first copy gets none of the effect, the last `progressiveAmount` of it, evenly between (by the copy's index over all the copies) |
+| `progressive` | on/off | | on | all | Ramp across the array copies made above the row: the first gets the least of the effect (none, except Taper's: see below), the last `progressiveAmount` of it, evenly between |
 | `progressiveAmount` | fraction | 0 to 1 | 1 | all, ramp on | |
 | `progressiveReverse` | on/off | | off | all, ramp on | The first copy gets the most |
 
-The ramp scales Taper's end scale towards its start scale, and the angles, the shears and the
-strength. Above every copy row (on the object) and with one copy the whole effect is applied.
+The ramp scales the angles, the shears and the strength, so the first copy gets none of them;
+Taper's end scale moves towards its start scale, so the first copy is scaled across by
+`startScale` throughout (unchanged only when `startScale` is 1).
+
+**What the ramp counts** (the lead's decision, following tlprocedural): only **array** copies,
+those of linear, circular and grid array rows. Stacked arrays read as one combined array, the
+first array's copies counting fastest (as a copy's index does); the ramp runs from its first copy
+to its last. Copies a mirror, wallpaper or copy to shape row makes (and the per-copy rows,
+transform each and randomize, which make none) get the same ramp value as the copy they were made
+from: a lone mirror gives both halves the whole effect; an array then a mirror ramps each half
+0 to 1 alike; a mirror then an array ramps each mirrored pair together. Above every copy row (on
+the object), and with no array or a single array copy, the whole effect is applied. Whoever builds
+the copies passes each copy's place among all the copies (`Shaper::copy_at`), so skipping one
+whose transform isn't finite doesn't shift the ones after it.
 
 **Each copy in its own box and frame.** Below a copy row each copy is deformed within its own
-bounds, read in its own frame: the copy's rotation (from its instance transform) is taken out
-first and put back after, so the copies of a circular array each taper along their own axis, as
-tlprocedural's do (it deformed each copy before rotating it). A group is deformed as one box.
+bounds, read in its own frame: the copy's rotation (from its instance transform), and its
+reflection when it has one, is taken out first and put back after, so the copies of a circular
+array each taper along their own axis, as tlprocedural's do (it deformed each copy before rotating
+it), and a mirrored copy is the mirror image of the deformed object. A group is deformed as one
+box.
 
 **Curves stay curves.** Shear is affine: anchors and handles move exactly and no anchors are added.
 The others split each segment into pieces at most the box's diagonal ÷ 32 long (64 per segment at
 most) and map their control points, VectorCraft's own distort-effect method
 (`vectorcraft_doc::live::map_nonlinear_within`), so a rectangle's straight sides bend smoothly. The
 pieces fit the anchor cap: where they would pass the copy's share, they grow longer (a coarser
-curve) instead of the row being skipped. A copy the ramp gives nothing (and any deform that moves
-nothing) keeps its anchors. A box smaller than 0.001 pt both ways (Taper, Twist), an axis shorter
+curve) instead of the row being skipped. A deform that moves nothing (the first copy of a ramp,
+except a Taper whose `startScale` isn't 1) keeps its anchors. A box smaller than 0.001 pt both ways (Taper, Twist), an axis shorter
 than that (Taper, Twist, Bend) or a shape that reaches less than that from its centre (Bulge) is
 left alone.
 
@@ -467,8 +481,9 @@ Differences from tlprocedural, on purpose:
   tlprocedural; the shared default here is `linear`.
 - Bulge's `radius` is a factor (1 = 100%) like Picabia's other percentages; tlprocedural stored the
   percentage (1 to 200). Its smallest radius, 1%, is kept.
-- The ramp uses the copy's index among all the copies of the stack above (tlprocedural used the
-  most recent array's own index), and copy 0 is the original, as in tlprocedural.
+- The ramp counts array copies as tlprocedural's does (its `linearArrayIndex` / `arrayIndex`);
+  stacked arrays are read as one combined array (tlprocedural read the most recent array's own
+  index), and copy 0 is the original, as in tlprocedural.
 - Bend keeps tlprocedural's maths (each point turned about the bend point by an angle that grows
   with its distance along the axis), which bends a long shape into a curve that tightens towards
   its ends rather than a circular arc; at the default 45° the two look alike.

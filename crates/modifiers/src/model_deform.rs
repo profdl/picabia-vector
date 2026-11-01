@@ -65,8 +65,9 @@ pub enum ShearOrigin {
 
 /// `deform` (a geometry row): bend the paths within their box. Above every copy row the box is
 /// the object's; below one, each copy is deformed in its own box, in its own frame (the copy's
-/// rotation taken out), and `progressive` ramps the effect across the copies: none on the first,
-/// `progressiveAmount` of it on the last (`progressiveReverse` the other way). Curves stay curves:
+/// rotation and reflection taken out), and `progressive` ramps the effect across the array copies
+/// ([`crate::Output::ramp_position`]): the least on the first, `progressiveAmount` of it on the
+/// last (`progressiveReverse` the other way). Curves stay curves:
 /// segments are split into short pieces whose control points are mapped, within the anchor cap.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -97,7 +98,7 @@ pub struct Deform {
     /// Bulge: how far it reaches, a fraction of the shape's extent (0.01..=2; 1 = 100%, reaching
     /// the farthest point).
     pub radius: f64,
-    /// Ramp the effect across the copies made above the row.
+    /// Ramp the effect across the array copies made above the row.
     pub progressive: bool,
     /// How much of the effect the last copy gets (0..=1).
     pub progressive_amount: f64,

@@ -137,12 +137,12 @@ fn whole(c: &mut Clamp<'_>, name: &str, v: u32, lo: u32, hi: u32) -> u32 {
 /// ```ignore
 /// let mut shaper = Shaper::new(&out);
 /// shaper.source(&mut object);          // before copying
-/// for each copy: copy.transform(t); shaper.copy(&mut copy);
+/// for (k, i) in out.instances.iter().enumerate(): copy.transform(i.transform); shaper.copy_at(&mut copy, k);
 /// ```
 pub struct Shaper<'a> {
     rows: &'a [GeometryRow],
-    /// The copies, for a row that varies by copy (Deform's ramp and frame).
-    instances: &'a [crate::Instance],
+    /// The evaluation: its copies, for a row that varies by copy (Deform's ramp and frame).
+    out: &'a Output,
     /// The anchors one copy may hold after a row that adds anchors.
     budget: usize,
     /// What went wrong, each said once.
@@ -153,7 +153,7 @@ impl<'a> Shaper<'a> {
     /// A shaper for `out`'s rows, the budget shared by its copies.
     pub fn new(out: &'a Output) -> Shaper<'a> {
         let copies = out.instances.len().max(1);
-        Shaper { rows: &out.geometry, instances: &out.instances, budget: MAX_GEOMETRY_ANCHORS / copies, notes: Vec::new() }
+        Shaper { rows: &out.geometry, out, budget: MAX_GEOMETRY_ANCHORS / copies, notes: Vec::new() }
     }
 
     /// Whether there is anything to run.
@@ -173,7 +173,9 @@ impl<'a> Shaper<'a> {
     }
 
     /// Run the rows below a copy row on `n`, copy `index` of [`Output::instances`] after its
-    /// transform: a Deform ramps across the copies and bends each in its own frame.
+    /// transform: a Deform ramps across the array copies ([`Output::ramp_position`]) and bends each
+    /// copy in its own frame. `index` is the copy's place in `instances`, also when callers skip
+    /// some (a transform that isn't finite).
     pub fn copy_at(&mut self, n: &mut Node, index: usize) {
         self.run(n, RowAt::Copies, Some(index));
     }
@@ -191,8 +193,8 @@ impl<'a> Shaper<'a> {
     /// A Deform row on `n`: copy `copy` (ramped, in its frame) or the object. It fits its pieces
     /// in the budget itself, so it is never skipped for anchors.
     fn deform(&mut self, n: &mut Node, p: &Deform, copy: Option<usize>) {
-        let instance = copy.and_then(|i| self.instances.get(i));
-        let p = deform::scaled(p, deform::ramp(p, copy.map(|i| (i, self.instances.len()))));
+        let instance = copy.and_then(|i| self.out.instances.get(i));
+        let p = deform::scaled(p, deform::ramp(p, instance.and_then(|i| self.out.ramp_position(i))));
         let frame = instance.map_or(vectorcraft_geom::Affine::IDENTITY, |i| deform::frame_of(i.transform));
         let Some((b, extent)) = deform::measure(n, &p, frame) else { return };
         let Some(m) = deform::map(&p, b, extent) else { return };

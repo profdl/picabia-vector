@@ -193,15 +193,19 @@ pub(super) fn apply_map(path: &PathData, m: &Map, frame: Affine, max: usize) -> 
     }
 }
 
-/// The rotation part of copy transform `t` (its x axis's direction): the frame a copy is
+/// The rotation part of copy transform `t` (its x axis's direction), with its reflection when it
+/// has one (a negative determinant: the y axis flipped after the turn): the frame a copy is
 /// deformed in, so each copy bends along its own axis as tlprocedural's do (it strips a copy's
-/// rotation before deforming). Identity when `t` has no direction.
+/// rotation before deforming), and a mirrored copy's deform is the mirror image of the object's.
+/// Identity when `t` has no direction.
 pub(super) fn frame_of(t: Affine) -> Affine {
-    let [a, b, ..] = t.as_coeffs();
+    let [a, b, c, d, ..] = t.as_coeffs();
     if !(a.is_finite() && b.is_finite()) || a.hypot(b) < 1e-12 {
         return Affine::IDENTITY;
     }
-    Affine::rotate(b.atan2(a))
+    let turn = Affine::rotate(b.atan2(a));
+    let det = a * d - b * c;
+    if det.is_finite() && det < 0.0 { turn * Affine::scale_non_uniform(1.0, -1.0) } else { turn }
 }
 
 /// What a deform needs to know about the node it reshapes: its paths' box and Bulge's extent,

@@ -84,7 +84,7 @@ mod target_tests;
 #[cfg(test)]
 mod tests;
 
-pub use eval::{Guide, Instance, Output, Repeat, StencilRow, Warning, evaluate, evaluate_with, splitmix64};
+pub use eval::{ArrayStage, Guide, Instance, Output, Repeat, StencilRow, Warning, evaluate, evaluate_with, splitmix64};
 pub use model::{
     CircularArray, CopyMode, CopyToShape, GridArray, KINDS, LinearArray, MAX_CUT_COLOURS, MaterialLimits, Mirror, MirrorAxis, Modifier, ModifierKind,
     Randomize, Stack, Stencil, StencilColourMode, StencilLimitMode, StencilMaterial, StencilOutput, StencilPatternType, StencilPatternWhere,
