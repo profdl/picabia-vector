@@ -964,3 +964,23 @@ fn a_worker_panic_closes_the_link_and_fails_the_job() {
     ex(&mut s, "laser.connect", json!({"port": "sim", "sim": fast()}));
     wait(&mut s, 10.0, "ready again", |v| v["phase"] == "ready");
 }
+
+#[test]
+fn bounds_come_from_the_lines_sent_even_with_a_semicolon_inside_parentheses() {
+    let mut s = connected(fast());
+    // GRBL reads past a `;` inside `( … )`: these lines move to Y 5000, off the 1219.2 mm bed.
+    for text in ["G21 G90\n(note; x) G0 X5000 Y5000\nM5\n", "G21 G90\nG0 X5 (c;) Y5000\nM5\n"] {
+        let why = disabled(s.laser_execute_armed("laser.start", &json!({"gcode": text})));
+        assert!(why.contains("bigger than the bed"), "{text:?}: {why}");
+        let why = disabled(s.execute("laser.frame", &json!({"gcode": text})));
+        assert!(why.contains("bigger than the bed"), "{text:?}: {why}");
+    }
+    assert_eq!(st(&mut s)["simStats"]["gcodeLines"], 0, "nothing was sent");
+    // On the bed: the box is the moves the machine gets.
+    let v = ex(&mut s, "laser.frame", json!({"gcode": "G21 G90\n(a;b) G0 X100 Y80\nM5\n"}));
+    assert_eq!(v["boundsMm"], json!({"x0": 0.0, "y0": 0.0, "x1": 100.0, "y1": 80.0}));
+    wait(&mut s, 10.0, "the frame", |v| v["state"] == "Idle" && v["simStats"]["movedMm"].as_f64().unwrap() > 300.0);
+    let v = start(&mut s, json!({"gcode": "G21 G90\nG0 X5 (c;) Y60\nM5\n"}));
+    assert_eq!(v["started"]["boundsMm"], json!({"x0": 0.0, "y0": 0.0, "x1": 5.0, "y1": 60.0}));
+    wait(&mut s, 10.0, "done", |v| job_state(v) == "done");
+}

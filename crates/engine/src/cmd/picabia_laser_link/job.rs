@@ -137,8 +137,9 @@ pub fn build_run(cmd: &str, s: &Session, p: &Value) -> Result<LaserRun> {
         }
     };
     let lines = check_gcode(&text).map_err(|why| EngineError::Disabled(cmd.into(), why))?;
-    // The head starts at the work origin.
-    let mut bounds = gcode_bounds(&text).map_err(|why| EngineError::Disabled(cmd.into(), why))?.union_pt(Point::ZERO);
+    // The box of the lines actually sent (cleaned as GRBL reads them: a `;` inside `( … )` doesn't
+    // end the line), never of the raw text. The head starts at the work origin.
+    let mut bounds = gcode_bounds(&lines.join("\n")).map_err(|why| EngineError::Disabled(cmd.into(), why))?.union_pt(Point::ZERO);
     let mut run = LaserRun { name, lines, bounds, estimated_sec: None, warnings: Vec::new(), source, sheet: None, layer: None };
     if let Some(t) = writer {
         // The writer's own box too (they agree; the union is never smaller than either).
