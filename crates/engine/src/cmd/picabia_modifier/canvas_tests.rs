@@ -76,3 +76,30 @@ fn direct_selections_marquee_takes_the_members_of_a_groups_copies() {
     assert_eq!(marquee(d, Rect::new(190.0, 340.0, 210.0, 360.0), None, true), [b]);
     assert_eq!(marquee(d, Rect::new(-10.0, 290.0, 400.0, 420.0), None, true), [a, b], "each member once");
 }
+
+/// A click follows what is drawn: past the nested budget a member draws once in each of its
+/// group's copies, so its own copies (not drawn) aren't clicked; and a click stays quick.
+#[test]
+fn clicks_follow_the_nested_budget() {
+    let mut s = super::tests::session();
+    let r = rect(&mut s, 0.0);
+    // The member's own copies sit far below; the group's copies go right, 200 of them.
+    ex(&mut s, "modifier.add", json!({"ids": [r.0], "kind": "linearArray", "props": {"count": 100, "offsetX": 0, "offsetY": 1000}}));
+    let g = super::tests::id_of(&ex(&mut s, "object.group", json!({"ids": [r.0]}))["id"]);
+    ex(&mut s, "modifier.add", json!({"ids": [g.0], "kind": "linearArray", "props": {"count": 200, "offsetX": 200}}));
+    let d = &s.doc().unwrap().doc;
+    let leaf = |x: f64, y: f64| hit_test(d, Point::new(x, y), HitOptions::default()).map(|h| h.leaf);
+    // 200 × 100 = 20 000 over the 10 000 budget: the member draws once in each group copy.
+    assert_eq!(leaf(250.0, 50.0), Some(r), "a group copy is clicked");
+    assert_eq!(leaf(250.0, 1050.0), None, "the member's own copies aren't drawn, so they aren't clicked");
+    // Under the budget they are.
+    ex(&mut s, "modifier.set", json!({"ids": [g.0], "index": 0, "props": {"count": 50}}));
+    let d = &s.doc().unwrap().doc;
+    assert_eq!(hit_test(d, Point::new(250.0, 1050.0), HitOptions::default()).map(|h| h.leaf), Some(r));
+    // Every click and hover tries at most MAX_PLACEMENTS placements.
+    let t = std::time::Instant::now();
+    for _ in 0..20 {
+        let _ = hit_test(d, Point::new(-500.0, -500.0), HitOptions::default());
+    }
+    assert!(t.elapsed() < std::time::Duration::from_secs(5), "{:?}", t.elapsed());
+}

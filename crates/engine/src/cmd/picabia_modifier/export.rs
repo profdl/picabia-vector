@@ -58,8 +58,14 @@ pub(crate) fn export_warning(doc: &Document, f: &Format, p: &Value, warnings: &m
         _ if f.raster => None,
         "vectorcraft" | "template" | "eps" | "ai" | "ait" | "txt" => None,
         "svg" | "svgz" if !preserve(false) => dropped_unless_preserved(doc),
-        "pdf" if !preserve(true) => dropped_unless_preserved(doc),
-        "svg" | "svgz" | "pdf" => None,
+        // The settings the PDF writer resolves (a standard such as PDF/X-4 or a preset can turn
+        // Preserve Editing off), and editing data only for a PDF of every artboard.
+        "pdf" => {
+            let carries = crate::cmd::fileio::pdf::options("document.export", doc, p)
+                .is_ok_and(|o| o.settings.preserve_editing && o.artboards.as_ref().is_none_or(|v| v.iter().copied().eq(0..doc.artboards.len())));
+            if carries { None } else { dropped_unless_preserved(doc) }
+        }
+        "svg" | "svgz" => None,
         _ => dropped(doc),
     };
     warnings.extend(w);

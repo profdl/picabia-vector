@@ -522,7 +522,9 @@ fn hit_children(
     for i in hit_order(parent, children, p) {
         let Some(c) = children.get(i) else { continue };
         // PICABIA: an object with modifier copies is clicked as itself under each copy's transform.
-        if let Some(found) = picabia::hit(symbols, c, p, opt, &mut |h, p, opt| hit_children(h, p, opt, symbols, skip, chain, editable_only)) {
+        if !shaper_hides(parent, i, opt.scope)
+            && let Some(found) = picabia::hit(symbols, c, p, opt, &mut |h, p, opt| hit_children(h, p, opt, symbols, skip, chain, editable_only))
+        {
             match found {
                 Some(hit) => return Some(hit),
                 None => continue,

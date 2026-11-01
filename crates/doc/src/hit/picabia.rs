@@ -17,6 +17,9 @@ use vectorcraft_geom::{Affine, Point};
 use super::{Hit, HitOptions};
 use crate::{Node, NodeId, SymbolBoxes};
 
+/// The transforms of an object's copies (the front one last), and whether its members draw once in each.
+pub type Placements = (Arc<[Affine]>, bool);
+
 /// How modifier copies are found.
 #[derive(Clone, Copy)]
 pub struct CopyHooks {
@@ -24,17 +27,43 @@ pub struct CopyHooks {
     pub has: fn(&Node) -> bool,
     /// Whether something below a container has an active stack (kept per container).
     pub holds: fn(&SymbolBoxes, &Node) -> bool,
-    /// The transforms of an object's copies, the front one last; `None` when it draws once.
-    pub transforms: fn(&SymbolBoxes, &Node) -> Option<Arc<[Affine]>>,
+    /// The transforms of an object's copies, the front one last, and whether its members draw
+    /// once in each (their own copies over the budget); `None` when it draws once.
+    pub transforms: fn(&SymbolBoxes, &Node) -> Option<Placements>,
     /// The group of an object's copies, for marquees.
     pub art: fn(&SymbolBoxes, &Node) -> Option<Arc<Node>>,
 }
 
 static HOOKS: OnceLock<CopyHooks> = OnceLock::new();
 
+/// The most placements (an object under one copy's transform) one click tries in all.
+pub const MAX_PLACEMENTS: usize = 10_000;
+
 thread_local! {
-    /// The objects being tried under one of their copies' transforms: drawn once there.
-    static PLAIN: RefCell<Vec<NodeId>> = const { RefCell::new(Vec::new()) };
+    /// The objects being tried under one of their copies' transforms (drawn once there), and
+    /// whether their members draw once too.
+    static PLAIN: RefCell<Vec<(NodeId, bool)>> = const { RefCell::new(Vec::new()) };
+    /// How many placements the click under way has tried.
+    static TRIED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// While it lives, `id` (and with `strip` everything inside it) is tried as drawn once; dropped
+/// (also on a panic) it lets go.
+struct Plain;
+
+impl Plain {
+    fn push(id: NodeId, strip: bool) -> Plain {
+        PLAIN.with(|p| p.borrow_mut().push((id, strip)));
+        Plain
+    }
+}
+
+impl Drop for Plain {
+    fn drop(&mut self) {
+        PLAIN.with(|p| {
+            p.borrow_mut().pop();
+        });
+    }
 }
 
 /// Register how modifier copies are found (the first registration stays).
@@ -44,7 +73,7 @@ pub fn set_copies(hooks: CopyHooks) {
 }
 
 fn plain(id: NodeId) -> bool {
-    PLAIN.with(|p| p.borrow().contains(&id))
+    PLAIN.with(|p| p.borrow().iter().any(|(i, strip)| *strip || *i == id))
 }
 
 /// Whether something below `n` has copies, which may lie outside `n`'s own reach.
@@ -92,11 +121,23 @@ pub(super) fn hit(
     if !(h.has)(c) || plain(c.id) {
         return None;
     }
-    let ts = (h.transforms)(symbols, c)?;
+    let (ts, strip) = (h.transforms)(symbols, c)?;
+    // A new click: count its placements afresh.
+    if PLAIN.with(|p| p.borrow().is_empty()) {
+        TRIED.with(|t| t.set(0));
+    }
     let holder = Node::group(c.id, vec![c.clone()]);
-    PLAIN.with(|pl| pl.borrow_mut().push(c.id));
-    let mut found = None;
+    let _plain = Plain::push(c.id, strip);
     for t in ts.iter().rev() {
+        // Past the cap the click gives up on copies (nothing beyond them is missed: an object
+        // above them was tried first).
+        let tried = TRIED.with(|n| {
+            n.set(n.get().saturating_add(1));
+            n.get()
+        });
+        if tried > MAX_PLACEMENTS {
+            break;
+        }
         let det = t.determinant();
         if !det.is_finite() || det.abs() < 1e-12 {
             continue;
@@ -104,12 +145,8 @@ pub(super) fn hit(
         let scale = det.abs().sqrt();
         let at = HitOptions { tol: opt.tol / scale, ..opt };
         if let Some(hit) = try_at(&holder, t.inverse() * p, at) {
-            found = Some(hit);
-            break;
+            return Some(Some(hit));
         }
     }
-    PLAIN.with(|pl| {
-        pl.borrow_mut().pop();
-    });
-    Some(found)
+    Some(None)
 }

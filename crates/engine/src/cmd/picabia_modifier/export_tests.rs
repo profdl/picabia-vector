@@ -114,3 +114,15 @@ fn the_warning_names_what_drops_the_stack() {
         }
     }
 }
+
+/// A PDF standard or preset that turns Preserve Editing off drops the stack: the warning says so.
+#[test]
+fn a_pdf_standard_without_editing_data_warns() {
+    let (mut s, _) = arrayed();
+    let text = |out: &Value| out["warnings"].as_array().into_iter().flatten().filter_map(Value::as_str).any(|w| w.contains("modifier copies"));
+    let out = ex(&mut s, "document.serialize", json!({"format": "pdf", "standard": "pdfX4"}));
+    assert!(text(&out), "{out}");
+    // The same PDF without a standard keeps the stack (Preserve Editing is on by default).
+    let out = ex(&mut s, "document.serialize", json!({"format": "pdf"}));
+    assert!(!text(&out), "{out}");
+}

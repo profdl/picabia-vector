@@ -8,15 +8,27 @@ use vectorcraft_geom::{Affine, BezPath};
 use super::Xf;
 use super::outline::stroke_path;
 
-/// `outline` (the object's own) moved to each of `n`'s copies but the unmoved one.
+/// The most copies outlined for one object in a frame (as picabia-craft capped them).
+pub(super) const MAX_OUTLINES: usize = 2_000;
+/// The most path elements outlined for one object's copies in a frame.
+const MAX_OUTLINE_ELEMENTS: usize = 200_000;
+
+/// `outline` (the object's own) moved to each of `n`'s copies but the unmoved one: at most
+/// [`MAX_OUTLINES`], and none when that would be more than [`MAX_OUTLINE_ELEMENTS`] path elements
+/// (as VectorCraft leaves out the outlines of selections with too many anchors).
 pub(super) fn copy_outline_paths(doc: &Document, n: &Node, outline: &BezPath) -> Vec<BezPath> {
     if !vectorcraft_render::picabia::draws_copies(doc, n) {
         return Vec::new();
     }
     let Some(out) = vectorcraft_modifiers::evaluate_node_in_doc(doc, n) else { return Vec::new() };
+    let shown = out.instances.len().min(MAX_OUTLINES);
+    if outline.elements().len().saturating_mul(shown) > MAX_OUTLINE_ELEMENTS {
+        return Vec::new();
+    }
     out.instances
         .iter()
         .filter(|i| i.transform != Affine::IDENTITY)
+        .take(MAX_OUTLINES)
         .map(|i| {
             let mut bp = outline.clone();
             bp.apply_affine(i.transform);

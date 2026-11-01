@@ -28,14 +28,15 @@
 //! the document.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use vectorcraft_doc::{Document, Node, Scaling, SymbolBoxes};
 use vectorcraft_geom::{Affine, Rect};
 use vectorcraft_modifiers::Output;
 
-/// The most nodes the kept arts hold together (the least recently used go first).
-const MAX_CACHED_NODES: usize = 200_000;
+/// The most nodes the kept arts hold together, their objects included (the least recently used go
+/// first): what a closed document's art can keep alive is bounded by it.
+const MAX_CACHED_NODES: usize = 100_000;
 
 /// The most copies an object's art may draw with the copies its members' own stacks make inside
 /// each of them (the product across nesting levels); past this the members draw once in each copy.
@@ -45,8 +46,9 @@ pub const MAX_NESTED_COPIES: usize = vectorcraft_modifiers::MAX_INSTANCES_PER_NO
 /// `modifier.apply`'s cap); past this the object draws once, plainly, with a warning.
 pub const MAX_ART_NODES: usize = 100_000;
 
-/// The most containers whose [`Flags`] are kept (all are dropped past it, and found again).
-const MAX_FLAGGED: usize = 200_000;
+/// The most containers whose [`Flags`] are kept (the dead ones go first past it, then all, and
+/// are found again).
+const MAX_FLAGGED: usize = 50_000;
 
 /// An art kept: the address of the object it was made for, the evaluation it was made from (the
 /// modifiers crate gives a new one when the stack, the bounds or a copy-to-shape target changes),
@@ -74,9 +76,10 @@ impl Flags {
     }
 }
 
-/// What a container holds, in all and below itself, kept by its address with the container (so
-/// the address stays its own while the entry is kept).
-type Kept2 = (Arc<Node>, Flags, Flags);
+/// What a container holds, in all and below itself, kept by its address. The entry holds the
+/// container weakly: nothing it holds (members, images) is kept alive, and while the entry is kept
+/// no other node can take the address.
+type Kept2 = (Weak<Node>, Flags, Flags);
 
 static FLAGS: Mutex<Option<HashMap<usize, Kept2>>> = Mutex::new(None);
 
@@ -123,9 +126,12 @@ fn subtree_flags_at(a: &Arc<Node>, depth: usize) -> Flags {
     let mut kept = FLAGS.lock().unwrap_or_else(PoisonError::into_inner);
     let map = kept.get_or_insert_with(HashMap::new);
     if map.len() >= MAX_FLAGGED {
-        map.clear();
+        map.retain(|_, (w, ..)| w.strong_count() > 0);
+        if map.len() >= MAX_FLAGGED {
+            map.clear();
+        }
     }
-    map.insert(Arc::as_ptr(a) as usize, (a.clone(), all, below));
+    map.insert(Arc::as_ptr(a) as usize, (Arc::downgrade(a), all, below));
     all
 }
 
@@ -179,9 +185,16 @@ fn copies(doc: &Document, n: &Node) -> Option<Arc<Output>> {
 }
 
 /// Whether `n` draws as copies in `doc` (it has an active stack that makes copies within
-/// [`MAX_ART_NODES`]).
+/// [`MAX_ART_NODES`]), found without building the copies.
 pub fn draws_copies(doc: &Document, n: &Node) -> bool {
-    has_stack(n) && art(doc, n).is_some()
+    has_stack(n) && copies(doc, n).is_some_and(|out| node_count(n).saturating_mul(out.instances.len()) <= MAX_ART_NODES)
+}
+
+/// Whether `n`'s members draw once in each of its copies (their own copies over the budget), as
+/// [`make`] decides.
+fn strips_nested(doc: &Document, n: &Node, instances: usize) -> bool {
+    let nested = nested_copies(doc, n, 0);
+    nested > 0 && instances.saturating_mul(nested) > MAX_NESTED_COPIES
 }
 
 /// Why `n` draws once although its stack makes copies, for the panel's warnings: too many nodes.
@@ -215,7 +228,8 @@ pub fn art(doc: &Document, n: &Node) -> Option<Arc<Node>> {
     }
     let nodes = node_count(n).saturating_mul(out.instances.len());
     let art = (nodes <= MAX_ART_NODES).then(|| Arc::new(make(doc, n, &out)));
-    let kept = Arc::new(Kept { at, out, node: n.clone(), art: art.clone(), nodes: if art.is_some() { nodes } else { node_count(n) } });
+    let held = node_count(n).saturating_add(if art.is_some() { nodes } else { 0 });
+    let kept = Arc::new(Kept { at, out, node: n.clone(), art: art.clone(), nodes: held });
     let mut cache = CACHE.lock().unwrap_or_else(PoisonError::into_inner);
     cache.retain(|k| !(k.at == at && k.node == *n));
     cache.insert(0, kept);
@@ -249,8 +263,8 @@ pub fn unstacked(art: Node) -> Node {
 /// How many [`plain_arc`]s are kept.
 const KEPT_PLAIN: usize = 256;
 
-/// `(source, plain)` kept by the source's address (the entry holds the source).
-static PLAIN: Mutex<Vec<(Arc<Node>, Arc<Node>)>> = Mutex::new(Vec::new());
+/// `(source, plain)`, the source held weakly; entries whose source is gone are dropped first.
+static PLAIN: Mutex<Vec<(Weak<Node>, Arc<Node>)>> = Mutex::new(Vec::new());
 
 /// For the renderer: `a` without its stack when it has an active one that makes no copies, kept
 /// by `a`'s identity (so the renderer's caches keyed by identity keep working); `None` otherwise
@@ -260,14 +274,15 @@ pub fn plain_arc(doc: &Document, a: &Arc<Node>) -> Option<Arc<Node>> {
         return None;
     }
     let mut kept = PLAIN.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some(at) = kept.iter().position(|(s, _)| Arc::ptr_eq(s, a)) {
+    if let Some(at) = kept.iter().position(|(s, _)| std::ptr::eq(s.as_ptr(), Arc::as_ptr(a))) {
         let e = kept.remove(at);
         let p = e.1.clone();
         kept.insert(0, e);
         return Some(p);
     }
     let p = Arc::new(plain(a));
-    kept.insert(0, (a.clone(), p.clone()));
+    kept.retain(|(s, _)| s.strong_count() > 0);
+    kept.insert(0, (Arc::downgrade(a), p.clone()));
     kept.truncate(KEPT_PLAIN);
     Some(p)
 }
@@ -298,8 +313,7 @@ fn make(doc: &Document, n: &Node, out: &Output) -> Node {
     // be copied again when the file is read back).
     vectorcraft_modifiers::set_node_source(&mut g, None);
     // Members with stacks of their own copy inside every copy: within one budget.
-    let nested = nested_copies(doc, &object, 0);
-    if nested > 0 && out.instances.len().saturating_mul(nested) > MAX_NESTED_COPIES {
+    if strips_nested(doc, &object, out.instances.len()) {
         strip_nested(&mut object, 0);
     }
     let sc = scaling();
@@ -362,14 +376,16 @@ pub fn hit_hooks() -> vectorcraft_doc::hit::CopyHooks {
     vectorcraft_doc::hit::CopyHooks { has: has_stack, holds: hit_holds, transforms: hit_transforms, art: hit_art }
 }
 
-/// The transforms of `n`'s copies, the front one last (none when it draws once).
-fn hit_transforms(symbols: &SymbolBoxes, n: &Node) -> Option<Arc<[Affine]>> {
+/// The transforms of `n`'s copies, the front one last, and whether its members draw once in each
+/// (as [`make`] decides); none when it draws once. No copy is built.
+fn hit_transforms(symbols: &SymbolBoxes, n: &Node) -> Option<(Arc<[Affine]>, bool)> {
     let doc = symbols.document();
     if !draws_copies(doc, n) {
         return None;
     }
     let out = copies(doc, n)?;
-    Some(out.instances.iter().map(|i| i.transform).filter(|t| is_finite(*t)).collect())
+    let strip = strips_nested(doc, n, out.instances.len());
+    Some((out.instances.iter().map(|i| i.transform).filter(|t| is_finite(*t)).collect(), strip))
 }
 
 /// `n`'s art, for marquees (each copy touched as `n`).

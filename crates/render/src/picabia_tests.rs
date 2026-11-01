@@ -388,3 +388,25 @@ fn the_art_is_kept_for_the_same_object() {
     let (a, b) = (art(&d, n).unwrap(), art(&d, n).unwrap());
     assert!(Arc::ptr_eq(&a, &b));
 }
+
+#[test]
+fn flagged_containers_and_plain_objects_are_not_kept_alive() {
+    let (mut d, r) = doc();
+    let layer = d.layers[0].clone();
+    let _ = subtree_flags(&layer);
+    let layer_count = Arc::strong_count(&layer);
+    drop(d.layers.clone());
+    assert_eq!(layer_count, Arc::strong_count(&layer), "flags hold containers weakly");
+    set_stack(&mut d, r, Some(r#"{"v":1,"stack":[{"id":"m1","kind":"linearArray","count":1}]}"#));
+    let a = d.layers[0].children().unwrap()[0].clone();
+    let before = Arc::strong_count(&a);
+    assert!(plain_arc(&d, &a).is_some());
+    assert_eq!(Arc::strong_count(&a), before, "the plain cache holds its source weakly");
+}
+
+#[test]
+fn draws_copies_builds_no_art() {
+    let (mut d, r) = doc();
+    set_stack(&mut d, r, Some(&linear(7, 40.0)));
+    assert!(draws_copies(&d, d.node(r).unwrap()));
+}
