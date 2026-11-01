@@ -73,11 +73,37 @@ pub fn refuse_file_dialog(app: &mut VectorcraftApp) -> bool {
         return false;
     }
     let st = Status::from_json(&vectorcraft_engine::cmd::picabia_laser_link::status_json(&app.session));
-    if st.stoppable() {
+    if st.stoppable() || moved_lately(app) {
         app.status(tl!(STOP_FIRST));
         return true;
     }
     false
+}
+
+/// How long after a motion command is sent the machine counts as working, before the status says.
+pub const MOTION_GRACE_SECS: f64 = 1.0;
+
+/// A motion command went to the machine (from [`run::as_person`]).
+pub(crate) fn note_motion(app: &mut VectorcraftApp) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        app.picabia.laser.last_motion = Some(std::time::Instant::now());
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = app;
+}
+
+/// A motion command was sent less than [`MOTION_GRACE_SECS`] ago.
+fn moved_lately(app: &VectorcraftApp) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        app.picabia.laser.last_motion.is_some_and(|t| t.elapsed().as_secs_f64() < MOTION_GRACE_SECS)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = app;
+        false
+    }
 }
 
 /// The laser link is open (connected or connecting).
@@ -116,6 +142,13 @@ pub struct LaserPanel {
     pub profile_material: String,
     /// What the last action has to say (unlocking without homing, a frame's placement).
     pub notice: Option<String>,
+    /// Where the last pointer press over the app came from while the window was up (`Some(true)`:
+    /// automation), recorded when it went down: the motion buttons judge their click by it.
+    pub last_press: Option<bool>,
+    /// When a motion command (home, jog, unlock, set origin, frame) was last sent: the status takes
+    /// a moment to say the machine moves, and meanwhile it counts as working.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub last_motion: Option<std::time::Instant>,
 }
 
 impl Default for LaserPanel {
@@ -134,6 +167,9 @@ impl Default for LaserPanel {
             profile: None,
             profile_material: "paper".into(),
             notice: None,
+            last_press: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            last_motion: None,
         }
     }
 }
@@ -188,6 +224,11 @@ pub fn show(app: &mut VectorcraftApp, ctx: &Context) {
         }
         return;
     }
+    // Where a press comes from is judged when it goes down, not when its click lands.
+    let auto_now = run::automated_frame(app, ctx);
+    if ctx.input(|i| i.pointer.any_pressed()) {
+        app.picabia.laser.last_press = Some(auto_now);
+    }
     let mut panel = std::mem::take(&mut app.picabia.laser);
     if !panel.ports_loaded {
         load_ports(app, &mut panel);
@@ -223,8 +264,8 @@ pub fn show(app: &mut VectorcraftApp, ctx: &Context) {
     let asked = std::mem::take(&mut app.picabia.laser).open;
     panel.open = open || asked;
     app.picabia.laser = panel;
-    // Where this frame's input came from: motion and arming on a real machine are a person's only.
-    let automated = run::automated_frame(app, ctx);
+    // Where the click's press came from: motion and arming on a real machine are a person's only.
+    let automated = run::press_automated(app.picabia.laser.last_press, auto_now);
     for a in actions {
         act(app, a, &st, automated);
     }
@@ -650,8 +691,10 @@ fn act(app: &mut VectorcraftApp, a: Action, st: &Status, automated: bool) {
         }
         Action::Start(p) => {
             let job = &app.picabia.laser.job;
-            let mut list = Checklist::new(Confirm::Start, job.start_params(p));
+            let start = job.start_params(p);
+            let mut list = Checklist::new(Confirm::Start, start.clone());
             list.summary = job.checklist_lines(&job::selection_name(app).unwrap_or_default());
+            list.expected = job.expected(&job::selection(app), &start);
             app.picabia.laser.checklist = Some(list);
         }
         Action::Pause => {
