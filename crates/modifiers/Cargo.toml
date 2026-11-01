@@ -1,0 +1,15 @@
+[package]
+name = "vectorcraft-modifiers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Picabia modifier stacks: the live, non-destructive per-layer modifier model (stored as a foreign attribute on the object), its parser with caps, and the evaluator that turns a stack into instance transforms"
+
+[lints]
+workspace = true
+
+[dependencies]
+vectorcraft-geom = { workspace = true }
+vectorcraft-doc = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
