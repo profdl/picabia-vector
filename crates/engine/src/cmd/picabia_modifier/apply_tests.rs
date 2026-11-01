@@ -363,3 +363,29 @@ fn a_stencil_row_stays_live_and_only_the_rows_above_it_are_baked() {
     assert!(matches!(s.execute("modifier.apply", &json!({"ids": [r2.0]})), Err(EngineError::Disabled(..))));
     assert_eq!(drawn(&s, r2).len(), 1, "a stencil alone draws the object once, unchanged");
 }
+
+/// Applying changes nothing on the page: the baked group draws what the live copies drew,
+/// transparency (one composite for all the copies), effects and overlaps included.
+#[test]
+fn apply_draws_exactly_what_the_live_copies_drew() {
+    let mut s = session();
+    let r = rect(&mut s, 50.0);
+    ex(&mut s, "object.setProps", json!({"ids": [r.0], "opacity": 50}));
+    s.edit("Shadow", |d, _| {
+        d.node_mut(r).unwrap().appearance.effects.push(vectorcraft_doc::Effect {
+            id: "stylize.dropShadow".into(),
+            params: json!({"x": 6.0, "y": 6.0, "blur": 3.0, "opacity": 75.0}),
+            visible: true,
+        });
+        Ok(())
+    })
+    .unwrap();
+    add(&mut s, r, "linearArray", json!({"count": 4, "offsetX": 60, "rotateEach": 10, "scaleEach": 1.1}));
+    let region = vectorcraft_geom::Rect::new(0.0, 0.0, 500.0, 220.0);
+    let draw = |s: &Session| vectorcraft_render::Renderer::new().render_region(doc(s), region, 1.0, true).pixels;
+    let live = draw(&s);
+    let g = id_of(&ex(&mut s, "modifier.apply", json!({"ids": [r.0]}))["ids"][0]);
+    assert!((node(&s, g).opacity - 0.5).abs() < 1e-6, "the group takes the object's opacity");
+    assert!(children(&s, g).iter().all(|c| node(&s, *c).opacity == 1.0), "the copies are opaque inside it");
+    assert!(draw(&s) == live, "the baked group draws as the live copies did");
+}

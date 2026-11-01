@@ -121,6 +121,9 @@ pub(super) fn encode(cmd: &str, f: &Format, doc: &Document, p: &Value) -> Result
         let one = super::save::artboard_doc(doc, b);
         let (full, placed) = crate::cmd::place::document::full_documents(&one);
         let mut d = full.into_owned();
+        if let Some(w) = crate::cmd::picabia_modifier::bake_copies(&mut d) {
+            note(&mut enc.warnings, &w); // PICABIA: modifier copies as plain objects
+        }
         expand_appearances(&mut d);
         if mode == SeeThrough::Flatten {
             expand_image_patterns(&mut d)?;

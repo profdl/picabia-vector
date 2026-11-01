@@ -1,9 +1,8 @@
 //! PICABIA: modifier stack commands, and the stack (a foreign attribute) surviving save and
-//! reopen, SVG, copy and paste, duplicate, Alt-drag copies and undo.
+//! reopen, copy and paste, duplicate, Alt-drag copies and undo (SVG: `export_tests`).
 
 use serde_json::{Value, json};
 use vectorcraft_doc::NodeId;
-use vectorcraft_modifiers::{ModifierKind, PLUGIN_KEY, STACK_NS};
 
 use crate::{EngineError, Session};
 
@@ -243,22 +242,6 @@ fn the_stack_survives_save_and_reopen() {
     let doc = &s.doc().unwrap().doc;
     let again = vectorcraft_format::load(&vectorcraft_format::save(doc, false)).unwrap();
     assert_eq!(vectorcraft_modifiers::node_source(again.node(r).unwrap()), Some(src.as_str()));
-}
-
-#[test]
-fn the_stack_survives_an_svg_round_trip() {
-    let (mut s, r) = arrayed();
-    let want = data(&s, r).unwrap();
-    let svg = ex(&mut s, "document.serialize", json!({"format": "svg"}))["text"].as_str().unwrap().to_string();
-    assert!(svg.contains(STACK_NS), "the namespace is declared: {svg}");
-    assert!(svg.contains(&format!("picabia:{PLUGIN_KEY}=")), "{svg}");
-    let mut t = Session::new();
-    ex(&mut t, "document.open", json!({"name": "stack.svg", "dataBase64": vectorcraft_format::base64_encode(svg.as_bytes())}));
-    let mut found = vec![];
-    t.doc().unwrap().doc.walk(|n| found.extend(vectorcraft_modifiers::node_source(n).map(str::to_string)));
-    assert_eq!(found, [want]);
-    let stack = vectorcraft_modifiers::parse(found.first().unwrap()).unwrap();
-    assert!(matches!(&stack.modifiers[0].kind, ModifierKind::LinearArray(p) if p.count == 5));
 }
 
 #[test]

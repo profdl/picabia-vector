@@ -44,6 +44,7 @@ mod lighting;
 mod lighting_presets;
 mod live;
 mod marks;
+pub mod picabia; // PICABIA: exports write modifier copies (hooks the engine registers).
 pub mod pixel;
 pub mod preview;
 mod raster;

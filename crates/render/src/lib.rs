@@ -22,6 +22,7 @@ mod lru;
 mod paint;
 pub use paint::{decode_failures, image_decodes, reduced_size};
 mod pattern;
+pub mod picabia; // PICABIA: modifier copies draw as the object's art.
 pub mod placed_document;
 pub mod proof;
 
