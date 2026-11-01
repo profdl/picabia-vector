@@ -30,8 +30,13 @@ differences:
   separate Modifiers section). Evaluation rule: **Picabia rows run in their order, top first**, as
   below. A VectorCraft geometry effect **below** a copy row (an array, mirror, wallpaper or copy to
   shape) applies to **each copy**; one **above** it applies to the object **before** it is copied.
-  Until the interleaving is built, the simplest correct ordering that keeps this rule is shipped and
-  noted here.
+  Until the interleaving is built, the simplest correct ordering that keeps this rule is shipped:
+  the Picabia rows are one block in the list, between the fills and strokes and the object's own
+  effects, and every VectorCraft effect counts as below the copy rows (it draws on each copy; see
+  How copies are drawn). A row's eye turns it off, its disclosure shows its fields, its `⋯` menu
+  moves, duplicates, copies, pastes, removes it or applies the stack down to it; under the rows are
+  the evaluation's warnings and Apply. Add New Effect (`fx`) ▸ Modifiers and Object ▸ Modifiers
+  add each kind.
 - **No variable bindings.** picabia-craft's P6 bound modifier fields to FigCraft variables
   (`Node.bound`, `variable.bind`); there is no `bind.rs` here. P6 is replaced by the **parameters**
   design (number and text parameters in VectorCraft's Variables panel, with a parameter, expression
