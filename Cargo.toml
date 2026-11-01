@@ -53,6 +53,8 @@ vectorcraft-affinity = { path = "crates/affinity" }
 vectorcraft-scriptcheck = { path = "crates/scriptcheck" }
 # PICABIA: modifier stacks (L2)
 vectorcraft-modifiers = { path = "crates/modifiers" }
+# PICABIA: the GRBL laser link (standalone): protocol, streamer, simulator, serial transport.
+vectorcraft-grbl = { path = "crates/grbl" }
 
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }

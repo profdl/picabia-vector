@@ -65,6 +65,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("scriptcheck", Class::Standalone),
     // PICABIA: modifier stacks (geom, doc)
     ("modifiers", Class::Layer(2)),
+    // PICABIA: the GRBL laser link (protocol, simulator, serial port); no workspace deps.
+    ("grbl", Class::Standalone),
 ];
 
 /// Explicit orderings *within* a layer (earlier may be used by later).
