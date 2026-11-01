@@ -408,6 +408,8 @@ pub(crate) use targets::{remap_copies, remap_pasted, snapshot};
 #[cfg(test)]
 mod apply_tests;
 #[cfg(test)]
+mod canvas_tests;
+#[cfg(test)]
 mod export_tests;
 #[cfg(test)]
 mod targets_tests;

@@ -8,6 +8,9 @@ use vectorcraft_geom::{BezPath, FillRule, Point, Rect};
 
 use crate::{AppearanceItem, Document, Node, NodeId, NodeKind, SymbolBoxes};
 
+mod picabia; // PICABIA: modifier copies hit as their object.
+pub use picabia::{Copies, HasCopies, set_copies};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HitKind {
     Fill,
@@ -454,6 +457,7 @@ fn may_hit(parent: &Node, i: usize, c: &Node, p: Point, opt: HitOptions, symbols
     edits_contents(c)
         || c.extras().shaper.is_some() && source_of(c, opt.scope)
         || c.reach_bounds_with(symbols).is_none_or(|b| b.inflate(opt.tol, opt.tol).contains(p))
+        || picabia::holds_copies(c) // PICABIA: members' modifier copies reach past the container
 }
 
 /// Is the first child of `n` the isolated container `scope`?
@@ -515,8 +519,11 @@ fn hit_children(
             return None;
         }
     }
-    for i in hit_order(parent, children, p) {
-        let Some(c) = children.get(i) else { continue };
+    // PICABIA: an object's modifier copies are tried in its place, the front one first.
+    let tried: Vec<(usize, std::sync::Arc<Node>)> =
+        hit_order(parent, children, p).flat_map(|i| picabia::each_copy(symbols, children.get(i)).into_iter().map(move |c| (i, c))).collect();
+    for (i, c) in &tried {
+        let i = *i;
         if !may_hit(parent, i, c, p, opt, symbols, editable_only) || skip(c.id) {
             continue;
         }
@@ -722,6 +729,9 @@ pub fn marquee(doc: &Document, r: Rect, scope: Option<NodeId>, leaves: bool) -> 
     /// by the copies it draws, as clicks hit them. Objects of every other kind except paths,
     /// compound paths, layers and groups are touched by their box.
     fn touches(n: &Node, s: &SymbolBoxes, r: Rect, scope: Option<NodeId>) -> bool {
+        if let Some(copies) = picabia::copies(s, n) {
+            return touches(&copies, s, r, scope); // PICABIA: a marquee over a copy takes its object
+        }
         match &n.kind {
             NodeKind::Path { path, .. } => vectorcraft_geom::hit::intersects_rect(path, r),
             NodeKind::Layer { children, .. } | NodeKind::Group { children, .. } | NodeKind::Intertwine { children } => marquee_in(n, r)
