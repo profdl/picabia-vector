@@ -242,6 +242,7 @@ impl VectorcraftApp {
     pub fn tick(&mut self, ctx: &egui::Context) {
         let confined = self.synthetic_frame.then(|| self.automation_roots.clone()).flatten();
         if let Err(msg) = file_access::confine(confined.as_ref(), || vectorcraft_engine::guard::catch_panic(|| self.tick_frame(ctx))) {
+            self.session.laser_emergency_stop(); // PICABIA: a panicking frame stops a running laser job.
             self.picks.recover();
             self.status(format!("Internal error: {msg} (please report this bug)"));
         }
@@ -455,6 +456,7 @@ impl VectorcraftApp {
                 self.ui_frame(ui);
             })
         }) {
+            self.session.laser_emergency_stop(); // PICABIA: a panicking frame stops a running laser job.
             self.picks.recover();
             self.status(format!("Internal error: {msg} (please report this bug)"));
         }
