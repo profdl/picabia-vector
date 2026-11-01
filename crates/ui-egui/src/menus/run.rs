@@ -56,6 +56,9 @@ pub fn run_ui_command(app: &mut VectorcraftApp, id: &str, p: &Value) -> Option<R
     if let Some(result) = crate::panel_docking::command(app, id, p) {
         return Some(result);
     }
+    if let Some(r) = crate::picabia_ui::command(app, id, p) {
+        return Some(r); // PICABIA: laser.panel, ui.stencilSettings
+    }
     if id == "app.language" {
         let lang = p.get("lang").and_then(Value::as_str).unwrap_or("");
         let value = if lang.eq_ignore_ascii_case("auto") {

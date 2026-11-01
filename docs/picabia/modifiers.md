@@ -351,3 +351,32 @@ dragged point snaps as VectorCraft's Smart Guides and snapping do.
 | circularArray | a knob on the ring opposite the original | `radius` (the original stays; the ring grows away from it) | |
 | linearArray | the last copy's centre (shown when `count` > 1) | `offsetX`, `offsetY` (`count` stays) | 45° steps |
 | gridArray | the middle of the lattice's right / bottom side (more than one column / row) | `gapX` / `gapY` | both gaps equal |
+
+
+## Laser: who may do what
+
+Picabia drives a GRBL laser (`laser.*`, the Laser window: File ▸ Laser…). The rules, from
+picabia-craft's `LASER_CONTROL.md` and the safety review of the port:
+
+| Who | Simulator (`port: "sim"`) | Real machine |
+|---|---|---|
+| A person clicking in the desktop app's Laser window | everything | everything; Start and Resume only after the safety checklist |
+| Scripts, agents, MCP, the control channel, `command.batch`, plug-ins, accessibility clients | everything (injected clicks may arm the simulator, for tests and screenshots) | connect, disconnect, status, ports, exports (`laser.gcode`, the stencil exports), profile, `laser.jogCancel`, pause and stop only: `laser.home`, `laser.jog`, `laser.unlock`, `laser.setOrigin` and `laser.frame` are refused, and so are `laser.start` and `laser.resume` (they need the arm) |
+
+- **Arming** (`laser.start`, a beam `laser.frame`, `laser.resume`) goes through
+  `Session::laser_execute_armed`, the **motion commands** through `Session::laser_execute_person`.
+  Neither is a command; the app calls them only from the Laser window (`picabia_laser_window/run.rs`).
+- **Input from automation** never counts as a person on a real machine: a frame of control-channel
+  input, a control request being answered, or an AccessKit action (any screen reader or
+  UI-automation client). Where the checklist's Start press came from is recorded when the button
+  goes down; boxes automation ticked are cleared and must be ticked again by a person.
+- **Real ports** are on only in the desktop app, and off whenever it runs with `--control` (agents,
+  MCP through the control channel) unless `PICABIA_LASER_HARDWARE=1`; `PICABIA_LASER_HARDWARE=0`
+  turns them off always. Tests, the CLI and headless MCP sessions never turn them on.
+- **Stop** is always on screen while connected (the window, or a bar when it is closed); Shift+Esc
+  stops from every window of the app (floating panels' own windows too), whenever the link is
+  open. Esc alone never stops. No file dialog opens while the laser works (it would cover Stop).
+- **Gap:** while a menu of the macOS menu bar is open the app runs no frames, so neither Stop nor
+  Shift+Esc acts until it closes: the machine's own emergency stop must be in reach (the checklist
+  asks).
+

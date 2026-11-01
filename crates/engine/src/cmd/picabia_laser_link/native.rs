@@ -320,6 +320,15 @@ impl LaserLink {
         Ok(())
     }
 
+    /// The open link is a real machine, not the simulator.
+    pub(super) fn on_real_machine(&self) -> bool {
+        #[cfg(test)]
+        if self.pretend_real && self.is_open() {
+            return true;
+        }
+        self.is_open() && self.worker.as_ref().is_some_and(|w| !w.sim)
+    }
+
     /// The worker is running.
     pub fn is_open(&self) -> bool {
         self.worker.as_ref().is_some_and(|w| {

@@ -275,6 +275,9 @@ fn ask(app: &mut VectorcraftApp, request: PickRequest) -> Option<PickAnswer> {
     if !can(app, &request) {
         return None;
     }
+    if crate::picabia_laser_window::refuse_file_dialog(app) {
+        return None; // PICABIA: no file dialog over a working laser's Stop
+    }
     if app.services.start_pick.is_some() && app.picks.waiting.is_some() {
         app.status(busy());
         app.picks.refused = true;
