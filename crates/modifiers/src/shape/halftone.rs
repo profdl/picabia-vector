@@ -4,8 +4,10 @@
 //! [`crate::screen`] is sampled over the path's bounds and contoured by Picabia's own marching
 //! squares ([`crate::contour`]); the rings are fitted with curves (Simplify's least-squares fit,
 //! within a fraction of the sample step), then clipped to the path's outline with Pathfinder's
-//! intersect (`vectorcraft_pathops`). The dots are filled with the path's paint (its fill; its
-//! stroke's paint when it has no fill; black when it has neither), without a stroke.
+//! intersect (`vectorcraft_pathops`). The dots have no stroke. Their ink (the lead's decision,
+//! PIC20.5d): with the tone read from the path's paint (`fill`) they are **black**, the paint giving
+//! the tone only (inking them in the paint they read would darken twice); with a fixed or an image
+//! tone they take the path's fill (its stroke's paint when it has no fill; black with neither).
 //!
 //! # Clipping only what crosses the edge
 //! A dot wholly inside the outline is kept as it is and one wholly outside is dropped; only the
@@ -25,7 +27,11 @@
 //! note). Before tracing, the anchors are estimated from the screen's cells over the path
 //! ([`SPOT_ANCHORS`] each) and checked against the copy's share of the geometry cap; after fitting
 //! and clipping, the real count is checked again. Over either, the path is left as it is, with a
-//! note. An outline flattened into more than [`MAX_OUTLINE_PIECES`] pieces is not screened.
+//! note. An outline of more than [`MAX_CLIP_SEGMENTS`] segments or [`MAX_OUTLINE_PIECES`] flattened
+//! pieces is not screened; its pieces fill at most [`MAX_BAND_ENTRIES`] band slots (fewer, taller bands when they
+//! would fill more), and the clip's tests are counted before they run: past [`MAX_CLIP_WORK`] piece
+//! visits, or when the edge dots touch more than [`MAX_EDGE_CONTACTS`] pieces (each a crossing the
+//! boolean must cut), the path is not screened either. Each with a note.
 
 use std::sync::Arc;
 
@@ -41,8 +47,18 @@ use crate::target::ToneTarget;
 /// The anchors one screen cell is expected to hold once fitted (a round dot fits in about four
 /// curves): the estimate checked against the cap before tracing.
 pub const SPOT_ANCHORS: usize = 4;
-/// The most straight pieces an outline is flattened into for the inside and crossing tests.
-pub const MAX_OUTLINE_PIECES: usize = 1_000_000;
+/// The most anchors an outline may have, and the most straight pieces it is flattened into for the
+/// inside and crossing tests.
+pub const MAX_OUTLINE_PIECES: usize = 200_000;
+/// The most segments an outline may have: the dots on its edge are cut by a boolean with it.
+pub const MAX_CLIP_SEGMENTS: usize = 20_000;
+/// The most outline pieces the dots on the edge may touch, all together (each touch may be a
+/// crossing the boolean must find and cut): past it the path isn't screened.
+pub const MAX_EDGE_CONTACTS: usize = 20_000;
+/// The most band slots those pieces fill (a piece fills one in every band it spans).
+pub const MAX_BAND_ENTRIES: usize = 2_000_000;
+/// The most piece visits the clip's crossing and inside tests may make for one path.
+pub const MAX_CLIP_WORK: u64 = 50_000_000;
 /// The most horizontal bands those pieces are sorted into.
 const MAX_BANDS: usize = 4096;
 /// The fit's tolerance, as a share of the sample step.
@@ -102,11 +118,13 @@ fn walk(n: &mut Node, row: &ScreenRow, image: Option<&ToneTarget>, run: &mut Run
         NodeKind::Path { guide: true, .. } | NodeKind::Path { clipping: true, .. } => {}
         NodeKind::Path { path, rule, live, .. } => {
             let paint = ink(&appearance);
+            // The outline's box, before the dots replace it: a gradient stays where it was.
+            let bounds = path.bounds();
             if let Some(dots) = screen_outline(path, *rule, &paint, row, image, run) {
                 *path = dots;
                 *rule = FillRule::NonZero;
                 *live = None;
-                paint_dots(n, paint, path_bounds(n));
+                paint_dots(n, dot_ink(row, paint), bounds);
             }
         }
         NodeKind::Compound { children, rule } => {
@@ -136,7 +154,7 @@ fn walk(n: &mut Node, row: &ScreenRow, image: Option<&ToneTarget>, run: &mut Run
                 }
                 *children = vec![Arc::new(member)];
                 *rule = FillRule::NonZero;
-                paint_dots(n, paint, bounds);
+                paint_dots(n, dot_ink(row, paint), bounds);
             }
         }
         NodeKind::Group { children, .. } | NodeKind::Layer { children, .. } => {
@@ -148,14 +166,17 @@ fn walk(n: &mut Node, row: &ScreenRow, image: Option<&ToneTarget>, run: &mut Run
     }
 }
 
-fn path_bounds(n: &Node) -> Option<Rect> {
-    match &n.kind {
-        NodeKind::Path { path, .. } => path.bounds(),
-        _ => None,
+/// What the dots are inked with: black when their tone came from `paint` (it gives the tone only),
+/// `paint` itself for a fixed or an image tone.
+fn dot_ink(row: &ScreenRow, paint: Paint) -> Paint {
+    match row.params.tone {
+        ToneSource::Fill => Paint::solid(Color::BLACK),
+        ToneSource::Fixed | ToneSource::Image => paint,
     }
 }
 
-/// The paint the dots take: the fill, else the stroke's paint, else black.
+/// The path's paint: the fill, else the stroke's paint, else black (the tone `fill` reads, and the
+/// ink of a fixed or an image tone).
 fn ink(a: &vectorcraft_doc::Appearance) -> Paint {
     let fill = a.fill_paint();
     if !fill.is_none() {
@@ -236,6 +257,14 @@ fn screen_outline(
     run: &mut Run<'_>,
 ) -> Option<PathData> {
     let bounds = path.bounds().filter(|b| [b.x0, b.y0, b.x1, b.y1].iter().all(|v| v.is_finite()) && b.width() > 0.0 && b.height() > 0.0)?;
+    // The edge dots are cut by a boolean with the whole outline: its cost grows with the outline.
+    let segments = path.subpaths.iter().fold(0usize, |n, sp| n.saturating_add(sp.segment_count()));
+    if segments > MAX_CLIP_SEGMENTS {
+        run.note(format!(
+            "Screen: an outline of more than {MAX_CLIP_SEGMENTS} segments isn't screened (simplify it, or split it into several paths)"
+        ));
+        return None;
+    }
     let p = &row.params;
     let screen = crate::screen::Screen::new(p.spot, p.lpi, p.angle, p.quality);
     // The anchors to expect, from the screen's cells over the path's box, before anything is made.
@@ -283,7 +312,7 @@ fn screen_outline(
         run.note(format!("Screen traces this art more coarsely than its quality asks, to stay within {} samples", crate::contour::MAX_CELLS));
     }
     let dots = fit(&traced.rings, traced.step, p.spot);
-    let clipped = clip(&dots, path, rule, traced.step, run);
+    let clipped = clip(&dots, path, rule, traced.step, run)?;
     let anchors = clipped.anchor_count();
     if anchors > run.room {
         let total = super::MAX_GEOMETRY_ANCHORS;
@@ -304,21 +333,38 @@ fn fit(rings: &[Ring], step: f64, spot: SpotShape) -> PathData {
 }
 
 /// `dots` clipped to `outline` (filled by `rule`): the dots inside kept, those outside dropped, those
-/// on the edge intersected with it (see the module docs).
-fn clip(dots: &PathData, outline: &PathData, rule: FillRule, step: f64, run: &mut Run<'_>) -> PathData {
+/// on the edge intersected with it (see the module docs). `None` (with a note) when the outline is
+/// too detailed to clip within the caps.
+fn clip(dots: &PathData, outline: &PathData, rule: FillRule, step: f64, run: &mut Run<'_>) -> Option<PathData> {
     let Some(edge) = Edge::new(outline, rule, step * FLATTEN_TOLERANCE) else {
-        run.note(format!("Screen: the outline has more than {MAX_OUTLINE_PIECES} pieces; the dots aren't clipped to it"));
-        return dots.clone();
+        run.note(format!("Screen: the outline flattens into more than {MAX_OUTLINE_PIECES} pieces; it isn't screened"));
+        return None;
     };
+    let hulls: Vec<Option<Rect>> = dots.subpaths.iter().map(hull).collect();
+    // The tests' cost, counted before they run.
+    let work = hulls.iter().flatten().filter(|b| overlaps(**b, edge.bbox)).fold(0u64, |w, b| w.saturating_add(edge.cost(*b)));
+    if work > MAX_CLIP_WORK {
+        run.note(
+            "Screen: the outline is too detailed to clip this many dots to; it isn't screened (simplify the outline or lower the lines per inch)"
+                .into(),
+        );
+        return None;
+    }
     let mut kept: Vec<SubPath> = Vec::new();
     let mut crossing: Vec<SubPath> = Vec::new();
-    for sp in &dots.subpaths {
-        let Some(b) = hull(sp) else { continue };
+    let mut contacts = 0usize;
+    for (sp, b) in dots.subpaths.iter().zip(&hulls) {
+        let Some(b) = *b else { continue };
         if !overlaps(b, edge.bbox) {
             continue;
         }
         let encloses = b.x0 <= edge.bbox.x0 && b.y0 <= edge.bbox.y0 && b.x1 >= edge.bbox.x1 && b.y1 >= edge.bbox.y1;
         if encloses || edge.crosses(b) {
+            contacts = contacts.saturating_add(edge.touching(b));
+            if contacts > MAX_EDGE_CONTACTS {
+                run.note("Screen: the dots would cross the outline's edge too often to cut (a very detailed edge); it isn't screened (simplify the outline or lower the lines per inch)".into());
+                return None;
+            }
             crossing.push(sp.clone());
         } else if sp.anchors.first().is_some_and(|a| edge.inside(a.p)) {
             kept.push(sp.clone());
@@ -338,7 +384,7 @@ fn clip(dots: &PathData, outline: &PathData, rule: FillRule, step: f64, run: &mu
             Err(e) => run.note(format!("Screen couldn't cut the dots at the outline's edge ({e}); those dots are left out")),
         }
     }
-    PathData::new(kept)
+    Some(PathData::new(kept))
 }
 
 /// `p` with its outer contours clockwise on screen, as the traced dots are: the boolean's contours
@@ -377,6 +423,8 @@ fn overlaps(a: Rect, b: Rect) -> bool {
 struct Edge {
     pieces: Vec<(Point, Point)>,
     bands: Vec<Vec<u32>>,
+    /// `prefix[k]`: the slots in the bands before band `k` (for counting a test's cost).
+    prefix: Vec<u64>,
     y0: f64,
     band_h: f64,
     bbox: Rect,
@@ -424,9 +472,20 @@ impl Edge {
         if ![bbox.x0, bbox.y0, bbox.x1, bbox.y1].iter().all(|v| v.is_finite()) {
             return None;
         }
-        let count = ((pieces.len() as f64).sqrt().ceil() as usize).clamp(1, MAX_BANDS);
+        // As many bands as the square root of the pieces, fewer (taller) while the pieces would fill
+        // more than MAX_BAND_ENTRIES slots: counted before anything is allocated; one band holds
+        // each piece once.
+        let mut count = ((pieces.len() as f64).sqrt().ceil() as usize).clamp(1, MAX_BANDS);
+        let slots = |count: usize| -> usize {
+            let band_h = (bbox.height() / count as f64).max(1e-9);
+            let band = |y: f64| band_of(y, bbox.y0, band_h, count);
+            pieces.iter().fold(0usize, |n, (a, b)| n.saturating_add(band(a.y.max(b.y)) - band(a.y.min(b.y)) + 1))
+        };
+        while count > 1 && slots(count) > MAX_BAND_ENTRIES {
+            count /= 2;
+        }
         let band_h = (bbox.height() / count as f64).max(1e-9);
-        let mut e = Edge { pieces: Vec::new(), bands: vec![Vec::new(); count], y0: bbox.y0, band_h, bbox, rule, tol };
+        let mut e = Edge { pieces: Vec::new(), bands: vec![Vec::new(); count], prefix: Vec::new(), y0: bbox.y0, band_h, bbox, rule, tol };
         for (k, (a, b)) in pieces.iter().enumerate() {
             let (lo, hi) = (e.band(a.y.min(b.y)), e.band(a.y.max(b.y)));
             for band in e.bands.iter_mut().take(hi + 1).skip(lo) {
@@ -434,17 +493,35 @@ impl Edge {
             }
         }
         e.pieces = pieces;
+        e.prefix = std::iter::once(0u64)
+            .chain(e.bands.iter().scan(0u64, |sum, b| {
+                *sum = sum.saturating_add(b.len() as u64);
+                Some(*sum)
+            }))
+            .collect();
         Some(e)
     }
 
     fn empty(rule: FillRule, tol: f64) -> Edge {
-        Edge { pieces: Vec::new(), bands: Vec::new(), y0: 0.0, band_h: 1.0, bbox: Rect::ZERO, rule, tol }
+        Edge { pieces: Vec::new(), bands: Vec::new(), prefix: vec![0], y0: 0.0, band_h: 1.0, bbox: Rect::ZERO, rule, tol }
     }
 
     fn band(&self, y: f64) -> usize {
-        let last = self.bands.len().max(1) - 1;
-        let k = ((y - self.y0) / self.band_h).floor();
-        if k.is_finite() { (k.max(0.0) as usize).min(last) } else { 0 }
+        band_of(y, self.y0, self.band_h, self.bands.len())
+    }
+
+    /// The piece visits the crossing test of box `r` makes (the inside test makes fewer).
+    fn cost(&self, r: Rect) -> u64 {
+        let r = self.widened(r);
+        let (lo, hi) = (self.band(r.y0), self.band(r.y1));
+        match (self.prefix.get(lo), self.prefix.get(hi + 1)) {
+            (Some(a), Some(b)) => b.saturating_sub(*a).saturating_add(1),
+            _ => 1,
+        }
+    }
+
+    fn widened(&self, r: Rect) -> Rect {
+        Rect::new(r.x0 - self.tol * 2.0, r.y0 - self.tol * 2.0, r.x1 + self.tol * 2.0, r.y1 + self.tol * 2.0)
     }
 
     fn pieces_in(&self, band: usize) -> impl Iterator<Item = &(Point, Point)> + '_ {
@@ -474,13 +551,33 @@ impl Edge {
         }
     }
 
+    /// How many pieces' boxes meet box `r` (widened as [`Edge::crosses`] widens it; a piece over
+    /// several bands counted in each).
+    fn touching(&self, r: Rect) -> usize {
+        let r = self.widened(r);
+        (self.band(r.y0)..=self.band(r.y1)).map(|band| self.pieces_in(band).filter(|(a, b)| overlaps(r, Rect::from_points(*a, *b))).count()).sum()
+    }
+
     /// Whether a piece of the outline may pass through box `r` (the pieces' boxes, widened by the
     /// flattening tolerance).
     fn crosses(&self, r: Rect) -> bool {
-        let r = Rect::new(r.x0 - self.tol * 2.0, r.y0 - self.tol * 2.0, r.x1 + self.tol * 2.0, r.y1 + self.tol * 2.0);
+        let r = self.widened(r);
         if !overlaps(r, self.bbox) {
             return false;
         }
         (self.band(r.y0)..=self.band(r.y1)).any(|band| self.pieces_in(band).any(|(a, b)| overlaps(r, Rect::from_points(*a, *b))))
     }
+}
+
+/// The band of `count` (each `band_h` tall from `y0`) holding `y`, clamped to the bands.
+fn band_of(y: f64, y0: f64, band_h: f64, count: usize) -> usize {
+    let last = count.max(1) - 1;
+    let k = ((y - y0) / band_h).floor();
+    if k.is_finite() { (k.max(0.0) as usize).min(last) } else { 0 }
+}
+
+/// The band slots `outline`'s pieces fill (`None` past [`MAX_OUTLINE_PIECES`] pieces), for tests.
+#[cfg(test)]
+pub(super) fn band_slots(outline: &PathData, rule: FillRule, tol: f64) -> Option<usize> {
+    Edge::new(outline, rule, tol).map(|e| e.bands.iter().map(Vec::len).sum())
 }

@@ -85,6 +85,8 @@ mod target;
 mod target_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tone_tests;
 
 pub use eval::{ArrayStage, Guide, Instance, Output, Repeat, StencilRow, Warning, evaluate, evaluate_with, splitmix64};
 pub use model::{
@@ -108,8 +110,8 @@ pub use node::{
 pub use parse::{parse, parse_cached, stack_from_value, stack_to_value, to_json};
 pub use shape::{GeometryOp, GeometryRow, MAX_GEOMETRY_ANCHORS, RowAt, Shaper, shaped_copies};
 pub use target::{
-    DocTargets, MAX_LISTED_TARGETS, MAX_TARGET_ELEMENTS, NoTargets, TargetResolver, TargetShape, ToneTarget, check_target, parse_target,
-    stack_targets, valid_targets,
+    DocTargets, MAX_DECODE_PIXELS, MAX_LISTED_TARGETS, MAX_TARGET_ELEMENTS, NoTargets, TargetResolver, TargetShape, ToneTarget, check_target,
+    parse_target, stack_targets, valid_targets,
 };
 
 /// The local name of the foreign attribute a stack is stored under (and the key the spec names).

@@ -178,10 +178,14 @@ fn the_fill_gives_the_tone_solid_and_gradient() {
     // Mid grey: half.
     let (m, _) = screened(&node(square(200.0), Paint::solid(Color::rgb(0.5, 0.5, 0.5))), rows.clone());
     assert!((inked(&m) / 40_000.0 - 0.5).abs() < 0.03, "{}", inked(&m) / 40_000.0);
-    // A black-to-white linear gradient left to right: dense on the left, sparse on the right, the
-    // dots keep the gradient (pinned where it was).
+    // The fill gives the tone only: the dots are black (the lead's decision, PIC20.5d), whatever
+    // colour they read.
+    let (m, _) = screened(&node(square(200.0), Paint::solid(Color::rgb(1.0, 0.0, 0.0))), rows.clone());
+    assert_eq!(m.appearance.fill_paint(), black());
+    // A black-to-white linear gradient left to right: dense on the left, sparse on the right, in
+    // black.
     let g = GradientPaint::new(Gradient::new(GradientKind::Linear, vec![GradientStop::new(0.0, Color::BLACK), GradientStop::new(1.0, Color::WHITE)]));
-    let n = node(square(200.0), Paint::Gradient(Box::new(g)));
+    let n = node(square(200.0), Paint::Gradient(Box::new(g.clone())));
     let (m, notes) = screened(&n, rows);
     assert!(notes.is_empty(), "{notes:?}");
     let half = |x0: f64| {
@@ -191,8 +195,69 @@ fn the_fill_gives_the_tone_solid_and_gradient() {
     };
     let (left, right) = (half(0.0), half(100.0));
     assert!((left - 0.75).abs() < 0.05 && (right - 0.25).abs() < 0.05, "{left} {right}");
-    let Paint::Gradient(kept) = m.appearance.fill_paint() else { panic!("the gradient kept") };
-    assert!(kept.geom.is_some(), "pinned to the outline's box");
+    assert_eq!(m.appearance.fill_paint(), black());
+    // A fixed tone inks in the fill: the gradient stays where it was on the outline's box (not
+    // refitted to the dots' smaller box).
+    let outline = Rect::new(0.0, 0.0, 200.0, 200.0);
+    for p in [square(200.0), shapes::ellipse(outline)] {
+        let n = node(p, Paint::Gradient(Box::new(g.clone())));
+        let (m, _) = screened(&n, fixed("round", 30.0));
+        let Paint::Gradient(kept) = m.appearance.fill_paint() else { panic!("the gradient kept") };
+        assert_eq!(kept.geom, Some(g.resolve(outline)), "pinned to the outline's box");
+    }
+}
+
+#[test]
+fn a_detailed_outline_stays_within_the_band_and_work_caps() {
+    // A comb: 60 000 teeth, each a tall spike across the whole height (every piece spans every band
+    // at sqrt(N) bands: the slots would be N × sqrt(N) without the cap).
+    let mut pts = Vec::new();
+    let teeth = 60_000;
+    for k in 0..teeth {
+        let x = k as f64 * 0.01;
+        pts.push(Point::new(x, 0.0));
+        pts.push(Point::new(x + 0.005, 400.0));
+    }
+    pts.push(Point::new(teeth as f64 * 0.01, 400.0));
+    pts.push(Point::new(0.0, 400.0));
+    let comb = PathData::new(vec![vectorcraft_geom::SubPath::polyline(&pts, true)]);
+    let slots = super::halftone::band_slots(&comb, FillRule::NonZero, 0.05).unwrap();
+    assert!(slots <= super::MAX_BAND_ENTRIES, "{slots}");
+    // Screened at 1 lpi (few cells, so it passes the anchor estimate): over the segment cap for
+    // the edge's boolean, skipped with a note at once, never a huge allocation.
+    let n = node(comb, black());
+    let t = std::time::Instant::now();
+    let (m, notes) = screened(&n, json!([{"id": "s", "kind": "screen", "lpi": 1, "tone": "fixed", "amount": 50}]));
+    assert!(t.elapsed().as_secs_f64() < 1.0, "{:?}", t.elapsed());
+    assert_eq!(m, n);
+    assert!(notes.iter().any(|s| s.contains("segments isn't screened")), "{notes:?}");
+    // Just under the cap (a comb of 9 000 teeth): screened in bounded time.
+    let mut pts = Vec::new();
+    for k in 0..9_000 {
+        let x = k as f64 * 0.05;
+        pts.push(Point::new(x, 0.0));
+        pts.push(Point::new(x + 0.025, 300.0));
+    }
+    pts.push(Point::new(450.0, 300.0));
+    pts.push(Point::new(0.0, 300.0));
+    let comb = PathData::new(vec![vectorcraft_geom::SubPath::polyline(&pts, true)]);
+    let n = node(comb, black());
+    let t = std::time::Instant::now();
+    let (m, notes) = screened(&n, json!([{"id": "s", "kind": "screen", "lpi": 4, "tone": "fixed", "amount": 50}]));
+    assert!(t.elapsed().as_secs_f64() < 2.0, "{:?}", t.elapsed());
+    assert_eq!(m, n);
+    assert!(notes.iter().any(|s| s.contains("too often to cut")), "{notes:?}");
+    // A detailed but ordinary edge (a 4 000-sided polygon) is screened.
+    let poly: Vec<Point> = (0..4000)
+        .map(|k| {
+            let a = k as f64 / 4000.0 * std::f64::consts::TAU;
+            Point::new(150.0 + 140.0 * a.cos(), 150.0 + 140.0 * a.sin())
+        })
+        .collect();
+    let n = node(PathData::new(vec![vectorcraft_geom::SubPath::polyline(&poly, true)]), black());
+    let (m, notes) = screened(&n, json!([{"id": "s", "kind": "screen", "tone": "fixed", "amount": 50}]));
+    assert!(notes.is_empty(), "{notes:?}");
+    assert!((inked(&m) / (std::f64::consts::PI * 140.0 * 140.0) - 0.5).abs() < 0.03);
 }
 
 #[test]

@@ -285,12 +285,13 @@ pub struct Traced {
 }
 
 /// An image's darkness (0 white … 1 black), placed on a rectangle of the document, sampled
-/// bilinearly; no ink outside it.
+/// bilinearly; no ink outside it. One byte a pixel (255 = black): at most
+/// [`MAX_TONE_PIXELS`] bytes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToneImage {
     width: usize,
     height: usize,
-    darkness: Vec<f32>,
+    darkness: Vec<u8>,
     place: Rect,
 }
 
@@ -302,7 +303,7 @@ impl ToneImage {
         if luma.len() != n {
             return None;
         }
-        let darkness = luma.iter().map(|&l| 1.0 - f32::from(l) / 255.0).collect();
+        let darkness = luma.iter().map(|&l| 255 - l).collect();
         Some(ToneImage { width, height, darkness, place })
     }
 
@@ -318,9 +319,11 @@ impl ToneImage {
             .map(|px| match *px {
                 [r, g, b, a] => {
                     let lum = (0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(b)) / 255.0;
-                    (1.0 - lum) * (f32::from(a) / 255.0)
+                    let d = (1.0 - lum) * (f32::from(a) / 255.0);
+                    // In 0..=255 before the cast (it saturates anyway).
+                    (d * 255.0).round().clamp(0.0, 255.0) as u8
                 }
-                _ => 0.0,
+                _ => 0,
             })
             .collect();
         Some(ToneImage { width, height, darkness, place })
@@ -329,6 +332,11 @@ impl ToneImage {
     /// Its size in pixels.
     pub fn size(&self) -> (usize, usize) {
         (self.width, self.height)
+    }
+
+    /// The bytes its pixels hold.
+    pub fn bytes(&self) -> usize {
+        self.darkness.len()
     }
 
     fn checked(width: usize, height: usize, place: Rect) -> Option<usize> {
@@ -344,7 +352,7 @@ impl ToneImage {
     fn px(&self, i: usize, j: usize) -> f64 {
         let i = i.min(self.width.saturating_sub(1));
         let j = j.min(self.height.saturating_sub(1));
-        self.darkness.get(j * self.width + i).map_or(0.0, |&d| f64::from(d))
+        self.darkness.get(j * self.width + i).map_or(0.0, |&d| f64::from(d) / 255.0)
     }
 
     /// The darkness at `p` (0 outside the placement or when `p` isn't finite).

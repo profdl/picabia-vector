@@ -138,9 +138,12 @@ fn id_map(orig: &Node, copy: &Node, map: &mut BTreeMap<NodeId, NodeId>, depth: u
 /// The kinds that name another object, and the field that names it.
 const TARGET_FIELDS: &[(&str, &str)] = &[("copyToShape", "target"), ("screen", "image")];
 
+/// How each kind in [`TARGET_FIELDS`] appears in a stack's text: its quoted id.
+const TARGET_KINDS: &[&str] = &["\"copyToShape\"", "\"screen\""];
+
 /// Whether stack text `src` may name another object.
 fn may_name(src: &str) -> bool {
-    TARGET_FIELDS.iter().any(|(kind, _)| src.contains(kind))
+    TARGET_KINDS.iter().any(|kind| src.contains(kind))
 }
 
 /// Whether `n` has a stack that may hold copy-to-shape targets (or a screen's image).

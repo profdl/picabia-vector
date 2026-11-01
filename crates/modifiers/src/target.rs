@@ -13,7 +13,7 @@
 
 use std::collections::BTreeSet;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use vectorcraft_doc::{Document, Node, NodeId, NodeKind};
 use vectorcraft_geom::kurbo::{PathEl, Shape};
@@ -129,17 +129,93 @@ impl TargetResolver for DocTargets<'_> {
     }
 }
 
-/// How many decoded images [`image_tone`] keeps.
-const KEPT_TONES: usize = 4;
+/// The most pixels an image's header may claim for a screen to decode it (its RGBA takes four bytes
+/// a pixel while it is read; then it is averaged down to [`crate::screen::MAX_TONE_PIXELS`]). The
+/// header is read first, so a file that claims more is refused before anything is allocated.
+pub const MAX_DECODE_PIXELS: u64 = if cfg!(target_arch = "wasm32") { 16_000_000 } else { 64_000_000 };
 
-/// `(pixel bytes held, their address and length, decoded size, darkness)`: holding the bytes keeps
-/// their address from being reused by other pixels while the entry lives.
-type KeptTone = (Arc<Vec<u8>>, (usize, usize, u32, u32), Arc<ToneImage>);
+/// The most bytes the decoded darkness [`image_tone`] keeps may hold together (one byte a pixel).
+const KEPT_TONE_BYTES: usize = if cfg!(target_arch = "wasm32") { 48 << 20 } else { 128 << 20 };
+/// The most images (or failures) [`image_tone`] keeps.
+const KEPT_TONES: usize = 64;
+/// The most pixel blobs whose content hash is remembered.
+const KEPT_HASHES: usize = 256;
+
+/// A decoded image, or why it couldn't be read, kept by the content hash of its encoded bytes.
+type KeptTone = (u64, Result<Arc<ToneImage>, String>);
 
 static TONES: Mutex<Vec<KeptTone>> = Mutex::new(Vec::new());
 
-/// Image object `id`'s darkness. Decoded once per distinct pixels (the last [`KEPT_TONES`] kept),
-/// so evaluating a stack every frame only looks the image up.
+/// Content hashes of pixel blobs, each computed once: the blob held weakly, so its address can't be
+/// reused by other pixels while the entry lives, and its bytes are freed when the image goes.
+static HASHES: Mutex<Vec<(Weak<Vec<u8>>, u64)>> = Mutex::new(Vec::new());
+
+/// The content hash of `bytes`, computed the first time these bytes are seen.
+fn content_hash(bytes: &Arc<Vec<u8>>) -> u64 {
+    {
+        let hashes = HASHES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((_, h)) = hashes.iter().find(|(w, _)| std::ptr::eq(w.as_ptr(), Arc::as_ptr(bytes))) {
+            return *h;
+        }
+    }
+    let mut h = DefaultHasher::new();
+    bytes.as_slice().hash(&mut h);
+    let h = h.finish();
+    let mut hashes = HASHES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    hashes.retain(|(w, _)| w.strong_count() > 0);
+    hashes.insert(0, (Arc::downgrade(bytes), h));
+    hashes.truncate(KEPT_HASHES);
+    h
+}
+
+/// The darkness of the encoded image `bytes` (hash `key`): decoded once, failures too, the decoded
+/// ones kept within [`KEPT_TONE_BYTES`]. `Err` says why it can't be read (without the image's name).
+fn decoded_tone(key: u64, blob: &vectorcraft_doc::ImageBlob, width: u32, height: u32) -> Result<Arc<ToneImage>, String> {
+    {
+        let mut tones = TONES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(at) = tones.iter().position(|(k, _)| *k == key) {
+            let e = tones.remove(at);
+            let r = e.1.clone();
+            tones.insert(0, e);
+            return r;
+        }
+    }
+    let r = decode_tone(blob, width, height);
+    let mut tones = TONES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    tones.retain(|(k, _)| *k != key);
+    tones.insert(0, (key, r.clone()));
+    let mut total = 0usize;
+    let mut kept = 0usize;
+    tones.retain(|(_, t)| {
+        total = total.saturating_add(t.as_ref().map_or(0, |t| t.bytes()));
+        kept += 1;
+        // The newest entry stays even when it alone is over the budget.
+        kept == 1 || (total <= KEPT_TONE_BYTES && kept <= KEPT_TONES)
+    });
+    r
+}
+
+/// How many images [`decode_tone`] has tried to decode (tests).
+#[cfg(test)]
+pub(crate) static DECODES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Decode `blob` into darkness, its header checked against [`MAX_DECODE_PIXELS`] first.
+fn decode_tone(blob: &vectorcraft_doc::ImageBlob, width: u32, height: u32) -> Result<Arc<ToneImage>, String> {
+    #[cfg(test)]
+    DECODES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let (w, h) = vectorcraft_doc::placed_document::image_size(&blob.bytes).ok_or("couldn't be read")?;
+    let claimed = u64::from(w) * u64::from(h);
+    if claimed > MAX_DECODE_PIXELS {
+        return Err(format!("is too large for a screen to read ({w} × {h} pixels; at most {MAX_DECODE_PIXELS})"));
+    }
+    let (w, h, cover) = blob.coverage().ok_or("couldn't be read")?;
+    let (w, h, luma) = fit_pixels(w as usize, h as usize, &cover);
+    let place = vectorcraft_geom::Rect::new(0.0, 0.0, f64::from(width.max(1)), f64::from(height.max(1)));
+    ToneImage::from_luma8(w, h, &luma, place).map(Arc::new).ok_or_else(|| "has no pixels to read".to_string())
+}
+
+/// Image object `id`'s darkness. Decoded once per distinct pixels (by content), so evaluating a
+/// stack every frame only looks the image up; an image that can't be read is remembered too.
 fn image_tone(doc: &Document, id: NodeId) -> Result<Arc<ToneTarget>, String> {
     let n = doc.node(id).ok_or("the screen's image is gone; it is skipped")?;
     let NodeKind::Image(im) = &n.kind else {
@@ -150,29 +226,10 @@ fn image_tone(doc: &Document, id: NodeId) -> Result<Arc<ToneTarget>, String> {
         return Err(format!("\"{}\" is placed flat or off the page; the screen is skipped", label(n)));
     }
     let blob = doc.image_blob(im).ok_or_else(|| format!("\"{}\" has no pixels; the screen is skipped", label(n)))?;
-    let id_of = (Arc::as_ptr(&blob.bytes) as usize, blob.bytes.len(), im.width, im.height);
-    let kept = {
-        let tones = TONES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        tones.iter().find(|(_, k, _)| *k == id_of).map(|(_, _, t)| t.clone())
-    };
-    let image = match kept {
-        Some(t) => t,
-        None => {
-            let place = vectorcraft_geom::Rect::new(0.0, 0.0, f64::from(im.width.max(1)), f64::from(im.height.max(1)));
-            let (w, h, cover) = blob.coverage().ok_or_else(|| format!("\"{}\" couldn't be read; the screen is skipped", label(n)))?;
-            let (w, h, luma) = fit_pixels(w as usize, h as usize, &cover);
-            let t = Arc::new(
-                ToneImage::from_luma8(w, h, &luma, place).ok_or_else(|| format!("\"{}\" has no pixels to read; the screen is skipped", label(n)))?,
-            );
-            let mut tones = TONES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            tones.retain(|(_, k, _)| *k != id_of);
-            tones.insert(0, (blob.bytes.clone(), id_of, t.clone()));
-            tones.truncate(KEPT_TONES);
-            t
-        }
-    };
+    let content = content_hash(&blob.bytes);
     let mut h = DefaultHasher::new();
-    id_of.hash(&mut h);
+    (content, im.width, im.height).hash(&mut h);
+    let image = decoded_tone(h.finish(), blob, im.width, im.height).map_err(|e| format!("\"{}\" {e}; the screen is skipped", label(n)))?;
     for c in im.xf.as_coeffs() {
         c.to_bits().hash(&mut h);
     }

@@ -1002,6 +1002,14 @@ impl Stack {
         })
     }
 
+    /// The targets of the enabled `copyToShape` rows alone, as [`Stack::targets`] lists them.
+    pub fn shape_targets(&self) -> impl Iterator<Item = (&str, &str)> + '_ {
+        self.modifiers.iter().filter(|m| m.enabled).filter_map(|m| match &m.kind {
+            ModifierKind::CopyToShape(p) if !p.target.is_empty() => Some((m.id.as_str(), p.target.as_str())),
+            _ => None,
+        })
+    }
+
     /// The images the enabled `screen` rows read their tone from (empty ones left out).
     pub fn screen_images(&self) -> impl Iterator<Item = &str> + '_ {
         self.modifiers.iter().filter(|m| m.enabled).filter_map(|m| match &m.kind {

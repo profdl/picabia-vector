@@ -588,18 +588,24 @@ Object ▸ Modifiers and Add New Effect ▸ Modifiers:
   found in the document by id, as a copy-to-shape target is: refused when set if it names nothing,
   the object itself, its groups or contents, or a top-level layer; it follows copies (duplicating
   the screened object with its image points the copy at the copied image); moving or editing the
-  image redraws the screen. An image over 16 million pixels is averaged down to fit. When the image
-  is gone, isn't an image, or can't be read, the row is skipped (the path draws as it is) with the
-  reason in the panel.
+  image redraws the screen. The file's header is read first: an image claiming more than 64 million
+  pixels (16 million in the browser) is refused before anything is decoded. A decoded image is kept
+  as one byte a pixel, averaged down to at most 16 million pixels, by the content of its file (so
+  two objects showing the same file share it; at most 128 MB kept, 48 MB in the browser); an image
+  that can't be read is remembered too, so it isn't tried again every frame. When the image is gone,
+  isn't an image, or can't be read, the row is skipped (the path draws as it is) with the reason in
+  the panel.
 
 **What it makes.** Each path's outline is screened on its own, with its own paint: paths, each
 compound path as one outline (its members become one member holding the dots), and every path in a
 group; guides and clipping paths are left alone; type, images, symbols and live objects pass through
-with a note. The dots replace the path (a live shape becomes a plain path), filled with the path's
-paint (its fill; its stroke's paint when it has no fill; black when it has neither; a gradient stays
-where it was), with **no stroke**, filled non-zero. With `tone: fill`, the dots carry the paint they
-read: a mid-grey fill gives grey dots over half the area, so the art reads lighter than the fill (use
-a black fill with an image or a fixed tone for true black-and-white halftones).
+with a note. The dots replace the path (a live shape becomes a plain path), with **no stroke**,
+filled non-zero. **Their ink** (the lead's decision, PIC20.5d):
+- `tone: fill`: **black**. The paint gives the tone only; inking the dots in the paint they read
+  would darken twice (a pale gradient edge would show pale dots over little area).
+- `tone: fixed` and `tone: image`: the path's fill (its stroke's paint when it has no fill; black
+  with neither): a red square with Ben-Day dots gets red dots. A gradient fill stays where it was
+  on the outline's box.
 
 **Method.** The field is sampled over the path's box (`quality` samples a cell, on a lattice fixed to
 the page), contoured by Picabia's marching squares, the rings fitted with curves (Simplify's
@@ -619,8 +625,12 @@ of the dots.
 Before tracing, the anchors are estimated as 4 per screen cell over the path's box and checked against
 the object's share of the 200 000-anchor geometry cap (each copy its share); after fitting and
 clipping, the real count is checked again. Over either, the path is left as it is, with a note (lower
-the `lpi` or shrink the art). An outline flattened into more than 1,000,000 pieces isn't screened; a
-failed clip at the edge drops those edge dots, with a note.
+the `lpi` or shrink the art). The clip is bounded too, each limit leaving the path as it is with a
+note: an outline of more than 20 000 segments, or flattened into more than 200 000 pieces; band
+slots for the pieces at most 2 000 000 (fewer, taller bands when a detailed edge would fill more);
+the crossing and inside tests counted before they run (at most 50 million piece visits); the edge
+dots touching more than 20 000 outline pieces in all (a comb-like edge each dot would cross many
+times). A boolean that fails at the edge drops those edge dots, with a note.
 
 **Stencil and laser.** The stencil and `laser.gcode` read the screened copies like any geometry row:
 each dot is a contour to cut (tested: a 30% screen above a stencil leaves each colour 30% of its
