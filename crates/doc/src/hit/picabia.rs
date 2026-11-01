@@ -36,14 +36,17 @@ pub struct CopyHooks {
 
 static HOOKS: OnceLock<CopyHooks> = OnceLock::new();
 
-/// The most placements (an object under one copy's transform) one click tries in all.
-pub const MAX_PLACEMENTS: usize = 10_000;
+/// The most placements (an object under one copy's transform) a click tries for one top-level
+/// object with copies, its members' copies included: as many as the renderer can draw for it (its
+/// own copies, at most `MAX_INSTANCES_PER_NODE`, plus its members' inside them, at most
+/// `MAX_NESTED_COPIES`; 10 000 each), so everything drawn stays clickable.
+pub const MAX_PLACEMENTS: usize = 20_000;
 
 thread_local! {
     /// The objects being tried under one of their copies' transforms (drawn once there), and
     /// whether their members draw once too.
     static PLAIN: RefCell<Vec<(NodeId, bool)>> = const { RefCell::new(Vec::new()) };
-    /// How many placements the click under way has tried.
+    /// How many placements the click has tried for the top-level object with copies under way.
     static TRIED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -122,15 +125,14 @@ pub(super) fn hit(
         return None;
     }
     let (ts, strip) = (h.transforms)(symbols, c)?;
-    // A new click: count its placements afresh.
+    // A top-level object with copies (none is being tried yet): count its placements afresh.
     if PLAIN.with(|p| p.borrow().is_empty()) {
         TRIED.with(|t| t.set(0));
     }
     let holder = Node::group(c.id, vec![c.clone()]);
     let _plain = Plain::push(c.id, strip);
     for t in ts.iter().rev() {
-        // Past the cap the click gives up on copies (nothing beyond them is missed: an object
-        // above them was tried first).
+        // Past the cap (more than the object can draw) the click gives up on its copies.
         let tried = TRIED.with(|n| {
             n.set(n.get().saturating_add(1));
             n.get()

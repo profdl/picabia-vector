@@ -103,3 +103,23 @@ fn clicks_follow_the_nested_budget() {
     }
     assert!(t.elapsed() < std::time::Duration::from_secs(5), "{:?}", t.elapsed());
 }
+
+/// Everything drawn within the budgets stays clickable: a group copied 10 times whose member is
+/// copied 1 000 times (an array's most; 10 000 nested, all drawn: 10 010 placements, past the old
+/// cap of 10 000), and 100 × 100.
+#[test]
+fn every_drawn_nested_copy_is_clickable() {
+    for (outer, inner) in [(10u32, 1000u32), (100, 100)] {
+        let mut s = super::tests::session();
+        let a = super::tests::id_of(&ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 20, "height": 20}))["id"]);
+        ex(&mut s, "modifier.add", json!({"ids": [a.0], "kind": "linearArray", "props": {"count": inner, "offsetX": 0, "offsetY": 30}}));
+        let g = super::tests::id_of(&ex(&mut s, "object.group", json!({"ids": [a.0]}))["id"]);
+        ex(&mut s, "modifier.add", json!({"ids": [g.0], "kind": "linearArray", "props": {"count": outer, "offsetX": 200}}));
+        let d = &s.doc().unwrap().doc;
+        let leaf = |x: f64, y: f64| hit_test(d, Point::new(x, y), HitOptions::default()).map(|h| h.leaf);
+        let last = 30.0 * f64::from(inner - 1) + 10.0;
+        assert_eq!(leaf(10.0, 10.0), Some(a), "{outer} x {inner}: the original");
+        assert_eq!(leaf(10.0, last), Some(a), "{outer} x {inner}: the original group's last member copy");
+        assert_eq!(leaf(200.0 * f64::from(outer - 1) + 10.0, last), Some(a), "{outer} x {inner}: the last copy's last member copy");
+    }
+}
