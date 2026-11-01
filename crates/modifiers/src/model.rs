@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 pub use crate::model_deform::{Deform, DeformAxis, DeformMode, Falloff, ShearOrigin};
+pub use crate::model_displace::{Displace, DisplaceMode};
 pub use crate::model_shape::{CloseMethod, Resample, ResampleMode, SortBy, SubdivideMethod, Tidy, Trim};
 use crate::{MAX_STACK_LEN, ModError, STACK_VERSION, lenient};
 
@@ -28,6 +29,7 @@ pub const KINDS: &[(&str, &str)] = &[
     ("trim", "Trim"),
     ("tidy", "Tidy"),
     ("deform", "Deform"),
+    ("displace", "Displace"),
 ];
 
 /// The label of kind id `kind` ("Linear array"), or `None` for a kind this build doesn't know.
@@ -138,6 +140,7 @@ pub enum ModifierKind {
     Trim(Trim),
     Tidy(Tidy),
     Deform(Deform),
+    Displace(Displace),
     /// A kind this build doesn't know, or a known kind whose params don't read (`error` says
     /// why). Kept on a round trip, ignored when evaluating.
     Other {
@@ -868,7 +871,10 @@ fn read<T: for<'de> Deserialize<'de> + Serialize>(rest: &Map<String, Value>) -> 
 impl ModifierKind {
     /// Whether this is a geometry row (it changes the object's paths; [`crate::shape`]).
     pub fn is_geometry(&self) -> bool {
-        matches!(self, ModifierKind::Resample(_) | ModifierKind::Trim(_) | ModifierKind::Tidy(_) | ModifierKind::Deform(_))
+        matches!(
+            self,
+            ModifierKind::Resample(_) | ModifierKind::Trim(_) | ModifierKind::Tidy(_) | ModifierKind::Deform(_) | ModifierKind::Displace(_)
+        )
     }
 
     /// The kind id written in `"kind"` (`"linearArray"`…).
@@ -887,6 +893,7 @@ impl ModifierKind {
             ModifierKind::Trim(_) => "trim",
             ModifierKind::Tidy(_) => "tidy",
             ModifierKind::Deform(_) => "deform",
+            ModifierKind::Displace(_) => "displace",
             ModifierKind::Other { kind, .. } => kind,
         }
     }
@@ -907,6 +914,7 @@ impl ModifierKind {
             "trim" => ModifierKind::Trim(Trim::default()),
             "tidy" => ModifierKind::Tidy(Tidy::default()),
             "deform" => ModifierKind::Deform(Deform::default()),
+            "displace" => ModifierKind::Displace(Displace::default()),
             _ => return None,
         })
     }
@@ -927,6 +935,7 @@ impl ModifierKind {
             ModifierKind::Trim(p) => params_of(p),
             ModifierKind::Tidy(p) => params_of(p),
             ModifierKind::Deform(p) => params_of(p),
+            ModifierKind::Displace(p) => params_of(p),
             ModifierKind::Other { .. } => Map::new(),
         }
     }
@@ -951,6 +960,7 @@ impl ModifierKind {
             "trim" => wrap(read(rest), ModifierKind::Trim),
             "tidy" => wrap(read(rest), ModifierKind::Tidy),
             "deform" => wrap(read(rest), ModifierKind::Deform),
+            "displace" => wrap(read(rest), ModifierKind::Displace),
             _ => return (ModifierKind::Other { kind: kind.to_string(), error: None }, rest.clone()),
         };
         r.unwrap_or_else(|e| (ModifierKind::Other { kind: kind.to_string(), error: Some(e) }, rest.clone()))

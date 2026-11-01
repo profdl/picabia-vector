@@ -59,7 +59,7 @@ differences:
   wherever their row sits in the stack: each copy gets its own values, and `i`/`n` count all the
   copies. (Their position among the arrays doesn't change the result; their order among
   themselves does.)
-- **Geometry steps** (resample, trim, tidy, deform; PIC20) change paths instead of placing copies. A
+- **Geometry steps** (resample, trim, tidy, deform, displace; PIC20) change paths instead of placing copies. A
   geometry step **above every copy step** (array or per-instance) changes the object itself before
   it is copied: every copy is a copy of the changed object. A geometry step **below a copy step**
   runs on **each finished copy, after its transform**, in document space, in stack order (whether
@@ -357,7 +357,7 @@ read too; they are written lowercase).
 Numbers outside their range are clamped when evaluating (a warning names the field); a colour that
 doesn't read takes its default. `cutColours` can't be bound to a variable.
 
-### Geometry rows: resample, trim, tidy, deform (PIC20)
+### Geometry rows: resample, trim, tidy, deform, displace (PIC20)
 
 Ported from tlprocedural (the owner's TypeScript app): its Subdivide and Rebuild Points become
 **Resample**, Trim Path becomes **Trim**, Close Path and Sort Points become **Tidy** (the owner's
@@ -488,6 +488,70 @@ Differences from tlprocedural, on purpose:
   with its distance along the axis), which bends a long shape into a curve that tightens towards
   its ends rather than a circular arc; at the default 45° the two look alike.
 
+#### displace
+
+Ported from tlprocedural's **Noise** modifier (PIC20.4; `NoiseModifierProcessor`, its
+`NOISE_DEFAULTS` and `NOISE_SCHEMA`). Every anchor moves; its handles move with it.
+
+| Field | Unit | Range | Default | Meaning |
+|---|---|---|---|---|
+| `mode` | choice | `spatial`, `radial` | `spatial` | `spatial`: each anchor moves by fractal simplex noise sampled where it sits: x by `fbm(x·scale, y·scale)`, y by `fbm(x·scale + 100, y·scale + 100)`, each times `amplitude`. `radial`: each anchor moves along the line from the centre of the anchors (their mean) by `distance × amplitude/100 × 0.25 × sin(rippleCount·angle + phase)`: `rippleCount` bumps round the centre |
+| `amplitude` | points | 0 to 100 | 10 | Spatial: the most an anchor moves on each axis. Radial: percent of its distance from the centre (times a quarter). 0 leaves the path alone |
+| `scale` | per point | 0.01 to 1 | 0.05 | `spatial` only: the noise frequency (smaller: broader waves) |
+| `octaves` | | 1 to 6 | 3 | `spatial` only: layers of noise, each twice as fine and half as strong, summed and normalised |
+| `rippleCount` | | 2 to 12 | 4 | `radial` only |
+| `seed` | | 0 to 999999 | 42 | Spatial: shuffles the noise's permutation table. Radial: the ripple's phase, drawn from `seed` and the copy's place among the array copies (see *What the ramp counts* below) |
+| `progressive` | on/off | | on | Ramp the amplitude across the array copies made above the row: none on the first, `progressiveAmount` of it on the last, evenly between |
+| `progressiveAmount` | fraction | 0 to 1 | 1 | ramp on: the last copy's share (the panel shows a percentage) |
+| `progressiveReverse` | on/off | | off | ramp on: the first copy gets the most |
+
+**What the ramp counts** is Deform's (above): only **array** copies (linear, circular, grid),
+stacked arrays read as one combined array, the first array's copies counting fastest. Copies a
+mirror, wallpaper or copy to shape row makes (and the per-copy rows, which make none) get the ramp
+value of the copy they were made from: a lone mirror gives both halves the whole amplitude; an
+array then a mirror ramps each half alike. On the object, with no array or with a single array
+copy, the whole amplitude applies.
+
+**Copies differ.** Below a copy row each copy is displaced in document space after its transform.
+In `spatial` mode the noise is sampled where the copy sits, so copies in different places get
+different noise (a mirrored copy gets the noise of where it lies, not its partner's mirrored). In
+`radial` mode the phase is seeded by the copy's place among the array copies, the same place the
+ramp reads, and the ripple's angle is read in the copy's own frame (its turn, and its reflection
+when it has one, as Deform's): the two halves of a mirror pair share a phase and an amount and are
+mirror images, and a rotated copy's ripple turns with it; copies with no array place use place 0. Above every copy row the object is displaced
+once and every copy is that same shape. tlprocedural sampled page space and seeded radial by the
+clone's array index, as here.
+
+**Deterministic.** The noise is a seeded simplex (after Stefan Gustavson's public-domain
+description, as tlprocedural's own self-contained one; no noise library), its permutation table
+shuffled by an integer LCG; the radial ripple uses only `+ − × ÷ √` (the angle's multiple by complex
+powers, the phase's sine by series), so the same stack gives the same bits on every platform and in
+wasm.
+
+Differences from tlprocedural, on purpose:
+
+- **Curves stay curves.** tlprocedural flattened the shape to a polygon first (an ellipse became
+  32 straight sides, a Bézier its sampled points) and displaced those vertices. Here each anchor
+  moves with its handles, so a smooth path stays smooth. Straight-sided paths (rectangles,
+  polygons) move exactly as tlprocedural's did; for a rougher outline put a Resample row above
+  (by count or spacing), as tlprocedural's Subdivide before Noise.
+- **The permutation table** is shuffled with exact integer arithmetic. tlprocedural's
+  `buildPermTable` multiplied in doubles past 2^53 and lost bits, so one seed gives a different
+  (equally stable) pattern here than there.
+- **The radial phase** is drawn from the crate's seeded stream for `(seed, array place)`.
+  tlprocedural took one LCG step of `seed + index`; its step is a fixed 0.514 of a turn, so
+  copies alternated between two nearly equal phases (copies 0, 2, 4… looked alike) instead of
+  each getting its own.
+- **The radial centre** is the mean of the anchors of every plain path in the object (or copy).
+  tlprocedural averaged the vertices of the flattened polygon (32 points round an ellipse, a
+  Bézier's sampled points, a ring's repeated closing vertex counted once more), so on a path with
+  unevenly spaced anchors the centre, and the ripple round it, can sit a little differently.
+- **Not ported:** `animated` and `animationSpeed` (tlprocedural's panel showed them, its processor
+  never read them; Picabia has no time line), and tlprocedural's separate **Wave** modifier
+  (sinusoidal displacement along an axis), which isn't part of this row yet.
+- Stacked arrays ramp as one combined array (tlprocedural read the most recent array's own
+  index), as Deform's ramp does.
+
 #### What geometry rows change
 
 - Paths, the members of compound paths and the paths inside groups. A live shape (rectangle,
@@ -497,9 +561,9 @@ Differences from tlprocedural, on purpose:
 - **Cap:** the anchors the rows make for one object, all its copies together, stay within 200 000
   (`MAX_GEOMETRY_ANCHORS`): each copy may hold its share (200 000 ÷ copies). A row that would make
   more, and more than it was given, is skipped for that copy, with a note; so is a row that gives a
-  point that isn't finite. Trim and Tidy never make more anchors than they are given (a cut adds
-  at most two), so they are never skipped; nor is Deform, which fits its pieces in the copy's share
-  (longer pieces when it must). Nesting doesn't multiply the cap: when the members of a
+  point that isn't finite. Trim, Tidy and Displace never make more anchors than they are given (a
+  cut adds at most two, a displace none), so they are never skipped; nor is Deform, which fits its
+  pieces in the copy's share (longer pieces when it must). Nesting doesn't multiply the cap: when the members of a
   copied object have geometry rows whose anchors, times the object's copies, pass 200 000, the
   members draw without their modifiers in each copy (with a note). `modifier.apply` returns what a
   row couldn't do as `warnings` (a skipped row's reshape isn't in the baked copies). Catmull-Rom and

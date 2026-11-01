@@ -501,6 +501,47 @@ fn nested_geometry_rows_stay_under_the_anchor_cap() {
     }
 }
 
+/// PIC20.4: a displace below an array draws each copy displaced on its own (radial: its own
+/// phase), and the art is the same copies the stencil and the laser read (`shaped_copies`).
+#[test]
+fn a_displace_below_an_array_draws_each_copy_displaced_as_the_laser_reads_it() {
+    let (mut d, r) = doc();
+    let src = r#"{"v":1,"stack":[{"id":"a","kind":"linearArray","count":3,"offsetX":40},{"id":"d","kind":"displace","mode":"radial","amplitude":100,"rippleCount":2,"progressive":false}]}"#;
+    set_stack(&mut d, r, Some(src));
+    let n = d.node(r).unwrap();
+    assert!(draws_copies(&d, n));
+    let a = art(&d, n).unwrap();
+    let drawn: Vec<Vec<vectorcraft_geom::Point>> = a
+        .children()
+        .unwrap()
+        .iter()
+        .enumerate()
+        .map(|(k, c)| c.path_data().unwrap().subpaths[0].anchors.iter().map(|a| a.p - vectorcraft_geom::Vec2::new(40.0 * k as f64, 0.0)).collect())
+        .collect();
+    assert_eq!(drawn.len(), 3);
+    assert_ne!(drawn[0], drawn[1]);
+    assert_ne!(drawn[1], drawn[2]);
+    let out = vectorcraft_modifiers::node_instances_in_doc(&d, n).unwrap();
+    let (copies, notes_) = vectorcraft_modifiers::shaped_copies(n, &out);
+    assert!(notes_.is_empty());
+    let read: Vec<Vec<vectorcraft_geom::Point>> = copies
+        .iter()
+        .enumerate()
+        .map(|(k, c)| c.path_data().unwrap().subpaths[0].anchors.iter().map(|a| a.p - vectorcraft_geom::Vec2::new(40.0 * k as f64, 0.0)).collect())
+        .collect();
+    assert_eq!(drawn, read, "the laser reads what is drawn");
+    // The canvas draws the displaced copies: the centre of each is still filled, and the pixels
+    // differ from the plain array's.
+    let pix = render(&d, Rect::new(0.0, 0.0, 140.0, 40.0));
+    for x in [0, 40, 80] {
+        assert_eq!(px(&pix, 20 + x, 20), RED, "copy at +{x}");
+    }
+    set_stack(&mut d, r, Some(&linear(3, 40.0)));
+    let plain = render(&d, Rect::new(0.0, 0.0, 140.0, 40.0));
+    assert_ne!(pix.pixels, plain.pixels);
+    assert!(notes(&d, d.node(r).unwrap()).is_empty());
+}
+
 /// A taper (end scale 20%) below a three-copy array, ramped: the first copy as it was, the second
 /// half tapered, the last fully.
 #[test]

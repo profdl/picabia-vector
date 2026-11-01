@@ -44,7 +44,7 @@
 //! transform: `S_i * (pivot · L_i · pivot⁻¹)`.
 //!
 //! # Geometry rows
-//! `resample`, `trim`, `tidy` and `deform` change the object's paths instead of placing copies
+//! `resample`, `trim`, `tidy`, `deform` and `displace` change the object's paths instead of placing copies
 //! ([`shape`]): above every copy row they change the object before it is copied, below one they
 //! run on each copy after its transform. [`Output::geometry`] lists them; [`Shaper`] runs them for
 //! whoever builds the copies.
@@ -71,6 +71,7 @@ mod kinds_tests;
 mod lenient;
 pub mod model;
 mod model_deform;
+mod model_displace;
 mod model_shape;
 mod node;
 mod parse;
@@ -93,6 +94,7 @@ pub use model::{
 };
 pub use model::{CloseMethod, Resample, ResampleMode, SortBy, SubdivideMethod, Tidy, Trim};
 pub use model::{Deform, DeformAxis, DeformMode, Falloff, ShearOrigin};
+pub use model::{Displace, DisplaceMode};
 pub use model::{
     MAX_CORNER_ANGLE, MAX_HOSHI_DIAMETER_MM, MAX_PATTERN_SPACING_MM, MAX_TIE_WIDTH_MM, MAX_TIES_PER_ISLAND, MIN_HOSHI_DIAMETER_MM,
     MIN_PATTERN_SPACING_MM, MIN_TIE_WIDTH_MM, STENCIL_CLOTH, STENCIL_PAPER, STENCIL_PASTE,

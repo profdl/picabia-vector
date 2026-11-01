@@ -24,7 +24,7 @@
 //! A stencil row is never baked here: `upTo` stops above it, and it moves onto the group with the
 //! rows after it (it cuts the same copies there).
 //!
-//! Geometry rows (`resample`, `trim`, `tidy`, `deform`) are baked too: the copies get the reshaped paths the
+//! Geometry rows (`resample`, `trim`, `tidy`, `deform`, `displace`) are baked too: the copies get the reshaped paths the
 //! renderer draws (`vectorcraft_modifiers::Shaper`), so a stack of geometry rows alone applies as a
 //! group of one reshaped copy.
 //!
