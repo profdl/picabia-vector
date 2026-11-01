@@ -218,9 +218,203 @@ fn a_stencil_without_a_size_says_so() {
         Ok(())
     })
     .unwrap();
+    // The background refresh computes it once ("no size"), then rests: fresh, nothing to draw.
+    let doc = s.doc().unwrap().doc.clone();
+    assert!(ps::stencil_objects(&doc).contains(&a));
+    settle(&doc, a);
+    assert!(ps::lookup(&doc, doc.node(a).unwrap()).unwrap().1, "kept as no size, so it counts as fresh");
+    assert!(ps::stencil_sheet(&doc, doc.node(a).unwrap()).is_none(), "nothing to draw: the design draws");
     let i = ex(&mut s, "modifier.stencilInfo", json!({"id": a.0}));
     assert_eq!(i["stencil"], Value::Null, "{i}");
     assert!(s.execute("modifier.stencilExport", &json!({"id": a.0, "dryRun": true})).is_err());
+}
+
+/// Run the background refresh on `doc` until object `id` is fresh (at most a minute), then check
+/// that it stays so.
+fn settle(doc: &Arc<vectorcraft_doc::Document>, id: NodeId) {
+    for _ in 0..3000 {
+        ps::refresh(doc, 0.0);
+        if ps::lookup(doc, doc.node(id).unwrap()).is_some_and(|(_, f)| f) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(ps::lookup(doc, doc.node(id).unwrap()).unwrap().1, "never became fresh");
+    // Nothing more to do for it: it stays fresh through another refresh.
+    ps::refresh(doc, 0.0);
+    assert!(ps::lookup(doc, doc.node(id).unwrap()).unwrap().1);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_panicking_compute_is_kept_as_failed_and_the_refresh_rests() {
+    let mut s = session();
+    let g = two_tone(&mut s, json!({"widthMm": 77}));
+    s.edit("Name", |d, _| {
+        d.node_mut(g).unwrap().name = Some(ps::PANIC_NAME.into());
+        Ok(())
+    })
+    .unwrap();
+    let doc = s.doc().unwrap().doc.clone();
+    settle(&doc, g);
+    let (sheet, fresh) = ps::lookup(&doc, doc.node(g).unwrap()).unwrap();
+    assert!(fresh);
+    assert!(sheet.info.warnings.iter().any(|w| w.contains("internal error")), "{:?}", sheet.info.warnings);
+    assert!(sheet.cut.elements().is_empty());
+    // The command reports it too, and the export refuses to cut it.
+    let i = ex(&mut s, "modifier.stencilInfo", json!({"id": g.0}));
+    assert!(i["warnings"].to_string().contains("internal error"), "{i}");
+    assert!(s.execute("modifier.stencilExport", &json!({"id": g.0, "dryRun": true})).is_err());
+}
+
+#[test]
+fn a_new_stencil_row_with_the_same_params_reports_its_own_id() {
+    let mut s = session();
+    let g = two_tone(&mut s, json!({}));
+    ex(&mut s, "modifier.add", json!({"ids": [g.0], "kind": "linearArray", "index": 0, "props": {"count": 1}}));
+    let first = ex(&mut s, "modifier.stencilInfo", json!({"id": g.0}));
+    let old = first["stencil"].as_str().unwrap().to_string();
+    ex(&mut s, "modifier.remove", json!({"ids": [g.0], "modifier": old}));
+    let added = ex(&mut s, "modifier.add", json!({"ids": [g.0], "kind": "stencil"}));
+    let new = added["modifier"].as_str().unwrap().to_string();
+    let i = ex(&mut s, "modifier.stencilInfo", json!({"id": g.0}));
+    assert_eq!(i["stencil"].as_str(), Some(new.as_str()), "the row now in the stack, not a deleted one: {i}");
+    assert_eq!(i["colours"], first["colours"], "the same design");
+}
+
+#[test]
+fn exports_compute_stale_stencils_first() {
+    let mut s = session();
+    let g = two_tone(&mut s, json!({}));
+    ex(&mut s, "object.move", json!({"ids": [g.0], "dx": 7, "dy": 0}));
+    let doc = s.doc().unwrap().doc.clone();
+    assert!(ps::lookup(&doc, doc.node(g).unwrap()).is_none_or(|(_, f)| !f));
+    ex(&mut s, "modifier.stencilExport", json!({"id": g.0, "dryRun": true}));
+    assert!(ps::lookup(&doc, doc.node(g).unwrap()).unwrap().1, "the export brought it up to date");
+    ex(&mut s, "object.move", json!({"ids": [g.0], "dx": 7, "dy": 0}));
+    ex(&mut s, "modifier.stencilGcode", json!({"id": g.0, "dryRun": true}));
+    let doc = s.doc().unwrap().doc.clone();
+    assert!(ps::lookup(&doc, doc.node(g).unwrap()).unwrap().1);
+    // ensure() does every stencil of a document (what exports through the renderer will call).
+    ex(&mut s, "object.move", json!({"ids": [g.0], "dx": 7, "dy": 0}));
+    let doc = s.doc().unwrap().doc.clone();
+    ps::ensure(&doc);
+    assert!(ps::lookup(&doc, doc.node(g).unwrap()).unwrap().1);
+}
+
+/// A black 100-unit square with a white 50-unit square inside, made a stencil (3 mm a unit, so the
+/// 15 mm margin is 5 units).
+fn nested_two_tone(s: &mut Session, props: Value) -> NodeId {
+    let a = rect(s, 0.0, 0.0, 100.0, 100.0, BLACK);
+    let b = rect(s, 25.0, 25.0, 50.0, 50.0, WHITE);
+    id_of(&ex(s, "modifier.stencilFromSelection", json!({"ids": [a.0, b.0], "props": props}))["id"])
+}
+
+#[test]
+fn stencil_info_lists_registration_holes_problems_and_materials() {
+    let mut s = session();
+    let g = nested_two_tone(&mut s, json!({}));
+    let v = ex(&mut s, "modifier.stencilInfo", json!({"id": g.0}));
+    // Four registration holes, at the design's corners pushed half the 5-unit margin out.
+    let hoshi = v["hoshi"].as_array().unwrap();
+    assert_eq!(hoshi.len(), 4, "{v}");
+    assert!(hoshi.iter().any(|h| (h["x"].as_f64().unwrap() + 2.5).abs() < 1e-6 && (h["y"].as_f64().unwrap() + 2.5).abs() < 1e-6), "{hoshi:?}");
+    // Every kind counted, none here.
+    let counts = v["stats"]["problems"].as_object().unwrap();
+    assert_eq!(counts.len(), 6);
+    for k in ["narrowPaper", "narrowCut", "smallCut", "smallHole", "sharpCorner", "untied"] {
+        assert!(counts.contains_key(k), "{k}: {counts:?}");
+    }
+    assert_eq!(v["problems"], json!([]));
+    // No paper islands in a square cut-out (stencil_info_lists_islands_and_their_stats; the
+    // listing of islands is checked in info_json_reads_non_finite_bounds_as_zero).
+    assert_eq!((v["islands"].clone(), v["stats"]["islands"].clone(), v["stats"]["ties"].clone()), (json!([]), json!(0), json!(0)));
+    assert_eq!(v["stats"]["repeatIslands"], 0);
+    assert_eq!((v["repeat"].clone(), v["cell"].clone(), v["tile"].clone()), (Value::Null, Value::Null, Value::Null));
+    // The presets (custom has none); paper is the defaults.
+    let m = v["materials"].as_array().unwrap();
+    assert_eq!(m.iter().map(|r| r["id"].as_str().unwrap()).collect::<Vec<_>>(), ["paper", "film", "card"]);
+    assert_eq!(m[0], json!({"id": "paper", "minCutWidthMm": 0.3, "minBridgeMm": 0.5, "tieWidthMm": 1.0, "minCornerAngle": 30.0, "kerfMm": 0.1}));
+    assert_eq!(m[1]["minCutWidthMm"], 0.2);
+    // The canvas reads them without JSON.
+    let doc = s.doc().unwrap().doc.clone();
+    let (sheet, _) = ps::lookup(&doc, doc.node(g).unwrap()).unwrap();
+    assert_eq!(sheet.info.hoshi.len(), 4);
+    assert!(sheet.info.problems.is_empty() && sheet.info.cell.is_none() && sheet.info.repeat.is_none());
+}
+
+#[test]
+fn flag_mode_reports_problems_by_kind() {
+    // A white sliver 0.05 units (0.15 mm at 3 mm a unit) wide: narrower than the 0.3 mm minimum.
+    let mut s = session();
+    let a = rect(&mut s, 0.0, 0.0, 100.0, 100.0, BLACK);
+    let b = rect(&mut s, 20.0, 50.0, 60.0, 0.05, WHITE);
+    let g = id_of(&ex(&mut s, "modifier.stencilFromSelection", json!({"ids": [a.0, b.0]}))["id"]);
+    let fixed = ex(&mut s, "modifier.stencilInfo", json!({"id": g.0}));
+    ex(&mut s, "modifier.set", json!({"ids": [g.0], "index": 0, "props": {"limitMode": "flag"}}));
+    let v = ex(&mut s, "modifier.stencilInfo", json!({"id": g.0}));
+    let problems = v["problems"].as_array().unwrap();
+    assert!(!problems.is_empty(), "{v}");
+    let kinds = vectorcraft_stencil::ProblemKind::ALL.map(|k| k.id());
+    for p in problems {
+        assert!(kinds.contains(&p["kind"].as_str().unwrap()), "{p}");
+        // Document space, near the sliver.
+        assert!(p["x"].as_f64().unwrap() >= 19.0 && p["x"].as_f64().unwrap() <= 81.0 && (p["y"].as_f64().unwrap() - 50.0).abs() < 2.0, "{p}");
+    }
+    assert!(v["stats"]["problems"]["narrowCut"].as_u64().unwrap() > 0, "{v}");
+    let listed = problems.iter().filter(|p| p["kind"] == "narrowCut").count() as u64;
+    assert_eq!(v["stats"]["problems"]["narrowCut"].as_u64().unwrap(), listed);
+    // Fixed, the sliver is cleaned away instead.
+    assert_eq!(fixed["stats"]["problems"]["narrowCut"], 0, "{fixed}");
+}
+
+/// A 20 × 20 motif at the origin: black, with a white 6-unit square in each corner holding a black
+/// 2-unit square. Repeated by a grid of gap 0 the corners meet as a white ring around a black
+/// island centred on each inner lattice point: across the cell edges.
+fn corner_motif(s: &mut Session, stencil_props: Value) -> NodeId {
+    let mut ids = vec![rect(s, 0.0, 0.0, 20.0, 20.0, BLACK).0];
+    for (x, y) in [(0.0, 0.0), (14.0, 0.0), (0.0, 14.0), (14.0, 14.0)] {
+        ids.push(rect(s, x, y, 6.0, 6.0, WHITE).0);
+    }
+    for (x, y) in [(0.0, 0.0), (18.0, 0.0), (0.0, 18.0), (18.0, 18.0)] {
+        ids.push(rect(s, x, y, 2.0, 2.0, BLACK).0);
+    }
+    ex(s, "select.set", json!({"ids": ids}));
+    let g = id_of(&ex(s, "object.group", json!({}))["id"]);
+    ex(s, "modifier.add", json!({"ids": [g.0], "kind": "gridArray", "props": {"rows": 3, "cols": 3, "gapX": 0, "gapY": 0}}));
+    ex(s, "modifier.add", json!({"ids": [g.0], "kind": "stencil", "props": stencil_props}));
+    g
+}
+
+#[test]
+fn a_grid_repeated_island_across_the_cell_edge_is_tied_repeat_aware() {
+    let mut s = session();
+    let g = corner_motif(&mut s, json!({}));
+    let doc = s.doc().unwrap().doc.clone();
+    let frame = ps::frame(&doc, doc.node(g).unwrap()).unwrap();
+    let r = frame.repeat.unwrap();
+    assert_eq!((r.a, r.b), (vectorcraft_geom::Vec2::new(20.0, 0.0), vectorcraft_geom::Vec2::new(0.0, 20.0)), "{r:?}");
+    assert_eq!(frame.layer_bounds, vectorcraft_geom::Rect::new(0.0, 0.0, 60.0, 60.0));
+    let v = ex(&mut s, "modifier.stencilInfo", json!({"id": g.0}));
+    // Four inner lattice points, each an island across four cells; one in the centre cell.
+    assert_eq!(v["stats"]["islands"], 4, "{v}");
+    assert_eq!(v["stats"]["repeatIslands"], 1, "{v}");
+    assert_eq!(v["stats"]["untied"], 0, "{v}");
+    assert_eq!(v["stats"]["problems"]["untied"], 0);
+    assert_eq!(v["repeat"], json!({"ax": 20.0, "ay": 0.0, "bx": 0.0, "by": 20.0}));
+    // The centre cell [20, 40]².
+    let cell = v["cell"].as_array().unwrap();
+    assert_eq!(cell.len(), 4);
+    let (xs, ys): (Vec<f64>, Vec<f64>) = cell.iter().map(|p| (p["x"].as_f64().unwrap(), p["y"].as_f64().unwrap())).unzip();
+    assert_eq!((xs.iter().cloned().fold(f64::MAX, f64::min), xs.iter().cloned().fold(f64::MIN, f64::max)), (20.0, 40.0));
+    assert_eq!((ys.iter().cloned().fold(f64::MAX, f64::min), ys.iter().cloned().fold(f64::MIN, f64::max)), (20.0, 40.0));
+    assert_eq!(v["tile"], Value::Null, "sheet output");
+    // Repeat off: judged on the sheet as drawn, no lattice.
+    let mut t = session();
+    let g2 = corner_motif(&mut t, json!({"repeat": "off"}));
+    let off = ex(&mut t, "modifier.stencilInfo", json!({"id": g2.0}));
+    assert_eq!((off["stats"]["repeatIslands"].clone(), off["repeat"].clone(), off["cell"].clone()), (json!(0), Value::Null, Value::Null));
+    assert_eq!(off["stats"]["untied"], 0);
 }
 
 /// The test image: dark ground, a light ring holding a dark island, a light blob, pale specks.

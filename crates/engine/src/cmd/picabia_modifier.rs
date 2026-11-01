@@ -165,7 +165,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Make Stencil",
             [],
             None,
-            "{ids?|id?: the objects (default: the selection), props?: the stencil's params, as modifier.add} one object takes a stencil row itself; several are grouped first (a group named Stencil, where the front-most was), one undo step with the row → {id: the stencil object (selected), modifier}",
+            "{ids?|id?: the objects (default: the selection), props?: the stencil's params (camelCase; the ones modifier.add takes for a stencil)} one object takes a stencil row itself; several are grouped first (a group named Stencil, where the front-most was), one undo step with the row → {id: the stencil object (selected), modifier}",
             has_selection,
             stencil::stencil_from_selection
         ),
@@ -174,7 +174,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Export for Laser…",
             [],
             None,
-            "{id?: the stencil object (default: the first selected), path?: the .svg to write (several sheets: \" 1\", \" 2\"… before the extension), data?: true: return the files as base64, dryRun?: true: only describe the sheets (nothing written or returned, settings not remembered: the dialog's summary); none of path, data, dryRun: nothing is made, the result is what the dialog opens with ({dialog: \"stencilExport\", id, params}), kerfMm? (0-2; default the stencil material's kerf, custom: the remembered one), bedWidthMm?, bedHeightMm? (10-5000 mm; 0 = no limit; a bigger sheet is split into overlapping sheets), overlapMm? (0-200), cutColour?, engraveColour?, scoreColour? (\"#rrggbb\"), label? (engrave the object's name, size, material, sheet number and THIS SIDE UP)} SVG for laser software such as LightBurn: the drawn cut (one tile with tile output), mm, kerf-compensated, inner cuts first; settings not given: the ones used last; computes the stencil when it is out of date → {id, files: [{name, path | data, sheet (\"1 of 2\"), wMm, hMm, contours, loosePieces}], sheets, warnings, params {kerfMm, bedWidthMm, bedHeightMm, overlapMm, cutColour, engraveColour, scoreColour, label} (remembered for next time)}",
+            "{id?: the stencil object (default: the first selected), path?: the .svg to write (several sheets: \" 1\", \" 2\"… before the extension), data?: true: return the files as base64, dryRun?: true: only describe the sheets (nothing written or returned and the settings not remembered: the dialog's summary; with none of path or data or dryRun nothing is made and the result is what the dialog opens with: {dialog: \"stencilExport\", id, params}), kerfMm? (0-2; default the stencil material's kerf, custom: the remembered one), bedWidthMm?, bedHeightMm? (10-5000 mm; 0 = no limit; a bigger sheet is split into overlapping sheets), overlapMm? (0-200), cutColour?, engraveColour?, scoreColour? (\"#rrggbb\"), label? (engrave the object's name, size, material, sheet number and THIS SIDE UP)} SVG for laser software such as LightBurn: the drawn cut (one tile with tile output), mm, kerf-compensated, inner cuts first; settings not given: the ones used last; computes the stencil when it is out of date → {id, files: [{name, path | data, sheet (\"1 of 2\"), wMm, hMm, contours, loosePieces}], sheets, warnings, params {kerfMm, bedWidthMm, bedHeightMm, overlapMm, cutColour, engraveColour, scoreColour, label} (remembered for next time)}",
             has_doc,
             laser::export
         ),

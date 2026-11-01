@@ -1,6 +1,6 @@
 //! PICABIA: G-code for the laser: `modifier.stencilGcode` (a stencil object's sheets as GRBL 1.1
 //! G-code), the test card and the power ladder as G-code (`modifier.stencilTestCard {format:
-//! "gcode"}`) and the machine profile (`Prefs::picabia.machine`, `laser.profile`).
+//! "gcode"}`) and the machine profile (`Prefs::picabia_machine`, `laser.profile`).
 //!
 //! Settings are layered: [`GcodeParams::for_material`], then the material's remembered operation
 //! settings (`machine.materials`), then the machine's `S` max (the connected machine's `$30`, else
@@ -18,8 +18,8 @@ use vectorcraft_modifiers::StencilMaterial;
 use vectorcraft_stencil::{Gcode, GcodeParams, LadderParams, LaserParams, LaserSheet};
 
 use super::laser::{
-    CardSetup, Out, bad, card_sheet, file_name, finite, get, out_of, pref, set_pref, sheet_path, stencil_material, stencil_object, stencil_sheets,
-    write_out,
+    CardSetup, Out, Pref, bad, card_sheet, file_name, finite, get, out_of, pref, set_pref, sheet_path, stencil_material, stencil_object,
+    stencil_sheets, write_out,
 };
 use crate::{EngineError, Result, Session};
 
@@ -76,9 +76,9 @@ impl MachineProfile {
     pub const MAX_RAPID: f64 = 20_000.0;
     const MAX_NAME: usize = 80;
 
-    /// The session's profile (`Prefs::picabia.machine`; none: the defaults).
+    /// The session's profile (`Prefs::picabia_machine`; none: the defaults).
     pub fn of(s: &Session) -> MachineProfile {
-        Self::from_json(&pref(s, "machine"))
+        Self::from_json(&pref(s, Pref::Machine))
     }
 
     /// A profile from JSON, leniently (see [`apply_json`](Self::apply_json)).
@@ -228,7 +228,7 @@ pub(super) fn job_params(s: &Session, material: StencilMaterial, p: &Value) -> G
 pub(super) fn job_laser_params(s: &Session, kerf: Option<f64>, p: &Value) -> LaserParams {
     let (w, h) = bed_mm(s);
     let mut lp = LaserParams::default();
-    lp.apply_json(&pref(s, "laser"));
+    lp.apply_json(&pref(s, Pref::Laser));
     lp.apply_json(&json!({"bedWidthMm": w, "bedHeightMm": h}));
     if let Some(k) = kerf {
         lp.apply_json(&json!({"kerfMm": k}));
@@ -306,7 +306,7 @@ pub(super) fn emit_one(cmd: &str, sheet: &LaserSheet, gp: &GcodeParams, out: &Ou
 pub(super) fn remember_ops(s: &mut Session, material: StencilMaterial, gp: &GcodeParams) {
     let mut prof = MachineProfile::of(s);
     prof.remember(material.id(), gp);
-    set_pref(s, "machine", prof.to_json());
+    set_pref(s, Pref::Machine, prof.to_json());
 }
 
 /// `modifier.stencilGcode`: a stencil object's sheets as GRBL G-code, one file per sheet.
@@ -371,7 +371,7 @@ pub(super) fn card_gcode(s: &mut Session, p: &Value, out: &Out, setup: &CardSetu
     // The card's settings are remembered as the export's are; the ladder's per-square settings
     // aren't settings to remember.
     if *out != Out::Summary && !ladder {
-        set_pref(s, "laser", setup.lp.to_json());
+        set_pref(s, Pref::Laser, setup.lp.to_json());
         remember_ops(s, setup.material, &gp);
     }
     let mut r = json!({
@@ -396,7 +396,7 @@ pub(super) fn profile(s: &mut Session, p: &Value) -> Result<Value> {
         None => {}
         Some(v @ Value::Object(_)) => {
             prof.apply_json(v);
-            set_pref(s, "machine", prof.to_json());
+            set_pref(s, Pref::Machine, prof.to_json());
         }
         Some(_) => return Err(bad(PROFILE, "`set` must be an object of profile fields")),
     }
