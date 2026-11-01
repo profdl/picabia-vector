@@ -426,6 +426,7 @@ pub fn encode_with_warnings(doc: &Document, format: &str, p: &Value) -> Result<(
 /// [`encode`], with every file the export writes.
 pub fn encode_all(doc: &Document, format: &str, p: &Value) -> Result<Encoded> {
     let format = super::writable(C, Some(format), None)?.id;
+    crate::picabia_stencil::ensure(doc); // PICABIA: stale stencil sheets are computed before they are drawn or written
     // Formats with editing data prepare their drawn output separately from their original
     // document. Other formats only need the placed files' art.
     if !matches!(format, "vectorcraft" | "template" | "ai" | "pdf" | "eps" | "svg" | "svgz") {
