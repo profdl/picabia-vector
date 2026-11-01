@@ -41,6 +41,8 @@ vectorcraft-modifiers = { workspace = true }
 vectorcraft-grbl = { workspace = true }
 # PICABIA: stencil sheets and laser export (picabia_stencil.rs, cmd/picabia_modifier/).
 vectorcraft-stencil = { workspace = true }
+# PICABIA: physics settings and the drop-and-settle simulation (cmd/picabia_physics.rs).
+vectorcraft-physics = { workspace = true }
 image = { workspace = true }
 hayro-jpeg2000 = { version = "=0.3.5", default-features = false, features = ["std", "simd"] }
 flate2 = { workspace = true }

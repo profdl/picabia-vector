@@ -1374,4 +1374,10 @@ pub const UI_COMMANDS: &[(&str, &str, &str, &str)] = &[
         "",
         "{} open the Stencil window: the first selected object's stencil settings (modifier.set of its stencil row), its stats and problems, Export for Laser…, Test Card…; Make Stencil for an object without one",
     ),
+    (
+        crate::picabia_ui::PHYSICS_SETTINGS,
+        "Physics Settings…",
+        "",
+        "{} give the selected objects that have none physics settings (physics.set, dynamic with the defaults; one undo step) and open them in the Appearance panel",
+    ),
 ];

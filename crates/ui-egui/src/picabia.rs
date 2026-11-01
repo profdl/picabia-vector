@@ -10,6 +10,9 @@ pub mod appearance;
 #[cfg(test)]
 mod appearance_tests;
 pub mod menu;
+pub mod physics;
+#[cfg(test)]
+mod physics_tests;
 
 use egui::{RichText, Ui};
 

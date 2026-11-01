@@ -5,7 +5,7 @@ use super::{NodeId, Value, cmd};
 /// Objects and Distribute Spacing with Align to Artboard distribute objects across it, and All on
 /// Active Artboard selects on it. A `command.batch` given `artboard` passes it on to each of their
 /// steps that names none.
-pub const ON_ACTIVE_ARTBOARD: [&str; 7] = [
+pub const ON_ACTIVE_ARTBOARD: [&str; 8] = [
     "edit.pasteInPlace",
     "edit.pasteInFront",
     "edit.pasteInBack",
@@ -13,6 +13,7 @@ pub const ON_ACTIVE_ARTBOARD: [&str; 7] = [
     "object.distribute",
     "object.distributeSpacing",
     "select.allOnArtboard",
+    "physics.simulate", // PICABIA: the walls are the active artboard's edges.
 ];
 
 /// The commands that resize the artboards the app passes (Object › Artboards): the app passes the
@@ -25,7 +26,7 @@ pub const FIT_ACTIVE_ARTBOARD: [&str; 2] = ["artboard.fitToArt", "artboard.fitTo
 /// (dates from the clock: `cmd::clock_date`; the artboards the app passes to the
 /// [`ON_ACTIVE_ARTBOARD`] and [`FIT_ACTIVE_ARTBOARD`] commands and to a batch); an action leaves
 /// them out ([`Session::journal_for_action`]).
-const REPLAY_ONLY: [(&str, &str); 14] = [
+const REPLAY_ONLY: [(&str, &str); 15] = [
     ("file.new", "created"),
     ("document.save", "modified"),
     ("file.saveAs", "modified"),
@@ -40,6 +41,7 @@ const REPLAY_ONLY: [(&str, &str); 14] = [
     ("artboard.fitToSelection", "index"),
     ("select.allOnArtboard", "artboard"),
     ("command.batch", "artboard"),
+    ("physics.simulate", "artboard"), // PICABIA: as the other active-artboard commands.
 ];
 
 /// `p`, the params of command `id`, without its [`REPLAY_ONLY`] values (a batch: its steps').
