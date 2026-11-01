@@ -25,6 +25,8 @@
 //!   [`evaluate_node_in_doc`] / [`node_instances_in_doc`] also resolve `copyToShape` targets
 //!   ([`DocTargets`]); the cache key includes a hash of each target's outline, so moving or editing
 //!   a target re-evaluates the layers that copy onto it.
+//! - [`contour`] and [`screen`]: Screen's halftone core (marching squares written for Picabia, a
+//!   spot-function field and image tone); not wired to a row yet.
 //!
 //! # Instance transform convention
 //! VectorCraft objects keep their geometry in document space, with no transform of their own, so
@@ -50,6 +52,9 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod cache;
+pub mod contour;
+#[cfg(test)]
+mod contour_tests;
 mod eval;
 pub mod expr;
 #[cfg(test)]
@@ -61,6 +66,9 @@ mod lenient;
 pub mod model;
 mod node;
 mod parse;
+pub mod screen;
+#[cfg(test)]
+mod screen_tests;
 mod target;
 #[cfg(test)]
 mod target_tests;
