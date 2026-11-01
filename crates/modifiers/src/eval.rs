@@ -4,7 +4,7 @@ use vectorcraft_geom::{Affine, Point, Rect, Vec2};
 
 use crate::kinds::{self, Ctx, Stage};
 use crate::model::{ModifierKind, Stack, Stencil, StencilOutput, StencilRepeat};
-use crate::shape::{GeometryRow, RowAt};
+use crate::shape::{GeometryOp, GeometryRow, RowAt};
 use crate::target::{NoTargets, TargetResolver};
 use crate::{MAX_INSTANCES_PER_NODE, MAX_LENGTH};
 
@@ -62,7 +62,7 @@ pub struct Output {
     /// or `randomize` row anywhere: those vary every copy). `None` otherwise, without a warning; a
     /// stencil with `output: tile` then evaluates as `sheet`, with a warning.
     pub repeat: Option<Repeat>,
-    /// The enabled geometry rows (`resample`, `trim`, `tidy`, `deform`, `displace`), in stack order, each with where it
+    /// The enabled geometry rows (`resample`, `trim`, `tidy`, `deform`, `displace`, `screen`), in stack order, each with where it
     /// runs: on the object before it is copied, or on every copy after its transform
     /// ([`crate::shape`]). Empty: the copies are the object's geometry, transformed.
     pub geometry: Vec<GeometryRow>,
@@ -206,9 +206,19 @@ pub fn evaluate_with(stack: &Stack, bounds: Rect, targets: &dyn TargetResolver) 
             out.warn(Some(&m.id), other_message(kind, error.as_deref()));
             continue;
         }
-        if let Some((op, warnings)) = crate::shape::clamped(&m.kind) {
+        if let Some((mut op, warnings)) = crate::shape::clamped(&m.kind) {
             for w in warnings {
                 out.warn(Some(&m.id), w);
+            }
+            // A screen reading an image finds it now (the shaper has no document).
+            if let GeometryOp::Screen(row) = &mut op
+                && row.params.tone == crate::model::ToneSource::Image
+            {
+                row.image = Some(if row.params.image.is_empty() {
+                    Err("choose the image it reads its tone from; it is skipped".into())
+                } else {
+                    targets.tone(&row.params.image)
+                });
             }
             let at = if copied { RowAt::Copies } else { RowAt::Source };
             out.geometry.push(GeometryRow { modifier: m.id.clone(), op, at });

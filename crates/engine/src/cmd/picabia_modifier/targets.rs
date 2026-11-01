@@ -1,5 +1,6 @@
 //! PICABIA: copy-to-shape targets in the `modifier.*` commands, `modifier.duplicate`, and target
-//! ids following copies of objects.
+//! ids following copies of objects. A screen row's image (its `image`, when its tone comes from
+//! one) is a target too: checked, remapped and cleared alike (`vectorcraft_modifiers::Stack::targets`).
 //!
 //! Every stack edit ([`super::edit`]) checks the copy-to-shape targets it sets or re-enables
 //! ([`check_changed`]): the object itself, one of its groups or its contents, a top-level layer,
@@ -47,6 +48,21 @@ pub(super) fn check_changed(cmd: &str, doc: &Document, id: NodeId, before: &Stac
 /// `(id, name)` in layer order (see `vectorcraft_modifiers::valid_targets`).
 pub fn target_choices(doc: &Document, source: NodeId) -> Vec<(NodeId, String)> {
     vectorcraft_modifiers::valid_targets(doc, source).into_iter().filter_map(|t| Some((t, doc.node(t)?.display_name()))).collect()
+}
+
+/// What the panel's image picker shows for a screen row on object `source`: the image objects it
+/// can read its tone from, as `(id, name)` in layer order.
+pub fn image_choices(doc: &Document, source: NodeId) -> Vec<(NodeId, String)> {
+    let mut ids = Vec::new();
+    doc.walk(|n| {
+        if matches!(n.kind, vectorcraft_doc::NodeKind::Image(_)) && ids.len() < vectorcraft_modifiers::MAX_LISTED_TARGETS {
+            ids.push(n.id);
+        }
+    });
+    ids.into_iter()
+        .filter(|t| vectorcraft_modifiers::check_target(doc, source, *t).is_ok())
+        .filter_map(|t| Some((t, doc.node(t)?.display_name())))
+        .collect()
 }
 
 /// Whether object `source` can copy onto `target`; `Err` is the reason (for the picker's tooltip
@@ -119,9 +135,20 @@ fn id_map(orig: &Node, copy: &Node, map: &mut BTreeMap<NodeId, NodeId>, depth: u
     }
 }
 
-/// Whether `n` has a stack that may hold copy-to-shape targets.
+/// The kinds that name another object, and the field that names it.
+const TARGET_FIELDS: &[(&str, &str)] = &[("copyToShape", "target"), ("screen", "image")];
+
+/// How each kind in [`TARGET_FIELDS`] appears in a stack's text: its quoted id.
+const TARGET_KINDS: &[&str] = &["\"copyToShape\"", "\"screen\""];
+
+/// Whether stack text `src` may name another object.
+fn may_name(src: &str) -> bool {
+    TARGET_KINDS.iter().any(|kind| src.contains(kind))
+}
+
+/// Whether `n` has a stack that may hold copy-to-shape targets (or a screen's image).
 fn may_target(n: &Node) -> bool {
-    vectorcraft_modifiers::node_source(n).is_some_and(|s| s.contains("copyToShape"))
+    vectorcraft_modifiers::node_source(n).is_some_and(may_name)
 }
 
 /// Whether `n`'s subtree has a node [`may_target`].
@@ -134,28 +161,27 @@ fn subtree_may_target(n: &Node) -> bool {
 /// `src` with the copy-to-shape targets that `map` covers pointing at their copies, and (unless
 /// `keep_outside`) the others cleared; `None` when nothing changes or the text isn't a stack.
 fn rewrite_source(src: &str, map: &BTreeMap<NodeId, NodeId>, keep_outside: bool) -> Option<String> {
-    if src.len() > MAX_REWRITE_BYTES || !src.contains("copyToShape") {
+    if src.len() > MAX_REWRITE_BYTES || !may_name(src) {
         return None;
     }
     let mut v = serde_json::from_str::<Value>(src).ok()?;
     let mut changed = false;
     for m in v.get_mut("stack").and_then(Value::as_array_mut).into_iter().flatten() {
         let Some(o) = m.as_object_mut() else { continue };
-        if o.get("kind").and_then(Value::as_str) != Some("copyToShape") {
-            continue;
-        }
-        let old = match o.get("target") {
+        let kind = o.get("kind").and_then(Value::as_str);
+        let Some(&(_, field)) = TARGET_FIELDS.iter().find(|(k, _)| Some(*k) == kind) else { continue };
+        let old = match o.get(field) {
             Some(Value::String(s)) if !s.trim().is_empty() => vectorcraft_modifiers::parse_target(s).ok(),
             Some(Value::Number(x)) => x.as_u64().map(NodeId),
             _ => continue,
         };
         match old.and_then(|t| map.get(&t)) {
             Some(new) => {
-                o.insert("target".into(), Value::String(new.0.to_string()));
+                o.insert(field.into(), Value::String(new.0.to_string()));
                 changed = true;
             }
             None if !keep_outside => {
-                o.insert("target".into(), Value::String(String::new()));
+                o.insert(field.into(), Value::String(String::new()));
                 changed = true;
             }
             None => {}

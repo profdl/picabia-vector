@@ -13,7 +13,7 @@ use vectorcraft_testkit::invariants::check_session;
 use vectorcraft_testkit::strategies::junk_params;
 
 /// `fx` with a stack on each selected object: a resample (geometry, on the object), a grid array,
-/// a trim, a tidy, a deform and a displace (geometry, on every copy), a mirror and a copy to shape onto the first
+/// a trim, a tidy, a deform, a displace and a coarse screen (geometry, on every copy), a mirror and a copy to shape onto the first
 /// selected object (refused on that object itself), and copied rows for `modifier.paste`.
 fn stacked(fx: Fixture) -> Session {
     let mut s = fx.session();
@@ -25,6 +25,7 @@ fn stacked(fx: Fixture) -> Session {
         s.execute("modifier.add", &json!({"ids": [id], "kind": "tidy", "props": {"close": "smooth", "sort": "random", "reverse": true}})).unwrap();
         s.execute("modifier.add", &json!({"ids": [id], "kind": "deform", "props": {"mode": "twist", "angle": 270, "falloff": "smooth"}})).unwrap();
         s.execute("modifier.add", &json!({"ids": [id], "kind": "displace", "props": {"mode": "radial", "amplitude": 20}})).unwrap();
+        s.execute("modifier.add", &json!({"ids": [id], "kind": "screen", "props": {"lpi": 4, "quality": 6, "spot": "ellipse"}})).unwrap();
         s.execute("modifier.add", &json!({"ids": [id], "kind": "mirror"})).unwrap();
         if k > 0 {
             let _ = s.execute("modifier.add", &json!({"ids": [id], "kind": "copyToShape", "props": {"target": selected[0].to_string()}}));
@@ -113,7 +114,7 @@ fn geometry_kinds_with_junk_props() {
         .map(|(k, _)| *k)
         .filter(|k| vectorcraft_modifiers::Modifier::new("m1", k).unwrap().kind.is_geometry())
         .collect();
-    assert_eq!(kinds, ["resample", "trim", "tidy", "deform", "displace"]);
+    assert_eq!(kinds, ["resample", "trim", "tidy", "deform", "displace", "screen"]);
     for kind in kinds {
         let params: Vec<String> = vectorcraft_modifiers::Modifier::new("m1", kind).unwrap().kind.params().keys().cloned().collect();
         for fx in [Fixture::Single, Fixture::Multi] {
