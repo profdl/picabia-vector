@@ -294,3 +294,28 @@ fn bad_copy_to_shape_params_are_refused_by_set_props() {
     let ModifierKind::CopyToShape(p) = &m.kind else { panic!() };
     assert_eq!((p.target.as_str(), p.mode, p.count), ("42", CopyMode::Points, 5));
 }
+
+#[test]
+fn a_clip_group_target_is_its_clipping_path() {
+    // A 100 × 100 clip path over a 1000-wide path: the corners are the clip's, not the hidden path's.
+    let mut d = Document::new(612.0, 792.0);
+    let s = add(&mut d, None, Shape::Rectangle, "S", Rect::new(0.0, 0.0, 20.0, 10.0));
+    let layer = d.layers[0].id;
+    let (clip, wide, g) = (d.alloc_id(), d.alloc_id(), d.alloc_id());
+    let kids = vec![
+        Arc::new(Node::path(clip, shapes::rectangle(Rect::new(100.0, 100.0, 200.0, 200.0)), Appearance::default_art())),
+        Arc::new(Node::path(wide, shapes::rectangle(Rect::new(0.0, 120.0, 1000.0, 180.0)), Appearance::default_art())),
+    ];
+    d.insert(Some(layer), usize::MAX, Node::new(g, vectorcraft_doc::NodeKind::Group { children: kids, clip: true })).unwrap();
+    set_stack(&mut d, s, cts(g, json!({"mode": "points", "align": false})));
+    let p = pivots(&eval(&d, s));
+    assert_eq!(p.len(), 4, "{p:?}");
+    assert!(p.iter().all(|q| q.x >= 100.0 - 1e-6 && q.x <= 200.0 + 1e-6), "{p:?}");
+}
+
+#[test]
+fn targets_parse_with_or_without_the_hash() {
+    assert_eq!(parse_target("12"), Ok(NodeId(12)));
+    assert_eq!(parse_target(" #12 "), Ok(NodeId(12)));
+    assert!(parse_target("twelve").is_err() && parse_target("#").is_err());
+}

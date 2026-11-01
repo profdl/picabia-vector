@@ -67,6 +67,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("modifiers", Class::Layer(2)),
     // PICABIA: stencil geometry and laser export (geom, color, doc, pathops, modifiers)
     ("stencil", Class::Layer(3)),
+    // PICABIA: the GRBL laser link (protocol, simulator, serial port); no workspace deps.
+    ("grbl", Class::Standalone),
 ];
 
 /// Explicit orderings *within* a layer (earlier may be used by later).

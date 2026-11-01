@@ -221,6 +221,13 @@ fn node_entry_points_cache_and_report() {
     let rect = vectorcraft_geom::shapes::rectangle(Rect::new(100.0, 0.0, 120.0, 10.0));
     let mut n = vectorcraft_doc::Node::path(vectorcraft_doc::NodeId(5), rect, vectorcraft_doc::Appearance::default_art());
     assert!(node_instances(&n).is_none() && node_stack(&n).is_none());
+    let pen = vectorcraft_doc::ForeignAttribute {
+        ns: "https://example.org/plotter".into(),
+        prefix: "plotter".into(),
+        name: "pen".into(),
+        value: "2".into(),
+    };
+    n.edit_attrs(|a| a.foreign.push(pen.clone()));
     set_node_source(&mut n, Some(json!({"v": 1, "stack": [{"id": "m1", "kind": "linearArray", "count": 3}]}).to_string()));
     assert_eq!(node_bounds(&n), Rect::new(100.0, 0.0, 120.0, 10.0));
     let a = node_instances(&n).unwrap();
@@ -232,7 +239,10 @@ fn node_entry_points_cache_and_report() {
     assert!(matches!(node_stack(&n), Some(Err(ModError::Json(_)))));
     // Removing the stack leaves no attribute behind (and keeps other foreign attributes).
     set_node_source(&mut n, None);
-    assert!(!has_modifiers(&n) && n.extras().attrs.is_none());
+    assert!(!has_modifiers(&n));
+    assert_eq!(n.extras().attrs.as_ref().map(|a| a.foreign.clone()), Some(vec![pen.clone()]), "other foreign attributes are kept");
+    n.edit_attrs(|a| a.foreign.clear());
+    assert!(n.extras().attrs.is_none(), "nothing left, no attributes record");
 }
 
 #[test]
