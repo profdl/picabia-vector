@@ -26,7 +26,11 @@ static, so there is no clock and no live playback: nothing moves until Simulate 
   wasm32-unknown-unknown under Node). No threads, no `fem`.
 - **Steps.** 60 steps per simulated second (tlprocedural's update rate). The run stops when every
   dynamic body sleeps, or at the step cap (default 3,000 = 50 s; 1–20,000). One run may do at most 6
-  million body-steps (1,000 bodies get at most 6,000 steps), and at most 1,000 bodies take part. No
+  million body-steps (1,000 bodies get at most 6,000 steps), and at most 1,000 bodies take part
+  (dynamic ones first; the rest are listed in `skipped`, before any outline is read). A run has at
+  most 1,800 collider pieces (convex parts, polyline segments, boxes, balls); a body that would go
+  over collides as its bounding box, with a note. That keeps rapier's contact graph (at most 2²²
+  manifolds per bucket) far from full even with every piece piled on one spot. No
   wall-clock limit (the web build has no clock): only step counts, so a run always ends.
 - **Moving the objects.** Each dynamic body's motion (a turn about its bounds' centre and a move) is
   applied with the transform commands' own path (`transform_node`, as Transform Each does), so
@@ -77,10 +81,21 @@ boxes; a group is all its visible members; a clip group is its clipping path.
 | auto | Per closed outline: ≤ 16 points its hull; ≤ 64 the hull of it simplified to 32; more: simplified to 64 and split into convex parts. Open outlines: their line | Same, but more than 64 points: its edges (a cup holds what falls in) |
 | precise | Each closed outline split into convex parts (at most 256 points each, simplified beyond) | Each closed outline's edges |
 
-Caps: 2,000 outline points per object (simplified with Ramer–Douglas–Peucker, as tlprocedural's
-`simplifyVertices`), 512 pieces (more: the object is its convex hull). Geometry that isn't finite,
-is empty, reaches beyond ±1,000,000 pt or is smaller than 0.01 pt both ways is skipped with the
-reason. A body of open outlines only gets the mass and inertia of its bounding box.
+Caps, applied while the outline is read: 100,000 flattened points per object (more: every nth
+kept, evenly across all its outlines, so a closed ring still closes on itself), 2,048 outlines read
+(the rest left out, with a note); then 2,000 outline points per object (each ring at least 3 and a
+share of the rest by size; simplified with Ramer–Douglas–Peucker, as tlprocedural's
+`simplifyVertices`, after thinning a long ring evenly to twice its target) and 512 pieces (more: the
+object is its convex hull). Geometry that isn't finite, is empty, reaches beyond ±1,000,000 pt or
+is smaller than 0.01 pt both ways is skipped with the reason. A body of open outlines only gets the
+mass and inertia of its bounding box.
+
+Rings are cleaned (repeated and collinear points dropped) and checked for self-intersection before
+they are split: a ring whose edges cross or touch collides as its hull. Every convex collider is
+built from its points as the f32 values rapier gets (Picabia computes the hull itself and gives
+parry a ready convex polygon): points distinct in f64 can collapse to one f32 point, and parry's
+own hull asserts on that, which would abort the web build. Fewer than 3 distinct f32 points, an
+extent under 1 µm or no area: a box instead.
 
 ## Commands
 

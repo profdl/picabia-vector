@@ -5,10 +5,12 @@
 //! bounding boxes. A group is all its visible members (a clip group: its clipping path only).
 //! Strokes are ignored (geometric outlines, as the selection box measures them).
 //!
-//! Caps: at most [`MAX_POINTS_PER_BODY`] points per object (rings are simplified with
-//! Ramer–Douglas–Peucker, as tlprocedural's `simplifyVertices`) and [`MAX_PIECES_PER_BODY`]
-//! pieces (more: the object is its convex hull). Geometry that isn't finite, is empty, too large
-//! or has no size is refused with the reason.
+//! Caps, applied while the outline is read so a huge path costs a bounded amount of memory: at
+//! most [`MAX_RAW_POINTS`] flattened points per object (skipped evenly across all its outlines),
+//! [`MAX_COLLECTED_PIECES`] outlines read (the rest left out, with a note), then at most
+//! [`MAX_POINTS_PER_BODY`] points (rings simplified with Ramer–Douglas–Peucker, as tlprocedural's
+//! `simplifyVertices`) and [`MAX_PIECES_PER_BODY`] pieces (more: the object is its convex hull).
+//! Geometry that isn't finite, is empty, too large or has no size is refused with the reason.
 
 use vectorcraft_doc::{LiveShape, Node, NodeKind, SymbolBoxes};
 use vectorcraft_geom::{BezPath, PathEl, Point, Rect};
@@ -17,8 +19,10 @@ use vectorcraft_geom::{BezPath, PathEl, Point, Rect};
 pub const MAX_POINTS_PER_BODY: usize = 2_000;
 /// The most pieces (rings, balls, boxes) one object keeps; more: its convex hull alone.
 pub const MAX_PIECES_PER_BODY: usize = 512;
-/// The most points one ring flattens to before simplification (more are skipped evenly).
-const MAX_RAW_POINTS: usize = 100_000;
+/// The most flattened points one object keeps before simplification (more are skipped evenly).
+pub const MAX_RAW_POINTS: usize = 100_000;
+/// The most outlines (subpaths, boxes, balls) read from one object; the rest are left out.
+pub const MAX_COLLECTED_PIECES: usize = MAX_PIECES_PER_BODY * 4;
 /// Coordinates beyond ±this (points) are refused: f32 maths loses the shape out there.
 pub const MAX_COORD: f64 = 1.0e6;
 /// An object smaller than this (points) both ways has no size to collide with.
@@ -75,8 +79,20 @@ pub fn body_shape(node: &Node, symbols: Option<&SymbolBoxes>) -> Result<BodyShap
     let bounds = bounds.ok_or("it has no geometry")?;
     check_rect(bounds)?;
     let tol = (bounds.width().hypot(bounds.height()) * 0.002).clamp(0.05, 5.0);
-    let mut pieces = Vec::new();
-    collect(node, symbols, tol, 0, &mut pieces);
+    // First count the flattened points, then keep every `stride`-th of them.
+    let mut counter = Collector { symbols, tol, stride: 1, seen: 0, pieces: Vec::new(), read: 0, left_out: 0, counting: true };
+    counter.node(node, 0);
+    let stride = counter.seen.div_ceil(MAX_RAW_POINTS).max(1);
+    let mut c = Collector { symbols, tol, stride, seen: 0, pieces: Vec::new(), read: 0, left_out: 0, counting: false };
+    c.node(node, 0);
+    let mut pieces = c.pieces;
+    let mut notes = Vec::new();
+    if c.left_out > 0 {
+        notes.push(format!("more than {MAX_COLLECTED_PIECES} outlines: {} left out", c.left_out));
+    }
+    if stride > 1 {
+        notes.push(format!("{} outline points: every {stride}th kept", counter.seen));
+    }
     pieces.retain(|p| match p {
         Piece::Ring { pts, .. } => pts.len() >= 2 && pts.iter().all(|q| finite_in_range(*q)),
         Piece::Ball { center, radius } => finite_in_range(*center) && radius.is_finite() && *radius > 0.0,
@@ -85,7 +101,6 @@ pub fn body_shape(node: &Node, symbols: Option<&SymbolBoxes>) -> Result<BodyShap
     if pieces.is_empty() {
         return Err("it has no outline to collide with".into());
     }
-    let mut notes = Vec::new();
     if pieces.len() > MAX_PIECES_PER_BODY {
         notes.push(format!("{} pieces (at most {MAX_PIECES_PER_BODY}): collides as its convex hull", pieces.len()));
         let all: Vec<Point> = pieces.iter().flat_map(Piece::points).collect();
@@ -93,12 +108,16 @@ pub fn body_shape(node: &Node, symbols: Option<&SymbolBoxes>) -> Result<BodyShap
         let hull = if hull.len() > MAX_POINTS_PER_BODY { simplify(&hull, MAX_POINTS_PER_BODY, true) } else { hull };
         pieces = vec![Piece::Ring { pts: hull, closed: true }];
     }
-    let total: usize = pieces.iter().map(|p| if let Piece::Ring { pts, .. } = p { pts.len() } else { 4 }).sum();
+    let rings = pieces.iter().filter(|p| matches!(p, Piece::Ring { .. })).count();
+    let total: usize = pieces.iter().map(|p| if let Piece::Ring { pts, .. } = p { pts.len() } else { 0 }).sum();
     if total > MAX_POINTS_PER_BODY {
         notes.push(format!("{total} outline points (at most {MAX_POINTS_PER_BODY}): simplified"));
+        // Each ring keeps at least 3 points and a share of the rest by its size, so the total stays
+        // within the cap (at most 512 rings: 1,536 points of floors).
+        let spare = MAX_POINTS_PER_BODY.saturating_sub(3 * rings);
         for p in &mut pieces {
             if let Piece::Ring { pts, closed } = p {
-                let share = (MAX_POINTS_PER_BODY * pts.len() / total.max(1)).max(3);
+                let share = 3 + spare * pts.len() / total.max(1);
                 *pts = simplify(pts, share, *closed);
             }
         }
@@ -123,49 +142,124 @@ fn check_rect(r: Rect) -> Result<(), String> {
     Ok(())
 }
 
-fn collect(n: &Node, symbols: Option<&SymbolBoxes>, tol: f64, depth: usize, out: &mut Vec<Piece>) {
-    if depth > MAX_DEPTH || out.len() > MAX_PIECES_PER_BODY * 4 {
-        return;
+/// Reads an object's outlines: counting the flattened points (`counting`), or keeping every
+/// `stride`-th of them (each outline's first point always), up to [`MAX_COLLECTED_PIECES`].
+struct Collector<'a, 'b> {
+    symbols: Option<&'a SymbolBoxes<'b>>,
+    tol: f64,
+    stride: usize,
+    /// Flattened points seen so far (all outlines).
+    seen: usize,
+    pieces: Vec<Piece>,
+    /// Outlines read (subpaths, boxes, balls): both passes read the same ones.
+    read: usize,
+    /// Outlines past the cap.
+    left_out: usize,
+    counting: bool,
+}
+
+impl Collector<'_, '_> {
+    /// Take one more outline: false (and counted as left out) past the cap.
+    fn take(&mut self) -> bool {
+        if self.read >= MAX_COLLECTED_PIECES {
+            self.left_out += 1;
+            return false;
+        }
+        self.read += 1;
+        true
     }
-    match &n.kind {
-        NodeKind::Path { path, guide, live, .. } => {
-            if *guide {
-                return;
-            }
-            if let Some(ball) = live.as_deref().and_then(|l| ball_of(l, path.bounds())) {
-                out.push(ball);
-                return;
-            }
-            for sp in &path.subpaths {
-                let mut bez = BezPath::new();
-                sp.to_bezpath_into(&mut bez);
-                out.extend(flatten_rings(&bez, tol));
-            }
+
+    fn push(&mut self, p: Piece) {
+        if self.take() && !self.counting {
+            self.pieces.push(p);
         }
-        NodeKind::Compound { children, .. } | NodeKind::Layer { children, .. } => {
-            for c in children.iter().filter(|c| c.visible) {
-                collect(c, symbols, tol, depth + 1, out);
-            }
+    }
+
+    fn node(&mut self, n: &Node, depth: usize) {
+        if depth > MAX_DEPTH {
+            return;
         }
-        NodeKind::Group { children, clip } => {
-            if *clip {
-                if let Some(c) = children.first() {
-                    collect(c, symbols, tol, depth + 1, out);
+        match &n.kind {
+            NodeKind::Path { path, guide, live, .. } => {
+                if *guide {
+                    return;
                 }
-            } else {
+                if let Some(ball) = live.as_deref().and_then(|l| ball_of(l, path.bounds())) {
+                    self.push(ball);
+                    return;
+                }
+                for sp in &path.subpaths {
+                    if !self.take() {
+                        continue;
+                    }
+                    let mut bez = BezPath::new();
+                    sp.to_bezpath_into(&mut bez);
+                    self.flatten(&bez);
+                }
+            }
+            NodeKind::Compound { children, .. } | NodeKind::Layer { children, .. } => {
                 for c in children.iter().filter(|c| c.visible) {
-                    collect(c, symbols, tol, depth + 1, out);
+                    self.node(c, depth + 1);
+                }
+            }
+            NodeKind::Group { children, clip } => {
+                if *clip {
+                    if let Some(c) = children.first() {
+                        self.node(c, depth + 1);
+                    }
+                } else {
+                    for c in children.iter().filter(|c| c.visible) {
+                        self.node(c, depth + 1);
+                    }
+                }
+            }
+            _ => {
+                let b = match self.symbols {
+                    Some(s) => n.geometric_bounds_with(s),
+                    None => n.geometric_bounds(),
+                };
+                if let Some(b) = b {
+                    self.push(Piece::Box(b));
                 }
             }
         }
-        _ => {
-            let b = match symbols {
-                Some(s) => n.geometric_bounds_with(s),
-                None => n.geometric_bounds(),
-            };
-            if let Some(b) = b {
-                out.push(Piece::Box(b));
+    }
+
+    /// The polylines `bez` flattens to (one per subpath, with its closed flag), every
+    /// `stride`-th point kept (each subpath's first always), so a long path is thinned evenly.
+    fn flatten(&mut self, bez: &BezPath) {
+        let mut cur: Vec<Point> = Vec::new();
+        let (stride, counting) = (self.stride.max(1), self.counting);
+        let mut rings: Vec<Piece> = Vec::new();
+        let mut seen = self.seen;
+        let finish = |cur: &mut Vec<Point>, closed: bool, rings: &mut Vec<Piece>| {
+            if closed && cur.len() > 2 && cur.first() == cur.last() {
+                cur.pop();
             }
+            if cur.len() >= 2 {
+                let closed = closed && cur.len() >= 3;
+                rings.push(Piece::Ring { pts: std::mem::take(cur), closed });
+            }
+            cur.clear();
+        };
+        let mut point = |p: Point, first: bool, cur: &mut Vec<Point>| {
+            seen += 1;
+            if !counting && (first || seen.is_multiple_of(stride)) && cur.last() != Some(&p) {
+                cur.push(p);
+            }
+        };
+        vectorcraft_geom::flatten(bez.iter(), self.tol, |el| match el {
+            PathEl::MoveTo(p) => {
+                finish(&mut cur, false, &mut rings);
+                point(p, true, &mut cur);
+            }
+            PathEl::LineTo(p) | PathEl::QuadTo(_, p) | PathEl::CurveTo(_, _, p) => point(p, false, &mut cur),
+            PathEl::ClosePath => finish(&mut cur, true, &mut rings),
+        });
+        finish(&mut cur, false, &mut rings);
+        self.seen = seen;
+        if !counting {
+            self.pieces.extend(rings);
         }
     }
 }
@@ -181,43 +275,6 @@ fn ball_of(live: &LiveShape, bounds: Option<Rect>) -> Option<Piece> {
         return None;
     }
     Some(Piece::Ball { center: b.center(), radius: (rx + ry) / 2.0 })
-}
-
-/// The polylines `bez` flattens to (one per subpath, with its closed flag).
-fn flatten_rings(bez: &BezPath, tol: f64) -> Vec<Piece> {
-    let mut rings = Vec::new();
-    let mut cur: Vec<Point> = Vec::new();
-    let mut raw = 0usize;
-    let finish = |cur: &mut Vec<Point>, closed: bool, rings: &mut Vec<Piece>| {
-        if closed && cur.len() > 2 && cur.first() == cur.last() {
-            cur.pop();
-        }
-        if cur.len() >= 2 {
-            let closed = closed && cur.len() >= 3;
-            rings.push(Piece::Ring { pts: std::mem::take(cur), closed });
-        }
-        cur.clear();
-    };
-    vectorcraft_geom::flatten(bez.iter(), tol, |el| match el {
-        PathEl::MoveTo(p) => {
-            finish(&mut cur, false, &mut rings);
-            cur.push(p);
-        }
-        PathEl::LineTo(p) => {
-            raw += 1;
-            if raw <= MAX_RAW_POINTS && cur.last() != Some(&p) {
-                cur.push(p);
-            }
-        }
-        PathEl::ClosePath => finish(&mut cur, true, &mut rings),
-        PathEl::QuadTo(_, p) | PathEl::CurveTo(_, _, p) => {
-            if cur.last() != Some(&p) {
-                cur.push(p);
-            }
-        }
-    });
-    finish(&mut cur, false, &mut rings);
-    rings
 }
 
 /// Ramer–Douglas–Peucker with an explicit stack (tlprocedural's `rdpSimplify`).
@@ -274,6 +331,15 @@ pub fn simplify(v: &[Point], max: usize, closed: bool) -> Vec<Point> {
     if v.len() <= max {
         return v.to_vec();
     }
+    // RDP is quadratic at worst: thin a long ring evenly to twice the target first.
+    let thinned: Vec<Point>;
+    let v = if v.len() > 2 * max {
+        let step = v.len() as f64 / (2 * max) as f64;
+        thinned = (0..2 * max).filter_map(|i| v.get((i as f64 * step) as usize).copied()).collect();
+        thinned.as_slice()
+    } else {
+        v
+    };
     let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
     for p in v {
         x0 = x0.min(p.x);
@@ -283,7 +349,7 @@ pub fn simplify(v: &[Point], max: usize, closed: bool) -> Vec<Point> {
     }
     let (mut lo, mut hi) = (0.0, (x1 - x0).hypot(y1 - y0) * 0.5);
     let mut best: Option<Vec<Point>> = None;
-    for _ in 0..24 {
+    for _ in 0..16 {
         let mid = (lo + hi) / 2.0;
         let r = rdp(v, mid);
         if r.len() > max {
@@ -353,6 +419,10 @@ pub fn signed_area2(v: &[Point]) -> f64 {
 /// into the part before it while that part stays convex. `None` when the ring isn't simple
 /// enough to clip (self-intersecting): use its hull.
 pub fn convex_parts(v: &[Point]) -> Option<Vec<Vec<Point>>> {
+    let v = &clean_ring(v);
+    if !is_simple(v) {
+        return None;
+    }
     let area = signed_area2(v);
     if v.len() < 3 || !area.is_finite() || area.abs() < 1e-12 {
         return None;
@@ -428,4 +498,88 @@ pub fn convex_parts(v: &[Point]) -> Option<Vec<Vec<Point>>> {
         }
     }
     Some(parts.into_iter().map(|p| p.into_iter().map(pt).collect()).collect())
+}
+
+/// `v` without repeated points (the closing one too) and without points on a straight line
+/// between their neighbours.
+pub fn clean_ring(v: &[Point]) -> Vec<Point> {
+    let mut out: Vec<Point> = Vec::with_capacity(v.len());
+    for &p in v {
+        if out.last() != Some(&p) {
+            out.push(p);
+        }
+    }
+    while out.len() > 1 && out.first() == out.last() {
+        out.pop();
+    }
+    // Drop collinear points until none is left (each pass removes at least one or stops).
+    loop {
+        let n = out.len();
+        if n < 3 {
+            return out;
+        }
+        let keep: Vec<bool> = (0..n)
+            .map(|i| {
+                let (Some(&a), Some(&b), Some(&c)) = (out.get((i + n - 1) % n), out.get(i), out.get((i + 1) % n)) else { return true };
+                let cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+                let scale = ((b - a).hypot() * (c - a).hypot()).max(f64::MIN_POSITIVE);
+                cross.abs() / scale > 1e-12
+            })
+            .collect();
+        if keep.iter().all(|k| *k) {
+            return out;
+        }
+        // Remove one point per pass at a time from each run, keeping the polygon connected.
+        let mut next = Vec::with_capacity(n);
+        let mut dropped_prev = false;
+        for (p, k) in out.iter().zip(&keep) {
+            if !*k && !dropped_prev {
+                dropped_prev = true;
+            } else {
+                next.push(*p);
+                dropped_prev = false;
+            }
+        }
+        if next.len() == n {
+            return out;
+        }
+        out = next;
+    }
+}
+
+/// Whether closed ring `v` is simple: no two edges that aren't neighbours touch or cross.
+pub fn is_simple(v: &[Point]) -> bool {
+    let n = v.len();
+    if n < 3 {
+        return false;
+    }
+    let orient = |a: Point, b: Point, c: Point| {
+        let x = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+        if x > 0.0 {
+            1
+        } else if x < 0.0 {
+            -1
+        } else {
+            0
+        }
+    };
+    let on = |a: Point, b: Point, p: Point| p.x >= a.x.min(b.x) && p.x <= a.x.max(b.x) && p.y >= a.y.min(b.y) && p.y <= a.y.max(b.y);
+    let touch = |a: Point, b: Point, c: Point, d: Point| {
+        let (o1, o2, o3, o4) = (orient(a, b, c), orient(a, b, d), orient(c, d, a), orient(c, d, b));
+        (o1 != o2 && o3 != o4) || (o1 == 0 && on(a, b, c)) || (o2 == 0 && on(a, b, d)) || (o3 == 0 && on(c, d, a)) || (o4 == 0 && on(c, d, b))
+    };
+    for i in 0..n {
+        let (Some(&a), Some(&b)) = (v.get(i), v.get((i + 1) % n)) else { return false };
+        for j in i + 1..n {
+            // Neighbouring edges share a point: skip them.
+            if j == i + 1 || (i == 0 && j == n - 1) {
+                continue;
+            }
+            let (Some(&c), Some(&d)) = (v.get(j), v.get((j + 1) % n)) else { return false };
+            if touch(a, b, c, d) {
+                return false;
+            }
+        }
+    }
+    true
 }

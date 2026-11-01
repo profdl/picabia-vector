@@ -197,3 +197,67 @@ fn the_same_scene_simulates_to_the_same_document() {
     };
     assert_eq!(run(), run());
 }
+
+/// Type, a placed image and a live shape land on the floor, turned and moved as Rotate and Move
+/// would move them: still type, an image and a live shape afterwards.
+#[test]
+fn type_an_image_and_a_live_shape_are_moved_as_the_transform_commands_move_them() {
+    use vectorcraft_doc::NodeKind;
+    let mut s = session();
+    let text = NodeId(ex(&mut s, "text.create", json!({"x": 40, "y": 40, "size": 24, "text": "Drop"}))["id"].as_u64().unwrap());
+    let mut png = vec![];
+    image::RgbaImage::from_pixel(30, 30, image::Rgba([255, 0, 0, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let placed = ex(&mut s, "file.place", json!({"name": "red.png", "dataBase64": vectorcraft_format::base64_encode(&png), "at": [200, 60]}));
+    let img = NodeId(placed["ids"][0].as_u64().unwrap());
+    let live = shape(&mut s, "shape.rectangle", 300.0, 30.0, 50.0, 30.0);
+    ex(&mut s, "select.set", json!({"ids": [text.0, img.0, live.0]}));
+    let out = ex(&mut s, "physics.simulate", json!({}));
+    assert_eq!(out["moved"].as_array().unwrap().len(), 3, "{out}");
+    let floor = board(&s).y1;
+    let doc = &s.doc().unwrap().doc;
+    assert!(matches!(doc.node(text).unwrap().kind, NodeKind::Text(_)));
+    assert!(matches!(doc.node(img).unwrap().kind, NodeKind::Image(_)));
+    assert!(matches!(&doc.node(live).unwrap().kind, NodeKind::Path { live: Some(_), .. }), "still a live rectangle");
+    for id in [text, img, live] {
+        let r = doc.node(id).unwrap().geometric_bounds().unwrap();
+        assert!((r.y1 - floor).abs() < 3.0, "{id:?} rests at {} (floor {floor})", r.y1);
+    }
+}
+
+/// A live rectangle that comes to rest turned keeps its turn: its own angle is the body's.
+#[test]
+fn a_turned_live_rectangle_keeps_its_angle() {
+    let mut s = session();
+    // A static slope from (0, 200) to (400, 280).
+    let slope = NodeId(ex(&mut s, "path.create", json!({"d": "M0 200 L400 280 L400 300 L0 300 Z"}))["id"].as_u64().unwrap());
+    ex(&mut s, "physics.set", json!({"ids": [slope.0], "props": {"bodyType": "static"}}));
+    let b = shape(&mut s, "shape.rectangle", 150.0, 100.0, 50.0, 30.0);
+    ex(&mut s, "physics.set", json!({"ids": [b.0], "props": {"friction": 1, "restitution": 0}}));
+    ex(&mut s, "select.set", json!({"ids": []}));
+    let out = ex(&mut s, "physics.simulate", json!({}));
+    assert_eq!(out["moved"], json!([b.0]), "{out}");
+    let n = s.doc().unwrap().doc.node(b).unwrap().clone();
+    let slope_deg = (80.0f64 / 400.0).atan().to_degrees();
+    // Counter-clockwise degrees, y down: going down to the right is a negative angle.
+    assert!((n.bbox_angle + slope_deg).abs() < 1.5 || (n.bbox_angle - slope_deg).abs() < 1.5, "angle {}", n.bbox_angle);
+}
+
+#[test]
+fn over_the_body_limit_dynamic_bodies_come_first_and_the_rest_are_reported() {
+    let mut s = session();
+    let mut statics = vec![];
+    for i in 0..1_000 {
+        statics.push(shape(&mut s, "shape.rectangle", f64::from(i % 40) * 10.0, 200.0 + f64::from(i / 40) * 3.0, 2.0, 2.0).0);
+    }
+    ex(&mut s, "physics.set", json!({"ids": statics, "props": {"bodyType": "static"}}));
+    let falling = shape(&mut s, "shape.rectangle", 100.0, 20.0, 30.0, 30.0);
+    ex(&mut s, "select.set", json!({"ids": [falling.0]}));
+    let out = ex(&mut s, "physics.simulate", json!({"steps": 5}));
+    assert_eq!(out["bodies"], 1_000, "{}", out["notes"]);
+    assert_eq!(out["moved"], json!([falling.0]));
+    let skipped = out["skipped"].as_array().unwrap();
+    assert_eq!(skipped.len(), 1);
+    assert!(skipped[0]["reason"].as_str().unwrap().contains("limit"));
+}

@@ -29,6 +29,13 @@ pub const LOST_DISTANCE: f64 = 1.0e6;
 pub const DEFAULT_GRAVITY: f64 = 9.81 * PT_PER_M;
 /// The largest gravity component, points per second².
 pub const MAX_GRAVITY: f64 = 1.0e5;
+/// The most collider pieces (convex parts, edges' polylines, boxes, balls) in one run; a body
+/// that would go over collides as its bounding box (with a note), so the step caps bound the time.
+/// Overlapping compounds make a contact manifold per pair of touching parts, and rapier's
+/// contact graph holds at most 2²² (4,194,304) of them per bucket (a debug assertion, a corrupt
+/// graph without one). Bodies past the budget still take one box each, so a run has at most
+/// 1,800 + [`MAX_BODIES`] = 2,800 pieces: under 4 million pairs even all piled on one spot.
+pub const MAX_PIECES_PER_RUN: usize = 1_800;
 /// The most points one exactly split ring keeps (more are simplified first).
 const MAX_SPLIT_POINTS: usize = 256;
 /// The smallest half extent of a box collider, metres (so a hairline still has a box).
@@ -116,8 +123,13 @@ pub fn simulate(bodies: &[BodyInput], params: &SimParams) -> SimResult {
     let mut rbs = RigidBodySet::new();
     let mut cols = ColliderSet::new();
     let mut handles: Vec<Option<RigidBodyHandle>> = Vec::with_capacity(take);
+    let mut pieces_left = MAX_PIECES_PER_RUN;
+    let mut boxed = 0usize;
     for b in bodies.iter().take(take) {
-        handles.push(add_body(&mut rbs, &mut cols, b, origin));
+        handles.push(add_body(&mut rbs, &mut cols, b, origin, &mut pieces_left, &mut boxed));
+    }
+    if boxed > 0 {
+        notes.push(format!("over {MAX_PIECES_PER_RUN} collider pieces in all: {boxed} bodies collide as their bounding boxes"));
     }
     if let Some(r) = params.walls {
         add_walls(&mut rbs, &mut cols, r, origin);
@@ -246,7 +258,20 @@ fn add_walls(rbs: &mut RigidBodySet, cols: &mut ColliderSet, r: Rect, origin: Po
     }
 }
 
-fn add_body(rbs: &mut RigidBodySet, cols: &mut ColliderSet, b: &BodyInput, origin: Point) -> Option<RigidBodyHandle> {
+/// How many pieces `sh` is: a compound's parts, a polyline's segments (each makes its own
+/// contacts), else 1.
+fn piece_count(sh: &SharedShape) -> usize {
+    sh.as_compound().map(|c| c.shapes().len()).or_else(|| sh.as_polyline().map(|p| p.num_segments())).unwrap_or(1).max(1)
+}
+
+fn add_body(
+    rbs: &mut RigidBodySet,
+    cols: &mut ColliderSet,
+    b: &BodyInput,
+    origin: Point,
+    pieces_left: &mut usize,
+    boxed: &mut usize,
+) -> Option<RigidBodyHandle> {
     let s = &b.settings;
     let center = b.shape.bounds.center();
     let dynamic = s.body_type == BodyType::Dynamic;
@@ -262,7 +287,13 @@ fn add_body(rbs: &mut RigidBodySet, cols: &mut ColliderSet, b: &BodyInput, origi
             builder = builder.additional_mass(fin(s.mass));
         }
     }
-    let shapes = shapes_of(&b.shape, s.collider, dynamic, center);
+    let mut shapes = shapes_of(&b.shape, s.collider, dynamic, center);
+    let count: usize = shapes.iter().map(piece_count).sum();
+    if count > *pieces_left {
+        shapes = shapes_of(&b.shape, ColliderType::Box, dynamic, center);
+        *boxed += 1;
+    }
+    *pieces_left = pieces_left.saturating_sub(shapes.iter().map(piece_count).sum());
     if shapes.is_empty() {
         return None;
     }
@@ -294,10 +325,7 @@ fn shapes_of(shape: &BodyShape, fidelity: ColliderType, dynamic: bool, center: P
         let shape = SharedShape::cuboid(fin(r.width() / 2.0 / PT_PER_M).max(MIN_HALF), fin(r.height() / 2.0 / PT_PER_M).max(MIN_HALF));
         SharedShape::compound(vec![(Pose::from_translation(c), shape)])
     };
-    let hull_or_box = |pts: &[Point], r: Rect| {
-        let h = convex_hull(pts);
-        (h.len() >= 3).then(|| SharedShape::convex_hull(&local(&h))).flatten().unwrap_or_else(|| bbox(r))
-    };
+    let hull_or_box = |pts: &[Point], r: Rect| convex(&local(pts)).unwrap_or_else(|| bbox(r));
     match fidelity {
         ColliderType::Box => vec![bbox(shape.bounds)],
         ColliderType::Fast => {
@@ -362,18 +390,49 @@ fn exact(
         return vec![hull_or_box(&pts, r)];
     }
     let Some(parts) = convex_parts(&pts) else { return vec![hull_or_box(&pts, r)] };
-    let parts: Vec<(Pose, SharedShape)> =
-        parts.iter().filter_map(|part| SharedShape::convex_hull(&local(part))).map(|s| (Pose::IDENTITY, s)).collect();
+    let parts: Vec<(Pose, SharedShape)> = parts.iter().filter_map(|part| convex(&local(part))).map(|s| (Pose::IDENTITY, s)).collect();
     if parts.is_empty() { vec![hull_or_box(&pts, r)] } else { vec![SharedShape::compound(parts)] }
+}
+
+/// The smallest extent (metres, each axis) and doubled area (m²) a convex collider must have, in
+/// the f32 points rapier gets: points distinct in f64 can collapse to one f32 point.
+const MIN_EXTENT_M: f64 = 1e-6;
+const MIN_AREA2_M: f64 = 1e-10;
+
+/// The convex hull of `pts` (f32, body space) as a convex polygon, or `None` when the points,
+/// as f32, don't span an area (then callers use a box). The hull is computed here, on the exact
+/// f32 values, and handed to parry's `convex_polyline` (which returns `None` on degenerate input);
+/// parry's own `convex_hull` asserts on coincident points, which would abort on wasm.
+pub(crate) fn convex(pts: &[Vector]) -> Option<SharedShape> {
+    let pts: Vec<Point> = pts.iter().filter(|p| p.x.is_finite() && p.y.is_finite()).map(|p| Point::new(f64::from(p.x), f64::from(p.y))).collect();
+    let hull = convex_hull(&pts);
+    if hull.len() < 3 || signed_area2(&hull) < MIN_AREA2_M {
+        return None;
+    }
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for p in &hull {
+        (x0, y0, x1, y1) = (x0.min(p.x), y0.min(p.y), x1.max(p.x), y1.max(p.y));
+    }
+    if x1 - x0 < MIN_EXTENT_M || y1 - y0 < MIN_EXTENT_M {
+        return None;
+    }
+    // Exact: the hull's points are the f32 values given.
+    SharedShape::convex_polyline(hull.iter().map(|p| Vector::new(p.x as f32, p.y as f32)).collect())
 }
 
 /// A polyline through `pts` (closed: back to the first), or `None` with under 2 distinct points.
 fn polyline(pts: &[Vector], closed: bool) -> Option<SharedShape> {
-    if pts.len() < 2 || !pts.iter().all(|p| p.x.is_finite() && p.y.is_finite()) {
+    if !pts.iter().all(|p| p.x.is_finite() && p.y.is_finite()) {
         return None;
     }
+    // Repeated f32 points (distinct in f64, collapsed in f32) make zero-length segments: drop them.
+    let mut pts: Vec<Vector> = pts.to_vec();
+    pts.dedup();
+    if closed && pts.len() > 1 && pts.first() == pts.last() {
+        pts.pop();
+    }
     let first = *pts.first()?;
-    if pts.iter().all(|p| (*p - first).length() < 1e-7) {
+    if pts.len() < 2 || pts.iter().all(|p| (*p - first).length() < 1e-7) {
         return None;
     }
     let n = u32::try_from(pts.len()).ok()?;
@@ -381,7 +440,7 @@ fn polyline(pts: &[Vector], closed: bool) -> Option<SharedShape> {
     if closed && n >= 3 {
         idx.push([n - 1, 0]);
     }
-    Some(SharedShape::polyline(pts.to_vec(), Some(idx)))
+    Some(SharedShape::polyline(pts, Some(idx)))
 }
 
 fn ring_bounds(pts: &[Point]) -> Option<Rect> {

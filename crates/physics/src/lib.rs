@@ -55,3 +55,5 @@ pub const WALL_FRICTION: f32 = 0.5;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_hardening;

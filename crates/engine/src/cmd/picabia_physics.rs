@@ -247,6 +247,20 @@ fn simulate(s: &mut Session, p: &Value) -> Result<Value> {
     for layer in &doc.layers {
         collect(layer, false, &selected, 0, &mut found, &mut skipped);
     }
+    // At most `MAX_BODIES` take part, dynamic ones first (in layer order), before any outline is
+    // read: the rest are reported.
+    if found.len() > sim::MAX_BODIES {
+        let (mut keep, rest): (Vec<Found>, Vec<Found>) = found.into_iter().partition(|f| f.settings.body_type == BodyType::Dynamic);
+        let mut over: Vec<Found> = keep.split_off(keep.len().min(sim::MAX_BODIES));
+        let room = sim::MAX_BODIES - keep.len();
+        let mut rest = rest;
+        over.extend(rest.split_off(rest.len().min(room)));
+        keep.extend(rest);
+        for f in over {
+            skipped.push(json!({"id": f.id.0, "reason": format!("over the {}-body limit", sim::MAX_BODIES)}));
+        }
+        found = keep;
+    }
     let symbols = doc.symbol_boxes();
     let mut ids = Vec::new();
     let mut bodies = Vec::new();
