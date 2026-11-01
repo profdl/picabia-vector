@@ -202,19 +202,24 @@ impl Screen {
             return None;
         }
         let want = self.period() / f64::from(self.quality);
-        // cells ≈ (w / step + 1)(h / step + 1) <= MAX_CELLS.
-        let cells = |s: f64| ((w / s).ceil() + 1.0) * ((h / s).ceil() + 1.0);
-        if cells(want) <= MAX_CELLS as f64 {
+        let fits = |s: f64| s.is_finite() && s > 0.0 && grid_cells(w, h, s) <= MAX_CELLS as f64;
+        if fits(want) {
             return Some((want, false));
         }
-        let mut step = (w.sqrt() * h.sqrt() / (MAX_CELLS as f64 * 0.98).sqrt()).max(want);
-        for _ in 0..64 {
-            if cells(step) <= MAX_CELLS as f64 {
+        // The cell count only falls as the step grows; at the longer side the grid is one cell.
+        let mut hi = w.max(h).max(want);
+        if !fits(hi) {
+            return None;
+        }
+        let mut lo = want;
+        for _ in 0..128 {
+            let mid = lo + (hi - lo) * 0.5;
+            if !(mid > lo && mid < hi) {
                 break;
             }
-            step *= 1.05;
+            if fits(mid) { hi = mid } else { lo = mid }
         }
-        step.is_finite().then_some((step, true))
+        fits(hi).then_some((hi, true))
     }
 
     /// The field over `bounds`, tone from `tone`, and whether the sampling was coarsened. The grid
@@ -223,10 +228,10 @@ impl Screen {
     /// outline afterwards.
     pub fn grid(&self, bounds: Rect, tone: impl Fn(Point) -> f64) -> Result<(Grid, bool), ContourError> {
         let Some((step, coarsened)) = self.step_for(bounds) else {
-            return Err(ContourError::TooSmall { cols: 0, rows: 0 });
+            return Err(ContourError::BadBounds);
         };
-        let cols = ((bounds.width() / step).ceil() as usize).saturating_add(1).max(2);
-        let rows = ((bounds.height() / step).ceil() as usize).saturating_add(1).max(2);
+        let cols = samples_along(bounds.width(), step);
+        let rows = samples_along(bounds.height(), step);
         let grid = Grid::sample(cols, rows, Point::new(bounds.x0, bounds.y0), step, |p| self.field(p, tone(p)))?;
         Ok((grid, coarsened))
     }
@@ -237,6 +242,16 @@ impl Screen {
         let rings = contour::contours(&grid, 0.0)?;
         Ok(Traced { rings, step: grid.step(), coarsened })
     }
+}
+
+/// The samples across `len` at `step`: enough to cover it, at least 2.
+fn samples_along(len: f64, step: f64) -> usize {
+    ((len / step).ceil() as usize).saturating_add(1).max(2)
+}
+
+/// The cells of the grid [`Screen::grid`] builds over `w × h` at `step`, as a float (no overflow).
+fn grid_cells(w: f64, h: f64, step: f64) -> f64 {
+    (w / step).ceil().max(1.0) * (h / step).ceil().max(1.0)
 }
 
 /// What [`Screen::trace`] made.
@@ -271,8 +286,8 @@ impl ToneImage {
         Some(ToneImage { width, height, darkness, place })
     }
 
-    /// From 8-bit RGBA, row-major: darkness from Rec. 709 luminance, transparent pixels count as
-    /// white (no ink).
+    /// From 8-bit RGBA with straight (not premultiplied) alpha, row-major: darkness from Rec. 709
+    /// luminance, scaled by alpha, so transparent pixels count as white (no ink).
     pub fn from_rgba8(width: usize, height: usize, rgba: &[u8], place: Rect) -> Option<ToneImage> {
         let n = Self::checked(width, height, place)?;
         if rgba.len() != n.checked_mul(4)? {
@@ -295,7 +310,7 @@ impl ToneImage {
         let n = width.checked_mul(height)?;
         let ok = n > 0
             && n <= MAX_TONE_PIXELS
-            && [place.x0, place.y0, place.x1, place.y1].iter().all(|v| v.is_finite())
+            && [place.x0, place.y0, place.x1, place.y1, place.width(), place.height()].iter().all(|v| v.is_finite())
             && place.width() > 0.0
             && place.height() > 0.0;
         ok.then_some(n)

@@ -2,7 +2,7 @@
 
 use vectorcraft_geom::{Point, Rect};
 
-use crate::contour::{MAX_CELLS, Ring};
+use crate::contour::{ContourError, MAX_CELLS, Ring};
 use crate::screen::{DEFAULT_LPI, MAX_LPI, MIN_LPI, Screen, SpotShape, ToneImage};
 
 fn area(rings: &[Ring]) -> f64 {
@@ -108,7 +108,7 @@ fn huge_art_is_coarsened_to_the_cap() {
     assert!((g.cols() - 1) * (g.rows() - 1) <= MAX_CELLS);
     // Bounds that aren't usable are refused, not traced.
     for bad in [Rect::new(0.0, 0.0, 0.0, 10.0), Rect::new(f64::NAN, 0.0, 1.0, 1.0), Rect::new(0.0, 0.0, f64::INFINITY, 1.0)] {
-        assert!(s.trace(bad, |_| 0.5).is_err());
+        assert_eq!(s.trace(bad, |_| 0.5), Err(ContourError::BadBounds));
     }
     assert!(s.step_for(Rect::new(0.0, 0.0, 1e300, 1e300)).is_some_and(|(st, c)| st.is_finite() && c));
 }
@@ -164,4 +164,31 @@ fn tracing_is_deterministic() {
     let b = Rect::new(-10.0, 5.0, 60.0, 50.0);
     let tone = |p: Point| (p.x / 70.0).clamp(0.0, 1.0);
     assert_eq!(s.trace(b, tone).unwrap(), s.trace(b, tone).unwrap());
+}
+
+#[test]
+fn extreme_aspect_ratios_fit_the_cap() {
+    let s = Screen::new(SpotShape::Round, MAX_LPI, 0.0, 64);
+    for b in [
+        Rect::new(0.0, 0.0, 100_000.0, 0.0001),
+        Rect::new(0.0, 0.0, 0.0001, 100_000.0),
+        Rect::new(0.0, 0.0, 1e12, 1e-9),
+        Rect::new(-5.0, 3.0, -4.999_999, 1e9),
+        Rect::new(0.0, 0.0, 1e300, 1e300),
+    ] {
+        let (step, coarsened) = s.step_for(b).unwrap();
+        assert!(coarsened && step.is_finite(), "{b:?}");
+        let (g, _) = s.grid(b, |_| 0.5).unwrap();
+        assert!((g.cols() - 1) * (g.rows() - 1) <= MAX_CELLS, "{b:?}");
+        assert!(s.trace(b, |_| 0.5).is_ok(), "{b:?}");
+    }
+}
+
+#[test]
+fn tone_image_with_an_overflowing_placement_is_refused() {
+    // Corners finite, width overflows to infinity: no image, so no ink, and nothing panics.
+    let place = Rect::new(-1e308, 0.0, 1e308, 10.0);
+    assert!(place.width().is_infinite());
+    assert!(ToneImage::from_luma8(1, 1, &[0], place).is_none());
+    assert!(ToneImage::from_rgba8(1, 1, &[0, 0, 0, 255], Rect::new(0.0, -1e308, 10.0, 1e308)).is_none());
 }

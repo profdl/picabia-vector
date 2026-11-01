@@ -52,6 +52,8 @@ pub enum ContourError {
     BadOrigin,
     /// The level (or a band edge) isn't finite, or a band's low edge is above its high edge.
     BadLevel,
+    /// The area to sample is empty or not finite.
+    BadBounds,
 }
 
 impl fmt::Display for ContourError {
@@ -63,6 +65,7 @@ impl fmt::Display for ContourError {
             ContourError::BadStep => f.write_str("a contour grid's step must be a positive number"),
             ContourError::BadOrigin => f.write_str("a contour grid's origin must be finite"),
             ContourError::BadLevel => f.write_str("a contour level must be finite (and a band's low edge at most its high edge)"),
+            ContourError::BadBounds => f.write_str("the area to contour must be finite and not empty"),
         }
     }
 }
@@ -157,8 +160,8 @@ pub struct Ring {
 }
 
 impl Ring {
-    /// Twice the signed area by the shoelace formula: positive clockwise on screen (y down), as
-    /// [`vectorcraft_geom::SubPath::signed_area`] counts it, halved.
+    /// The signed area (shoelace formula): positive clockwise on screen (y down), as
+    /// [`vectorcraft_geom::SubPath::signed_area`] counts it.
     pub fn signed_area(&self) -> f64 {
         let n = self.points.len();
         let mut a = 0.0;
