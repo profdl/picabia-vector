@@ -119,6 +119,24 @@ pub fn specs() -> Vec<CommandSpec> {
             has_selection,
             apply::apply
         ),
+        cmd!(
+            "modifier.duplicate",
+            "Duplicate Modifier",
+            [],
+            None,
+            "{ids?|id?, modifier?: id | index?} put a copy of the row right below it, with a fresh id, as one undo step → {modifier: the new id on the first object, duplicated: [{id, modifier}]}",
+            has_selection,
+            targets::duplicate
+        ),
+        cmd!(
+            query "modifier.targets",
+            "Copy to Shape Targets",
+            [],
+            None,
+            "{id?: the object (default: the first selected), modifier?: id | index?: a copyToShape row (also its target, valid, reason?)} → {id, targets: [{id, name, kind}] (the objects it can copy onto, in layer order)}",
+            has_doc,
+            targets::list_targets
+        ),
     ]
 }
 
@@ -169,7 +187,10 @@ fn edit(cmd: &str, label: &str, s: &mut Session, p: &Value, mut f: impl FnMut(&m
     s.edit(label, |doc, _| {
         for id in ids {
             let mut stack = read(cmd, doc, id)?;
+            let before = stack.clone();
             f(&mut stack, id)?;
+            // Copy-to-shape targets it sets or turns on.
+            targets::check_changed(cmd, doc, id, &before, &stack)?;
             write(cmd, doc, id, &stack)?;
         }
         Ok(())
@@ -379,7 +400,12 @@ fn remove_all(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 mod apply;
+mod targets;
+pub use targets::{check_target, target_choices};
+pub(crate) use targets::{remap_copies, remap_pasted};
 #[cfg(test)]
 mod apply_tests;
+#[cfg(test)]
+mod targets_tests;
 #[cfg(test)]
 mod tests;

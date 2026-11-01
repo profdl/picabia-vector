@@ -873,6 +873,7 @@ fn paste_clip(s: &mut Session, p: &Value, mode: PasteMode, clip: &Clipboard, cho
                 new_ids.push(d.insert(par, idx, c)?);
             }
         }
+        super::picabia_modifier::remap_pasted(d, &clip.nodes, &new_ids, same_doc); // PICABIA: copy-to-shape targets pasted along point at the copies
         sel.set(new_ids.iter().copied());
         // Pasted type arrives without the layout bounds cache: fill it so boxes and alignment are
         // right away (opening the file later would, but paste must not depend on a reopen).
@@ -956,6 +957,7 @@ pub(crate) fn copy_above(d: &mut Document, roots: &[NodeId], mut change: impl Fn
         }
         out
     };
+    super::picabia_modifier::remap_copies(d, roots, &out); // PICABIA: copy-to-shape targets copied along point at the copies
     super::typecmd::refresh_bounds_of(d, &out);
     Ok(out)
 }

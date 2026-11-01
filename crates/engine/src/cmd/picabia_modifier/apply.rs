@@ -148,6 +148,8 @@ fn bake(d: &mut Document, plan: Plan) -> Result<NodeId> {
     let mut kids = Vec::with_capacity(plan.copies.len());
     for (k, t) in plan.copies.iter().enumerate() {
         let mut c = d.reid(&node);
+        // Targets inside the object point at the ones inside this copy.
+        super::targets::remap_copy(&node, &mut c);
         if *t != Affine::IDENTITY {
             super::super::object::transform_node(&mut c, *t, sc, true);
         }

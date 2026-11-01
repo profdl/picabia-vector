@@ -64,7 +64,7 @@ pub(crate) mod pathops;
 mod patterncmds;
 pub mod pdfcmds;
 pub mod perspgrid;
-pub(crate) mod picabia_modifier; // PICABIA: modifier stack commands (registered below).
+pub mod picabia_modifier; // PICABIA: modifier stack commands (registered below).
 pub mod place;
 pub mod plugin;
 pub mod prefscmds;

@@ -274,6 +274,8 @@ fn every_modifier_command_documents_its_params() {
         ("modifier.list", vec!["id"]),
         ("modifier.remove_all", vec!["ids", "id"]),
         ("modifier.apply", vec!["ids", "id", "upTo"]),
+        ("modifier.duplicate", vec!["ids", "id", "modifier", "index"]),
+        ("modifier.targets", vec!["id", "modifier", "index"]),
     ] {
         let spec = crate::cmd::find_command(id).unwrap();
         assert_eq!(crate::cmd::params::doc_keys(spec.params).unwrap().keys, names, "{id}");

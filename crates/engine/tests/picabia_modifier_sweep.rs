@@ -79,6 +79,7 @@ fn modifier_commands_undo_exactly() {
         ("modifier.paste", json!({"replace": true})),
         ("modifier.remove_all", json!({})),
         ("modifier.apply", json!({})),
+        ("modifier.duplicate", json!({"index": 0})),
         ("modifier.apply", json!({"upTo": 0})),
     ];
     for (id, p) in cases {
