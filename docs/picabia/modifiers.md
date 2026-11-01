@@ -30,8 +30,13 @@ differences:
   separate Modifiers section). Evaluation rule: **Picabia rows run in their order, top first**, as
   below. A VectorCraft geometry effect **below** a copy row (an array, mirror, wallpaper or copy to
   shape) applies to **each copy**; one **above** it applies to the object **before** it is copied.
-  Until the interleaving is built, the simplest correct ordering that keeps this rule is shipped and
-  noted here.
+  Until the interleaving is built, the simplest correct ordering that keeps this rule is shipped:
+  the Picabia rows are one block in the list, between the fills and strokes and the object's own
+  effects, and every VectorCraft effect counts as below the copy rows (it draws on each copy; see
+  How copies are drawn). A row's eye turns it off, its disclosure shows its fields, its `⋯` menu
+  moves, duplicates, copies, pastes, removes it or applies the stack down to it; under the rows are
+  the evaluation's warnings and Apply. Add New Effect (`fx`) ▸ Modifiers and Object ▸ Modifiers
+  add each kind.
 - **No variable bindings.** picabia-craft's P6 bound modifier fields to FigCraft variables
   (`Node.bound`, `variable.bind`); there is no `bind.rs` here. P6 is replaced by the **parameters**
   design (number and text parameters in VectorCraft's Variables panel, with a parameter, expression
@@ -75,11 +80,41 @@ previous block, so `i = k * n_prev + i_prev` where `k` is the copy number within
 the total number of copies and `t = i / (n - 1)` (0 when `n = 1`) runs from 0 to 1 across them.
 `index`, `n` and `t` drive the progressive ramp, the randomize seed and per-copy expressions (below).
 
-## Export (when drawing is ported)
+## How copies are drawn (A4)
 
-SVG, PDF, PNG and the other raster exports draw the copies natively. Formats with no modifier stack
-(`.ai`, EPS and the like) bake the copies into a group, as Apply would, with an export warning.
-`.vectorcraft` files keep the stack in the foreign attribute.
+An object with an active stack draws as its **art**: a group that takes the object's place and
+identity and holds one copy per modifier instance (`vectorcraft_render::picabia::art`). Each copy is
+the object with its geometry transformed by the instance transform, as `modifier.apply` bakes it:
+strokes, effects, live corners and pattern tiles scale with the copy. The same art is what the
+canvas draws, what bounds, culling and dirty regions measure, what every vector export writes and
+what clicks, hover and marquees hit (a copy hits as its object).
+
+- **Effects on each copy.** The stack makes the copies from the object's geometry first; each copy
+  then draws with the object's fills, strokes and effects (geometry effects and raster effects such
+  as a drop shadow apply to each copy).
+- **Transparency once.** The object's opacity, blending mode, isolation and opacity mask apply once,
+  to all its copies together (as for Crop Marks): overlapping copies of a half-transparent object
+  don't darken each other. (picabia-craft composited each copy on its own.)
+- Members of a copied group keep their own stacks, within one budget (`MAX_NESTED_COPIES`, 10 000
+  objects drawn, the counts multiplied across nesting levels; past it the members draw once in each
+  copy). An object whose copies would clone more than 100 000 objects (`MAX_ART_NODES`, as
+  `modifier.apply`'s cap) draws once, and `modifier.list` says why.
+- Copies never knock each other out (members inside each copy still do, as the object says).
+- `modifier.apply` bakes exactly what is drawn: the same pivot, the copies inside a group that takes
+  the object's opacity, blending mode and opacity mask.
+- An object whose stack makes no copies (no active row, a single unmoved copy, a missing
+  copy-to-shape target) draws exactly as VectorCraft draws it without the stack.
+
+## Export
+
+Every vector export (SVG, PDF, print, EPS, DXF, EMF, WMF, legacy `.ai`, plug-in exporters) writes
+the copies as plain objects, each baked as any object is, with an export warning; PNG and the other
+raster exports draw them. **The written copies carry no stack**, so reading such a file back gives
+the copies as plain objects, never copies of copies. The live stack survives where the file carries
+VectorCraft's own document: the native `.vectorcraft` file (the foreign attribute), SVG and PDF
+saved with Preserve Editing, and an EPS that VectorCraft wrote. (picabia-craft's SVG never carried
+plugin data, so it had no such choice to make; writing the stack on the source next to its written
+copies would double them when the SVG is read back.)
 
 ## Parameters
 

@@ -87,6 +87,7 @@ pub fn changed(old: &Document, new: &Document) -> Changed {
     }
     let mut diff = Diff { old: old.symbol_boxes(), new: new.symbol_boxes(), area: None };
     diff.children(&old.layers, &new.layers);
+    diff.area = vectorcraft_geom::union_opt(diff.area, crate::picabia::dependents(old, new)); // PICABIA: copy-to-shape sources whose target changed
     diff.area.map_or(Changed::Nothing, Changed::Area)
 }
 

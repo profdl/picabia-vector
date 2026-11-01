@@ -444,10 +444,11 @@ pub fn encode_all(doc: &Document, format: &str, p: &Value) -> Result<Encoded> {
 fn encode_all_of(doc: &Document, format: &str, p: &Value) -> Result<Encoded> {
     let f = super::writable(C, Some(format), None)?;
     if let Some(plugin) = vectorcraft_plugins::export::by_format(f.id) {
-        return plugin_file(doc, &plugin, f, p);
+        return crate::cmd::picabia_modifier::baked_export(doc, |d| plugin_file(d, &plugin, f, p)); // PICABIA: the plug-in reads plain copies
     }
     let failed = vectorcraft_render::decode_failures();
     let mut enc = encode_files(doc, f, p)?;
+    crate::cmd::picabia_modifier::export_warning(doc, f, p, &mut enc.warnings); // PICABIA: copies written as plain objects
     // Baking, flattening and drawing stop early when cancelled and leave a truncated result.
     vectorcraft_doc::cancel::check()?;
     // An image the renderer couldn't decode draws nothing: say so rather than write a picture

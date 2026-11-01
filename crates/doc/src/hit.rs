@@ -8,6 +8,9 @@ use vectorcraft_geom::{BezPath, FillRule, Point, Rect};
 
 use crate::{AppearanceItem, Document, Node, NodeId, NodeKind, SymbolBoxes};
 
+mod picabia; // PICABIA: modifier copies hit as their object.
+pub use picabia::{CopyHooks, set_copies};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HitKind {
     Fill,
@@ -454,6 +457,7 @@ fn may_hit(parent: &Node, i: usize, c: &Node, p: Point, opt: HitOptions, symbols
     edits_contents(c)
         || c.extras().shaper.is_some() && source_of(c, opt.scope)
         || c.reach_bounds_with(symbols).is_none_or(|b| b.inflate(opt.tol, opt.tol).contains(p))
+        || picabia::holds_copies(symbols, c) // PICABIA: members' modifier copies reach past the container
 }
 
 /// Is the first child of `n` the isolated container `scope`?
@@ -517,6 +521,15 @@ fn hit_children(
     }
     for i in hit_order(parent, children, p) {
         let Some(c) = children.get(i) else { continue };
+        // PICABIA: an object with modifier copies is clicked as itself under each copy's transform.
+        if !shaper_hides(parent, i, opt.scope)
+            && let Some(found) = picabia::hit(symbols, c, p, opt, &mut |h, p, opt| hit_children(h, p, opt, symbols, skip, chain, editable_only))
+        {
+            match found {
+                Some(hit) => return Some(hit),
+                None => continue,
+            }
+        }
         if !may_hit(parent, i, c, p, opt, symbols, editable_only) || skip(c.id) {
             continue;
         }
@@ -722,6 +735,9 @@ pub fn marquee(doc: &Document, r: Rect, scope: Option<NodeId>, leaves: bool) -> 
     /// by the copies it draws, as clicks hit them. Objects of every other kind except paths,
     /// compound paths, layers and groups are touched by their box.
     fn touches(n: &Node, s: &SymbolBoxes, r: Rect, scope: Option<NodeId>) -> bool {
+        if let Some(copies) = picabia::copies(s, n) {
+            return touches(&copies, s, r, scope); // PICABIA: a marquee over a copy takes its object
+        }
         match &n.kind {
             NodeKind::Path { path, .. } => vectorcraft_geom::hit::intersects_rect(path, r),
             NodeKind::Layer { children, .. } | NodeKind::Group { children, .. } | NodeKind::Intertwine { children } => marquee_in(n, r)
@@ -737,6 +753,9 @@ pub fn marquee(doc: &Document, r: Rect, scope: Option<NodeId>, leaves: bool) -> 
         }
     }
     fn collect_leaves(n: &Node, s: &SymbolBoxes, r: Rect, scope: Option<NodeId>, out: &mut Vec<NodeId>) {
+        if picabia::leaves(s, n, out, &mut |c, out| collect_leaves(c, s, r, scope, out)) {
+            return; // PICABIA: Direct Selection's marquee takes the members of an object's copies
+        }
         match &n.kind {
             NodeKind::Layer { children, .. } | NodeKind::Group { children, .. } | NodeKind::Intertwine { children } => {
                 let Some(r) = marquee_in(n, r) else { return };

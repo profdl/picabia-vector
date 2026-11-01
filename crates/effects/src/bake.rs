@@ -48,7 +48,8 @@ fn clear_item_effects(item: &mut AppearanceItem) {
 
 /// Does anything in `n`'s subtree need baking?
 pub fn needs_bake(n: &Node) -> bool {
-    crate::has_revolve(n)
+    crate::picabia::has_copies(n) // PICABIA: modifier copies are written as plain objects
+        || crate::has_revolve(n)
         || crate::has_solid(n)
         || has_adjustment(n)
         || has_crop_marks(n)
@@ -94,6 +95,10 @@ fn bake_node(d: &mut Document, n: &Node) -> Option<Node> {
     // A cancelled export leaves the rest of the document as it is: the caller drops the result.
     if !needs_bake(n) || vectorcraft_doc::cancel::is_cancelled() {
         return None;
+    }
+    // PICABIA: an object with modifier copies is written as them, each baked as any object is.
+    if let Some(m) = crate::picabia::copies_art(d, n) {
+        return Some(bake_pieces(d, m));
     }
     // Colour adjustments: the object recoloured (inside it too), then baked as it is.
     if has_adjustment(n)

@@ -20,7 +20,9 @@ pub(super) fn hover_highlight(app: &VectorcraftApp, p: &egui::Painter, xf: &Xf) 
     }
     if let Some(n) = st.doc.node(id).filter(|n| !too_many_anchors([*n])) {
         let color = c32(st.doc.layer_color(id));
-        stroke_path(p, &node_outline(n, &st.doc.symbol_boxes()), xf, Stroke::new(1.5, color));
+        let outline = node_outline(n, &st.doc.symbol_boxes());
+        stroke_path(p, &outline, xf, Stroke::new(1.5, color));
+        super::picabia::copy_outlines(p, &st.doc, n, &outline, xf, Stroke::new(1.5, color)); // PICABIA: the hover outline on every copy
     }
 }
 
@@ -137,7 +139,9 @@ pub(super) fn selection_overlay(app: &mut VectorcraftApp, p: &egui::Painter, xf:
         // Path outlines (and area type / placed document / image / mesh / symbol outlines;
         // point type baselines and origin are drawn below).
         if !matches!(n.kind, NodeKind::Text(ref tx) if matches!(tx.kind, vectorcraft_doc::TextKind::Point)) {
-            stroke_path(p, &node_outline(n, &symbols), xf, Stroke::new(1.0, color));
+            let outline = node_outline(n, &symbols);
+            stroke_path(p, &outline, xf, Stroke::new(1.0, color));
+            super::picabia::copy_outlines(p, &st.doc, n, &outline, xf, Stroke::new(1.0, color.gamma_multiply(0.4))); // PICABIA: a faint outline on the copies
         }
         // Anchors (and handles for selected anchors in direct mode); a gradient mesh's or a mesh
         // envelope's points.

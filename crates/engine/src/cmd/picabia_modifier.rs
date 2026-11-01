@@ -52,6 +52,19 @@ impl PicabiaState {
     }
 }
 
+/// A selection to paste onto, and copied rows to paste (Object ▸ Modifiers ▸ Paste Modifiers).
+fn can_paste(s: &Session) -> std::result::Result<(), String> {
+    has_selection(s)?;
+    if s.picabia.copied_modifiers.is_empty() { Err("no copied modifiers".into()) } else { Ok(()) }
+}
+
+impl Session {
+    /// The modifier rows `modifier.copy` copied, for `modifier.paste` (the panel enables Paste by it).
+    pub fn picabia_copied_modifiers(&self) -> &[Value] {
+        &self.picabia.copied_modifiers
+    }
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -114,7 +127,7 @@ pub fn specs() -> Vec<CommandSpec> {
             [],
             None,
             "{ids?|id?, replace?: replace the stacks (default: add below the existing rows)} paste the rows modifier.copy copied onto each object, with fresh ids, as one undo step → {pasted}",
-            has_selection,
+            can_paste,
             paste
         ),
         cmd!(
@@ -459,9 +472,11 @@ fn list(s: &mut Session, p: &Value) -> Result<Value> {
                 .collect();
             out["modifiers"] = json!(rows);
             let targets = vectorcraft_modifiers::DocTargets::new(doc, id);
-            let o = vectorcraft_modifiers::evaluate_with(&stack, vectorcraft_modifiers::node_bounds(node), &targets);
+            let o = vectorcraft_modifiers::evaluate_with(&stack, vectorcraft_modifiers::node_bounds_in_doc(doc, node), &targets);
             out["instances"] = json!(o.instances.len());
-            out["warnings"] = json!(o.warnings.iter().map(|w| json!({"modifier": w.modifier, "message": w.message})).collect::<Vec<_>>());
+            let mut warnings: Vec<Value> = o.warnings.iter().map(|w| json!({"modifier": w.modifier, "message": w.message})).collect();
+            warnings.extend(vectorcraft_render::picabia::too_big(doc, node).map(|m| json!({"modifier": null, "message": m})));
+            out["warnings"] = json!(warnings);
         }
     }
     Ok(out)
@@ -488,16 +503,22 @@ fn remove_all(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 mod apply;
+mod export;
 mod laser;
 mod laser_design;
 pub mod laser_gcode;
 pub(crate) mod laser_run;
 mod stencil;
 mod targets;
+pub(crate) use export::{bake_copies, baked_export, export_warning};
 pub use targets::{check_target, target_choices};
 pub(crate) use targets::{remap_copies, remap_pasted, snapshot};
 #[cfg(test)]
 mod apply_tests;
+#[cfg(test)]
+mod canvas_tests;
+#[cfg(test)]
+mod export_tests;
 #[cfg(test)]
 mod laser_tests;
 #[cfg(test)]

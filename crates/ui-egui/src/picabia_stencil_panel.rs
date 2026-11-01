@@ -11,6 +11,8 @@
 //! cloth and their colours); then the stats line, one row per kind of problem (each click shows
 //! the next one on the canvas) and Export for Laser… / Test Card… / Laser….
 
+use std::sync::Arc;
+
 use egui::{Color32, Id, Pos2, Shape, Stroke, Ui, vec2};
 use serde_json::{Value, json};
 use vectorcraft_doc::NodeId;
@@ -382,12 +384,39 @@ impl Edits {
     }
 }
 
+/// What [`stencil_section`] reads: `modifier.list` and the stencil's [`Info`].
+type Section = (Value, Option<Info>);
+/// [`Section`] kept by document (uid, revision, address), stencil store generation and object.
+type KeptSection = ((u64, u64, usize, u64, u64), Arc<Section>);
+
+/// `node`'s section data, read again only when the document, its stencil results or the object
+/// change (not every frame while the row is open).
+fn kept_section(app: &mut VectorcraftApp, ctx: &egui::Context, node: NodeId) -> Arc<Section> {
+    let key = app
+        .session
+        .active()
+        .map(|st| (st.uid, st.revision, Arc::as_ptr(&st.doc) as usize, vectorcraft_engine::picabia_stencil::generation(), node.0));
+    if let Some(key) = key
+        && let Some((k, v)) = crate::panels::pstate::<Option<KeptSection>>(ctx, "picabia-stencil-section")
+        && k == key
+    {
+        return v;
+    }
+    let list = app.session.execute("modifier.list", &json!({"id": node.0})).unwrap_or(Value::Null);
+    let v = Arc::new((list, info_of(app, node)));
+    if let Some(key) = key {
+        crate::panels::set_pstate::<Option<KeptSection>>(ctx, "picabia-stencil-section", Some((key, v.clone())));
+    }
+    v
+}
+
 /// Object `node`'s stencil settings and what it came to (the Appearance panel's stencil row and
 /// the Stencil window call this). An object without a stencil row offers to make one.
 pub fn stencil_section(ui: &mut Ui, app: &mut VectorcraftApp, node: NodeId) {
     let t = Tokens::get(ui.ctx());
-    let list = app.session.execute("modifier.list", &json!({"id": node.0})).unwrap_or(Value::Null);
-    let Some(row) = stencil_row(&list) else {
+    let kept = kept_section(app, ui.ctx(), node);
+    let (list, info) = (&kept.0, &kept.1);
+    let Some(row) = stencil_row(list) else {
         wrapped(ui, tl!("This object isn't a stencil. Make Stencil turns the selection into a laser-cut stencil sheet."), t.text_dim);
         ui.add_space(4.0);
         if button(ui, "Make Stencil", true, true) {
@@ -395,7 +424,6 @@ pub fn stencil_section(ui: &mut Ui, app: &mut VectorcraftApp, node: NodeId) {
         }
         return;
     };
-    let info = info_of(app, node);
     let mut e = Edits::default();
     colours_group(ui, &row, info.as_ref(), &mut e);
     size_group(ui, &row, info.as_ref(), &mut e);

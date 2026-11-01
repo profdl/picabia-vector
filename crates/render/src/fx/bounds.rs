@@ -246,6 +246,11 @@ pub(crate) fn cull_bounds(symbols: &SymbolBoxes, n: &Node) -> Option<Rect> {
 /// linear part.
 fn cull_bounds_in(symbols: &SymbolBoxes, n: &Node, after_reshape: bool) -> Option<Rect> {
     let inner = |c: &Node| cull_bounds_in(symbols, c, after_reshape);
+    // PICABIA: an object with modifier copies reaches as far as they do; one whose stack makes no
+    // copies is measured as itself.
+    if let Some(art) = crate::picabia::bounds_art(symbols.document(), n) {
+        return inner(&art);
+    }
     match &n.kind {
         // The object and its crop marks.
         _ if effects::has_crop_marks(n) => effects::crop_marks_art(n).and_then(|art| inner(&art)),
