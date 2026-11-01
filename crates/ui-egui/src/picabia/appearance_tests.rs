@@ -64,7 +64,7 @@ fn the_rows_sit_in_the_appearance_list_with_the_copies_and_apply() {
 #[test]
 fn an_open_row_edits_its_fields_through_modifier_set() {
     let (mut app, ctx, id) = arrayed();
-    set_pstate(&ctx, "pc-open-0", true);
+    set_pstate(&ctx, &format!("pc-open-{id}-m1"), true);
     let shown = texts(&mut app, &ctx);
     for label in ["Copies", "Offset X", "Offset Y", "Rotate each", "Scale each"] {
         assert!(shown.iter().any(|s| s == label), "{label}: {shown:?}");
@@ -101,7 +101,11 @@ fn object_modifiers_menu_lists_every_kind_and_the_stack_commands() {
             _ => None,
         })
         .collect();
-    assert_eq!(ids.iter().filter(|(id, _)| *id == "modifier.add").count(), 8);
+    assert_eq!(
+        ids.iter().filter(|(id, _)| *id == "modifier.add").count(),
+        super::appearance::KINDS.len(),
+        "the same kinds as Add New Effect ▸ Modifiers"
+    );
     for id in ["modifier.apply", "modifier.remove_all", "modifier.copy", "modifier.paste"] {
         assert!(ids.iter().any(|(i, _)| *i == id), "{id}");
         assert!(vectorcraft_engine::cmd::find_command(id).is_some());
@@ -109,4 +113,59 @@ fn object_modifiers_menu_lists_every_kind_and_the_stack_commands() {
     let tree = crate::menus::menu_tree();
     let object = tree.iter().find(|(t, _)| *t == "Object").unwrap();
     assert!(object.1.iter().any(|i| matches!(i, crate::menus::Item::Sub("Modifiers", _))));
+}
+
+/// Two selected objects with the same kinds: one set of rows, and an edit reaches both.
+#[test]
+fn a_two_object_selection_edits_both_or_shows_mixed() {
+    let (mut app, ctx, a) = arrayed();
+    let b = app.run("shape.rectangle", json!({"x": 0, "y": 100, "width": 20, "height": 20})).unwrap()["id"].as_u64().unwrap();
+    app.run("modifier.add", json!({"ids": [b], "kind": "linearArray", "props": {"count": 3}})).unwrap();
+    app.run("select.set", json!({"ids": [a, b]})).unwrap();
+    let shown = texts(&mut app, &ctx);
+    assert!(shown.iter().any(|s| s == "Linear Array"), "{shown:?}");
+    // Turning the row off through the panel's command reaches both objects.
+    set_pstate(&ctx, &format!("pc-open-{a}-m1"), true);
+    assert!(texts(&mut app, &ctx).iter().any(|s| s == "Copies"));
+    app.run("modifier.toggle", json!({"ids": [a, b], "index": 0, "enabled": false})).unwrap();
+    let st = app.session.active().unwrap();
+    for id in [a, b] {
+        let n = st.doc.node(vectorcraft_doc::NodeId(id)).unwrap();
+        assert!(!vectorcraft_modifiers::node_stack(n).unwrap().unwrap().modifiers[0].enabled);
+    }
+    // Different kinds: Mixed. The first selected object without a stack: Mixed too.
+    app.run("modifier.add", json!({"ids": [b], "kind": "mirror"})).unwrap();
+    app.run("select.set", json!({"ids": [a, b]})).unwrap();
+    assert!(texts(&mut app, &ctx).iter().any(|s| s == "Modifiers: Mixed"));
+    let plain = app.run("shape.rectangle", json!({"x": 100, "y": 100, "width": 20, "height": 20})).unwrap()["id"].as_u64().unwrap();
+    app.run("select.set", json!({"ids": [plain, b]})).unwrap();
+    assert!(texts(&mut app, &ctx).iter().any(|s| s == "Modifiers: Mixed"));
+}
+
+/// A row's open state follows its modifier, not its position: moving the rows keeps it open.
+#[test]
+fn an_open_row_stays_open_when_rows_move_or_go() {
+    let (mut app, ctx, id) = arrayed();
+    app.run("modifier.add", json!({"ids": [id], "kind": "mirror", "index": 0})).unwrap();
+    // The linear array (m1) is open, now the second row.
+    set_pstate(&ctx, &format!("pc-open-{id}-m1"), true);
+    assert!(texts(&mut app, &ctx).iter().any(|s| s == "Copies"));
+    app.run("modifier.move", json!({"ids": [id], "from": 1, "to": 0})).unwrap();
+    assert!(texts(&mut app, &ctx).iter().any(|s| s == "Copies"), "still open after the move");
+    app.run("modifier.remove", json!({"ids": [id], "index": 1})).unwrap();
+    assert!(texts(&mut app, &ctx).iter().any(|s| s == "Copies"), "still open after removing the mirror");
+    assert!(!texts(&mut app, &ctx).iter().any(|s| s == "Axis"), "the mirror's fields never opened");
+}
+
+/// The panel says why an object draws once, first, as the canvas does.
+#[test]
+fn the_panel_says_when_an_object_draws_once() {
+    let (mut app, ctx, _) = arrayed();
+    let kids: Vec<u64> =
+        (0..200).map(|i| app.run("shape.rectangle", json!({"x": i, "y": 300, "width": 1, "height": 1})).unwrap()["id"].as_u64().unwrap()).collect();
+    let g = app.run("object.group", json!({"ids": kids})).unwrap()["id"].as_u64().unwrap();
+    app.run("modifier.add", json!({"ids": [g], "kind": "linearArray", "props": {"count": 1000}})).unwrap();
+    app.run("select.set", json!({"ids": [g]})).unwrap();
+    let shown = texts(&mut app, &ctx);
+    assert!(shown.iter().any(|s| s.contains("drawn once")), "{shown:?}");
 }

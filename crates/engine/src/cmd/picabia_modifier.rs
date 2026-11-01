@@ -52,6 +52,12 @@ impl PicabiaState {
     }
 }
 
+/// A selection to paste onto, and copied rows to paste (Object ▸ Modifiers ▸ Paste Modifiers).
+fn can_paste(s: &Session) -> std::result::Result<(), String> {
+    has_selection(s)?;
+    if s.picabia.copied_modifiers.is_empty() { Err("no copied modifiers".into()) } else { Ok(()) }
+}
+
 impl Session {
     /// The modifier rows `modifier.copy` copied, for `modifier.paste` (the panel enables Paste by it).
     pub fn picabia_copied_modifiers(&self) -> &[Value] {
@@ -121,7 +127,7 @@ pub fn specs() -> Vec<CommandSpec> {
             [],
             None,
             "{ids?|id?, replace?: replace the stacks (default: add below the existing rows)} paste the rows modifier.copy copied onto each object, with fresh ids, as one undo step → {pasted}",
-            has_selection,
+            can_paste,
             paste
         ),
         cmd!(

@@ -18,6 +18,7 @@ pub fn object_items() -> Vec<Item> {
         add("Copy to Shape", "copyToShape"),
         add("Transform Each", "transformEach"),
         add("Randomize", "randomize"),
+        add("Stencil", "stencil"),
         Item::Sep,
         Item::Cmd("Apply Modifiers", "modifier.apply", serde_json::Value::Null),
         Item::Cmd("Remove All Modifiers", "modifier.remove_all", serde_json::Value::Null),
