@@ -65,6 +65,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("scriptcheck", Class::Standalone),
     // PICABIA: modifier stacks (geom, doc)
     ("modifiers", Class::Layer(2)),
+    // PICABIA: stencil geometry and laser export (geom, color, doc, pathops, modifiers)
+    ("stencil", Class::Layer(3)),
 ];
 
 /// Explicit orderings *within* a layer (earlier may be used by later).

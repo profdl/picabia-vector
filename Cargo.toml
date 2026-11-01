@@ -53,6 +53,8 @@ vectorcraft-affinity = { path = "crates/affinity" }
 vectorcraft-scriptcheck = { path = "crates/scriptcheck" }
 # PICABIA: modifier stacks (L2)
 vectorcraft-modifiers = { path = "crates/modifiers" }
+# PICABIA: stencil geometry and laser export (L3)
+vectorcraft-stencil = { path = "crates/stencil" }
 
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }
