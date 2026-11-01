@@ -21,10 +21,12 @@ use crate::{EngineError, Result, Session};
 const KIND_LIST: &str = "linearArray|circularArray|gridArray|mirror|transformEach|randomize|wallpaper|copyToShape|stencil";
 
 /// Picabia's state in a [`Session`] (its `picabia` field), not saved.
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub(crate) struct PicabiaState {
     /// The modifier rows `modifier.copy` copied (each one modifier object), for `modifier.paste`.
     pub(crate) copied_modifiers: Vec<Value>,
+    /// The laser link (`laser.*`, [`super::picabia_laser_link`]); dropping it stops a running job.
+    pub(crate) laser: super::picabia_laser_link::LaserLink,
 }
 
 pub fn specs() -> Vec<CommandSpec> {
