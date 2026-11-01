@@ -59,7 +59,7 @@ differences:
   wherever their row sits in the stack: each copy gets its own values, and `i`/`n` count all the
   copies. (Their position among the arrays doesn't change the result; their order among
   themselves does.)
-- **Geometry steps** (resample, trim, tidy; PIC20) change paths instead of placing copies. A
+- **Geometry steps** (resample, trim, tidy, deform; PIC20) change paths instead of placing copies. A
   geometry step **above every copy step** (array or per-instance) changes the object itself before
   it is copied: every copy is a copy of the changed object. A geometry step **below a copy step**
   runs on **each finished copy, after its transform**, in document space, in stack order (whether
@@ -357,7 +357,7 @@ read too; they are written lowercase).
 Numbers outside their range are clamped when evaluating (a warning names the field); a colour that
 doesn't read takes its default. `cutColours` can't be bound to a variable.
 
-### Geometry rows: resample, trim, tidy (PIC20)
+### Geometry rows: resample, trim, tidy, deform (PIC20)
 
 Ported from tlprocedural (the owner's TypeScript app): its Subdivide and Rebuild Points become
 **Resample**, Trim Path becomes **Trim**, Close Path and Sort Points become **Tidy** (the owner's
@@ -407,6 +407,72 @@ straight line, as anywhere in VectorCraft (tlprocedural's trims drew no fill).
 | `reverse` | on/off | | off | Reverse the order; with `sort: none`, the subpath's direction (curves kept) |
 | `seed` | | 0 to 999999 | 1 | `sort: random` only |
 
+#### deform
+
+Ported from tlprocedural's Deform category (its Taper, Twist, Bend, Shear and Bulge/Pinch
+modifiers, `src/store/modifiers/core/*ModifierProcessor.ts`, ranges and defaults from
+`registry/distortionDefinitions.ts` and `modifierConfig.ts`) as **one row with a `mode`** (the
+owner's one-block rows). Wave and Noise, in the same tlprocedural category, belong to the Displace
+row (PIC20.4); Attractor Field isn't ported.
+
+| Field | Unit | Range | Default | Used by | Meaning |
+|---|---|---|---|---|---|
+| `mode` | choice | `taper`, `twist`, `bend`, `shear`, `bulge` | `taper` | | Which deformation |
+| `axis` | choice | `horizontal`, `vertical` | `horizontal` | taper, twist, bend | The axis it runs along |
+| `falloff` | choice | `linear`, `easeIn`, `easeOut`, `smooth` | `linear` | taper, twist, bulge | How it eases: `t`, `t²`, `1 − (1 − t)²`, smoothstep. Taper and Twist ease along the axis (Twist from the middle out to each end); Bulge fades from its centre (1) to its radius (0) through the curve |
+| `startScale` | factor | 0.1 to 3 | 1 | taper | The scale across the axis at its start (the panel shows %) |
+| `endScale` | factor | 0.1 to 3 | 0.2 | taper | At its end |
+| `angle` | degrees | −720 to 720 | 90 | twist | Between the two ends: the start of the axis turns −angle/2 about the box's centre, its end +angle/2, the middle not at all |
+| `bendAngle` | degrees | −360 to 360 | 45 | bend | Every point turns about the bend point by `bendAngle` × (its fraction along the axis − `bendPoint`) |
+| `bendPoint` | fraction | 0 to 1 | 0.5 | bend | Where along the axis it pivots (on the box's middle line) |
+| `shearX` | factor | −2 to 2 | 0.3 | shear | x moves by `shearX` × the distance below the origin |
+| `shearY` | factor | −2 to 2 | 0 | shear | y moves by `shearY` × the distance right of the origin |
+| `origin` | choice | `center`, `topLeft`, `bottomLeft`, `topRight`, `bottomRight` | `center` | shear | The point that stays |
+| `strength` | factor | −3 to 3 | 0.35 | bulge | Each point within the radius moves out from the centre by strength × extent × ½ × falloff (negative pinches in); the extent is how far the shape reaches from the centre |
+| `radius` | factor | 0.01 to 2 | 1 | bulge | How far it reaches, a fraction of the extent (1 reaches the farthest point; the size of the push doesn't depend on it) |
+| `progressive` | on/off | | on | all | Ramp across the copies made above the row: the first copy gets none of the effect, the last `progressiveAmount` of it, evenly between (by the copy's index over all the copies) |
+| `progressiveAmount` | fraction | 0 to 1 | 1 | all, ramp on | |
+| `progressiveReverse` | on/off | | off | all, ramp on | The first copy gets the most |
+
+The ramp scales Taper's end scale towards its start scale, and the angles, the shears and the
+strength. Above every copy row (on the object) and with one copy the whole effect is applied.
+
+**Each copy in its own box and frame.** Below a copy row each copy is deformed within its own
+bounds, read in its own frame: the copy's rotation (from its instance transform) is taken out
+first and put back after, so the copies of a circular array each taper along their own axis, as
+tlprocedural's do (it deformed each copy before rotating it). A group is deformed as one box.
+
+**Curves stay curves.** Shear is affine: anchors and handles move exactly and no anchors are added.
+The others split each segment into pieces at most the box's diagonal ÷ 32 long (64 per segment at
+most) and map their control points, VectorCraft's own distort-effect method
+(`vectorcraft_doc::live::map_nonlinear_within`), so a rectangle's straight sides bend smoothly. The
+pieces fit the anchor cap: where they would pass the copy's share, they grow longer (a coarser
+curve) instead of the row being skipped. A copy the ramp gives nothing (and any deform that moves
+nothing) keeps its anchors. A box smaller than 0.001 pt both ways (Taper, Twist), an axis shorter
+than that (Taper, Twist, Bend) or a shape that reaches less than that from its centre (Bulge) is
+left alone.
+
+Differences from tlprocedural, on purpose:
+- tlprocedural flattened every shape to a polygon (Bézier paths sampled every 6 px, a rectangle
+  kept as its 4 corners, so a taper or twist of a rectangle only moved its corners) and wrote
+  straight segments; here curves are mapped and straight sides are split, so they bend.
+- Its box was the polygon's bounds; here it is the curve's true bounds.
+- Bulge's centre is the box's centre; tlprocedural averaged the polygon's vertices, which moves
+  with how densely each side happens to be sampled. Its extent is measured on the curve (anchors
+  and 15 points along each segment) rather than the polygon's vertices.
+- One `falloff` serves the three modes that ease (tlprocedural had three lists: Taper's linear,
+  ease-in, ease-out, "smooth"; Twist's linear, ease-in, ease-out, ease-in-out; Bulge's linear,
+  smooth, sharp). Taper's "smooth" and Twist's "ease-in-out" are the same smoothstep (`smooth`
+  here); Bulge's "sharp" is `easeIn`; Bulge gains `easeOut`. Bulge defaulted to "smooth" in
+  tlprocedural; the shared default here is `linear`.
+- Bulge's `radius` is a factor (1 = 100%) like Picabia's other percentages; tlprocedural stored the
+  percentage (1 to 200). Its smallest radius, 1%, is kept.
+- The ramp uses the copy's index among all the copies of the stack above (tlprocedural used the
+  most recent array's own index), and copy 0 is the original, as in tlprocedural.
+- Bend keeps tlprocedural's maths (each point turned about the bend point by an angle that grows
+  with its distance along the axis), which bends a long shape into a curve that tightens towards
+  its ends rather than a circular arc; at the default 45° the two look alike.
+
 #### What geometry rows change
 
 - Paths, the members of compound paths and the paths inside groups. A live shape (rectangle,
@@ -417,7 +483,8 @@ straight line, as anywhere in VectorCraft (tlprocedural's trims drew no fill).
   (`MAX_GEOMETRY_ANCHORS`): each copy may hold its share (200 000 ÷ copies). A row that would make
   more, and more than it was given, is skipped for that copy, with a note; so is a row that gives a
   point that isn't finite. Trim and Tidy never make more anchors than they are given (a cut adds
-  at most two), so they are never skipped. Nesting doesn't multiply the cap: when the members of a
+  at most two), so they are never skipped; nor is Deform, which fits its pieces in the copy's share
+  (longer pieces when it must). Nesting doesn't multiply the cap: when the members of a
   copied object have geometry rows whose anchors, times the object's copies, pass 200 000, the
   members draw without their modifiers in each copy (with a note). `modifier.apply` returns what a
   row couldn't do as `warnings` (a skipped row's reshape isn't in the baked copies). Catmull-Rom and

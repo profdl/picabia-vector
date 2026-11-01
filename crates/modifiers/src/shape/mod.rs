@@ -1,5 +1,5 @@
 //! Geometry rows: modifiers that change the object's paths instead of placing copies
-//! (`resample`, `trim`, `tidy`).
+//! (`resample`, `trim`, `tidy`, `deform`).
 //!
 //! # Where they run
 //! Rows run top to bottom. A geometry row above every copy row (arrays, mirror, wallpaper, copy
@@ -22,6 +22,9 @@
 //! than it was given) is skipped for that copy, with a note; so is one that gives a point that
 //! isn't finite. Nothing here panics.
 
+mod deform;
+#[cfg(test)]
+mod deform_tests;
 mod pieces;
 mod resample;
 #[cfg(test)]
@@ -36,7 +39,7 @@ use vectorcraft_geom::{PathData, SubPath};
 
 use crate::eval::Output;
 use crate::kinds::Clamp;
-use crate::model::{ModifierKind, Resample, Tidy, Trim};
+use crate::model::{Deform, ModifierKind, Resample, Tidy, Trim};
 
 /// The most anchors the geometry rows make for one object, all its copies together.
 pub const MAX_GEOMETRY_ANCHORS: usize = 200_000;
@@ -47,6 +50,7 @@ pub enum GeometryOp {
     Resample(Resample),
     Trim(Trim),
     Tidy(Tidy),
+    Deform(Deform),
 }
 
 impl GeometryOp {
@@ -56,6 +60,7 @@ impl GeometryOp {
             GeometryOp::Resample(_) => "Resample",
             GeometryOp::Trim(_) => "Trim",
             GeometryOp::Tidy(_) => "Tidy",
+            GeometryOp::Deform(_) => "Deform",
         }
     }
 }
@@ -102,6 +107,19 @@ pub(crate) fn clamped(kind: &ModifierKind) -> Option<(GeometryOp, Vec<String>)> 
             p.seed = whole(&mut c, "seed", p.seed, 0, 999_999);
             GeometryOp::Tidy(p)
         }
+        ModifierKind::Deform(p) => GeometryOp::Deform(Deform {
+            start_scale: c.within("startScale", p.start_scale, 0.1, 3.0, 1.0),
+            end_scale: c.within("endScale", p.end_scale, 0.1, 3.0, 0.2),
+            angle: c.within("angle", p.angle, -720.0, 720.0, 90.0),
+            bend_angle: c.within("bendAngle", p.bend_angle, -360.0, 360.0, 45.0),
+            bend_point: c.within("bendPoint", p.bend_point, 0.0, 1.0, 0.5),
+            shear_x: c.within("shearX", p.shear_x, -2.0, 2.0, 0.3),
+            shear_y: c.within("shearY", p.shear_y, -2.0, 2.0, 0.0),
+            strength: c.within("strength", p.strength, -3.0, 3.0, 0.35),
+            radius: c.within("radius", p.radius, 0.01, 2.0, 1.0),
+            progressive_amount: c.within("progressiveAmount", p.progressive_amount, 0.0, 1.0, 1.0),
+            ..p.clone()
+        }),
         _ => return None,
     };
     Some((op, warnings))
@@ -123,6 +141,8 @@ fn whole(c: &mut Clamp<'_>, name: &str, v: u32, lo: u32, hi: u32) -> u32 {
 /// ```
 pub struct Shaper<'a> {
     rows: &'a [GeometryRow],
+    /// The copies, for a row that varies by copy (Deform's ramp and frame).
+    instances: &'a [crate::Instance],
     /// The anchors one copy may hold after a row that adds anchors.
     budget: usize,
     /// What went wrong, each said once.
@@ -133,7 +153,7 @@ impl<'a> Shaper<'a> {
     /// A shaper for `out`'s rows, the budget shared by its copies.
     pub fn new(out: &'a Output) -> Shaper<'a> {
         let copies = out.instances.len().max(1);
-        Shaper { rows: &out.geometry, budget: MAX_GEOMETRY_ANCHORS / copies, notes: Vec::new() }
+        Shaper { rows: &out.geometry, instances: &out.instances, budget: MAX_GEOMETRY_ANCHORS / copies, notes: Vec::new() }
     }
 
     /// Whether there is anything to run.
@@ -143,19 +163,51 @@ impl<'a> Shaper<'a> {
 
     /// Run the rows above the copy rows on `n`, the object before it is copied.
     pub fn source(&mut self, n: &mut Node) {
-        self.run(n, RowAt::Source);
+        self.run(n, RowAt::Source, None);
     }
 
-    /// Run the rows below a copy row on `n`, one copy after its transform.
+    /// Run the rows below a copy row on `n`, one copy after its transform, as if it were the only
+    /// copy (no ramp, deformed in document axes); [`Shaper::copy_at`] knows which copy it is.
     pub fn copy(&mut self, n: &mut Node) {
-        self.run(n, RowAt::Copies);
+        self.run(n, RowAt::Copies, None);
     }
 
-    fn run(&mut self, n: &mut Node, at: RowAt) {
+    /// Run the rows below a copy row on `n`, copy `index` of [`Output::instances`] after its
+    /// transform: a Deform ramps across the copies and bends each in its own frame.
+    pub fn copy_at(&mut self, n: &mut Node, index: usize) {
+        self.run(n, RowAt::Copies, Some(index));
+    }
+
+    fn run(&mut self, n: &mut Node, at: RowAt, copy: Option<usize>) {
         let rows = self.rows;
         for row in rows.iter().filter(|r| r.at == at) {
-            self.row(n, row);
+            match &row.op {
+                GeometryOp::Deform(p) => self.deform(n, p, copy),
+                _ => self.row(n, row),
+            }
         }
+    }
+
+    /// A Deform row on `n`: copy `copy` (ramped, in its frame) or the object. It fits its pieces
+    /// in the budget itself, so it is never skipped for anchors.
+    fn deform(&mut self, n: &mut Node, p: &Deform, copy: Option<usize>) {
+        let instance = copy.and_then(|i| self.instances.get(i));
+        let p = deform::scaled(p, deform::ramp(p, copy.map(|i| (i, self.instances.len()))));
+        let frame = instance.map_or(vectorcraft_geom::Affine::IDENTITY, |i| deform::frame_of(i.transform));
+        let Some((b, extent)) = deform::measure(n, &p, frame) else { return };
+        let Some(m) = deform::map(&p, b, extent) else { return };
+        let room = deform::Room { room: self.budget.saturating_sub(anchors(n, 0)), segments: deform::segments(n, 0) };
+        let mut changed = n.clone();
+        let mut skipped = false;
+        deform::apply_node(&mut changed, &m, frame, &room, 0, &mut skipped);
+        if skipped {
+            self.note("Deform changes paths only: type, images, symbols and live objects are drawn as they are".into());
+        }
+        if !finite(&changed, 0) {
+            self.note("Deform gave points that aren't finite numbers; it is skipped".into());
+            return;
+        }
+        *n = changed;
     }
 
     fn note(&mut self, s: String) {
@@ -218,6 +270,8 @@ fn projected(n: &Node, op: &GeometryOp, depth: usize) -> usize {
                 // through a closed path's start, its first anchor once more) and a tidy none:
                 // counted as what they were given, so they are never refused.
                 GeometryOp::Trim(_) | GeometryOp::Tidy(_) => sp.anchors.len(),
+                // A deform fits its pieces in the room it is given (`Shaper::deform`).
+                GeometryOp::Deform(_) => sp.anchors.len(),
             })
             .fold(0usize, usize::saturating_add),
         NodeKind::Group { children, .. } | NodeKind::Layer { children, .. } | NodeKind::Compound { children, .. } => {
@@ -252,12 +306,17 @@ fn apply(n: &mut Node, op: &GeometryOp, depth: usize, skipped: &mut bool) {
 
 /// `path` after `op`, `None` when nothing changes.
 fn shaped(path: &PathData, op: &GeometryOp) -> Option<PathData> {
+    // A deform reads the whole path's box, not each subpath's.
+    if let GeometryOp::Deform(p) = op {
+        return deform::deform_path(path, p);
+    }
     let mut changed = false;
     let mut subpaths: Vec<SubPath> = Vec::with_capacity(path.subpaths.len());
     for sp in &path.subpaths {
         let new = match op {
             GeometryOp::Resample(p) => resample::resample(sp, p),
             GeometryOp::Tidy(p) => tidy::tidy(sp, p),
+            GeometryOp::Deform(_) => None,
             GeometryOp::Trim(p) => match trim::trim(sp, p) {
                 trim::Trimmed::Whole => None,
                 trim::Trimmed::Part(t) => Some(t),
@@ -306,13 +365,14 @@ pub fn shaped_copies(n: &Node, out: &Output) -> (Vec<Node>, Vec<String>) {
     let copies = out
         .instances
         .iter()
-        .filter(|i| i.transform.is_finite())
-        .map(|i| {
+        .enumerate()
+        .filter(|(_, i)| i.transform.is_finite())
+        .map(|(k, i)| {
             let mut c = object.clone();
             if i.transform != vectorcraft_geom::Affine::IDENTITY {
                 c.transform(i.transform, true);
             }
-            shaper.copy(&mut c);
+            shaper.copy_at(&mut c, k);
             c
         })
         .collect();

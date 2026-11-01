@@ -62,7 +62,7 @@ pub struct Output {
     /// or `randomize` row anywhere: those vary every copy). `None` otherwise, without a warning; a
     /// stencil with `output: tile` then evaluates as `sheet`, with a warning.
     pub repeat: Option<Repeat>,
-    /// The enabled geometry rows (`resample`, `trim`, `tidy`), in stack order, each with where it
+    /// The enabled geometry rows (`resample`, `trim`, `tidy`, `deform`), in stack order, each with where it
     /// runs: on the object before it is copied, or on every copy after its transform
     /// ([`crate::shape`]). Empty: the copies are the object's geometry, transformed.
     pub geometry: Vec<GeometryRow>,

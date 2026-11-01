@@ -500,3 +500,31 @@ fn nested_geometry_rows_stay_under_the_anchor_cap() {
         assert_eq!(notes(&d, n).iter().any(|s| s.contains("members")), stripped, "{:?}", notes(&d, n));
     }
 }
+
+/// A taper (end scale 20%) below a three-copy array, ramped: the first copy as it was, the second
+/// half tapered, the last fully.
+#[test]
+fn a_deform_below_an_array_ramps_across_the_copies() {
+    let (mut d, r) = doc();
+    let src = r#"{"v":1,"stack":[{"id":"a","kind":"linearArray","count":3,"offsetX":40},{"id":"t","kind":"deform","mode":"taper"}]}"#;
+    set_stack(&mut d, r, Some(src));
+    let pix = render(&d, Rect::new(0.0, 0.0, 140.0, 40.0));
+    assert_eq!(px(&pix, 28, 12), RED, "the first copy's corner: untouched");
+    // Near the right end (90% along): ×0.64 on the second copy, ×0.28 on the last, about y = 20.
+    assert_eq!(px(&pix, 68, 15), RED, "the second copy, within ±6.4");
+    assert_eq!(px(&pix, 68, 12), WHITE, "the second copy, past ±6.4");
+    assert_eq!(px(&pix, 108, 15), WHITE, "the last copy, past ±2.8");
+    assert_eq!(px(&pix, 108, 20), RED, "the last copy's middle");
+    assert!(notes(&d, d.node(r).unwrap()).is_empty());
+}
+
+/// A shear alone (50%, about the centre) draws the slanted object.
+#[test]
+fn a_deform_alone_draws_the_deformed_object() {
+    let (mut d, r) = doc();
+    set_stack(&mut d, r, Some(r#"{"v":1,"stack":[{"id":"s","kind":"deform","mode":"shear","shearX":0.5}]}"#));
+    let pix = render(&d, Rect::new(0.0, 0.0, 40.0, 40.0));
+    assert_eq!(px(&pix, 8, 11), RED, "the top moved left");
+    assert_eq!(px(&pix, 28, 11), WHITE, "and away from the right");
+    assert_eq!(px(&pix, 32, 28), RED, "the bottom moved right");
+}
