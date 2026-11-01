@@ -58,9 +58,20 @@ pub fn node_stack(node: &Node) -> Option<Result<Arc<Stack>, ModError>> {
 
 /// `node`'s geometric bounding box in document space, whose centre is the modifiers' pivot. A node
 /// with no geometry (an empty group) or non-finite bounds reads as the empty rectangle at the
-/// origin.
+/// origin. Without the document a symbol instance is measured as VectorCraft's 20 × 20 stand-in
+/// square: [`node_bounds_in_doc`] measures its art.
 pub fn node_bounds(node: &Node) -> Rect {
-    node.geometric_bounds().filter(|r| r.x0.is_finite() && r.y0.is_finite() && r.x1.is_finite() && r.y1.is_finite()).unwrap_or(Rect::ZERO)
+    finite_or_zero(node.geometric_bounds())
+}
+
+/// [`node_bounds`] with symbol instances measured by their symbol's art in `doc`, as the selection
+/// box is.
+pub fn node_bounds_in_doc(doc: &Document, node: &Node) -> Rect {
+    finite_or_zero(node.geometric_bounds_with(&doc.symbol_boxes()))
+}
+
+fn finite_or_zero(r: Option<Rect>) -> Rect {
+    r.filter(|r| r.x0.is_finite() && r.y0.is_finite() && r.x1.is_finite() && r.y1.is_finite()).unwrap_or(Rect::ZERO)
 }
 
 /// [`evaluate_node_in`] with [`node_bounds`].
@@ -86,7 +97,10 @@ pub fn evaluate_node_with(node: &Node, bounds: Rect, targets: &dyn TargetResolve
 /// [`evaluate_node`] for an object of `doc`, resolving its `copyToShape` targets there
 /// ([`DocTargets`]): what the renderer, exports, hit testing, commands and the panel use.
 pub fn evaluate_node_in_doc(doc: &Document, node: &Node) -> Option<Arc<Output>> {
-    evaluate_node_with(node, node_bounds(node), &DocTargets::new(doc, node.id))
+    if !has_modifiers(node) {
+        return None;
+    }
+    evaluate_node_with(node, node_bounds_in_doc(doc, node), &DocTargets::new(doc, node.id))
 }
 
 /// [`node_instances`] for an object of `doc` (copy-to-shape targets resolved there).
