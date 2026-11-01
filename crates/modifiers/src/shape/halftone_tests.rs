@@ -269,6 +269,32 @@ fn invert_inks_the_light_parts() {
     assert!((inked(&m) / 40_000.0 - 0.7).abs() < 0.03, "{}", inked(&m) / 40_000.0);
 }
 
+/// PIC20.5e: a near-white ink (luminance over 0.9) would vanish on white paper: black instead. Just
+/// under the threshold the colour stays; a gradient stays unless every stop is near-white.
+#[test]
+fn near_white_inks_become_black_and_light_colours_stay() {
+    let ben = json!([{"id": "s", "kind": "screen", "preset": "benDay", "tone": "fixed", "amount": 30}]);
+    let ink = |fill: Paint| screened(&node(square(100.0), fill), ben.clone()).0.appearance.fill_paint();
+    assert_eq!(ink(Paint::solid(Color::WHITE)), black(), "a default white rectangle shows");
+    // Grey 0.92 (luminance 0.92): black; grey 0.88: kept.
+    assert_eq!(ink(Paint::solid(Color::rgb(0.92, 0.92, 0.92))), black());
+    let grey = Paint::solid(Color::rgb(0.88, 0.88, 0.88));
+    assert_eq!(ink(grey.clone()), grey);
+    // Pale yellow (luminance 0.97): black; a light yellow-orange (0.85): kept.
+    assert_eq!(ink(Paint::solid(Color::rgb(1.0, 1.0, 0.6))), black());
+    let light = Paint::solid(Color::rgb(1.0, 0.85, 0.4));
+    assert_eq!(ink(light.clone()), light);
+    // Gradients: white to near-white becomes black; white to blue stays the gradient.
+    let grad = |a: Color, b: Color| {
+        Paint::Gradient(Box::new(GradientPaint::new(Gradient::new(GradientKind::Linear, vec![GradientStop::new(0.0, a), GradientStop::new(1.0, b)]))))
+    };
+    assert_eq!(ink(grad(Color::WHITE, Color::rgb(0.95, 0.95, 0.95))), black());
+    assert!(matches!(ink(grad(Color::WHITE, Color::rgb(0.0, 0.0, 1.0))), Paint::Gradient(_)));
+    // Stroke only, white: black too.
+    let n = Node::path(NodeId(1), square(100.0), Appearance::basic(Paint::None, Paint::solid(Color::WHITE), 2.0));
+    assert_eq!(screened(&n, ben).0.appearance.fill_paint(), black());
+}
+
 #[test]
 fn a_stroked_shape_without_a_fill_is_screened_in_its_stroke_colour() {
     let red = Paint::solid(Color::rgb(1.0, 0.0, 0.0));

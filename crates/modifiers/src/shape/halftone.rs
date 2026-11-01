@@ -7,7 +7,8 @@
 //! intersect (`vectorcraft_pathops`). The dots have no stroke. Their ink (the lead's decision,
 //! PIC20.5d): with the tone read from the path's paint (`fill`) they are **black**, the paint giving
 //! the tone only (inking them in the paint they read would darken twice); with a fixed or an image
-//! tone they take the path's fill (its stroke's paint when it has no fill; black with neither).
+//! tone they take the path's fill (its stroke's paint when it has no fill; black with neither),
+//! except a near-white one ([`NEAR_WHITE`], PIC20.5e), which inks them black.
 //!
 //! # Clipping only what crosses the edge
 //! A dot wholly inside the outline is kept as it is and one wholly outside is dropped; only the
@@ -167,11 +168,28 @@ fn walk(n: &mut Node, row: &ScreenRow, image: Option<&ToneTarget>, run: &mut Run
 }
 
 /// What the dots are inked with: black when their tone came from `paint` (it gives the tone only),
-/// `paint` itself for a fixed or an image tone.
+/// `paint` itself for a fixed or an image tone, unless it is near-white (PIC20.5e: white dots on
+/// white paper wouldn't show, as on a new rectangle's default white fill): then black.
 fn dot_ink(row: &ScreenRow, paint: Paint) -> Paint {
     match row.params.tone {
         ToneSource::Fill => Paint::solid(Color::BLACK),
+        ToneSource::Fixed | ToneSource::Image if near_white(&paint) => Paint::solid(Color::BLACK),
         ToneSource::Fixed | ToneSource::Image => paint,
+    }
+}
+
+/// The luminance (Rec. 709) above which an ink counts as near-white.
+pub const NEAR_WHITE: f64 = 0.9;
+
+/// Whether `paint` would ink near-white dots: a solid colour above [`NEAR_WHITE`] luminance, a
+/// gradient whose every stop is; never a pattern.
+fn near_white(paint: &Paint) -> bool {
+    let light = |c: &Color| 1.0 - darkness(c.to_rgb(), 1.0) > NEAR_WHITE;
+    match paint {
+        Paint::None => true,
+        Paint::Solid { color, .. } => light(color),
+        Paint::Gradient(g) => g.gradient.stops.iter().all(|s| light(&s.color)),
+        Paint::Pattern { .. } => false,
     }
 }
 

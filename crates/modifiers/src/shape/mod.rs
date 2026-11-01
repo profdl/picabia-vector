@@ -47,7 +47,7 @@ use crate::eval::Output;
 use crate::kinds::Clamp;
 use crate::model::{Deform, Displace, ModifierKind, Resample, Tidy, Trim};
 
-pub use halftone::{MAX_BAND_ENTRIES, MAX_CLIP_SEGMENTS, MAX_CLIP_WORK, MAX_EDGE_CONTACTS, MAX_OUTLINE_PIECES, SPOT_ANCHORS, ScreenRow};
+pub use halftone::{MAX_BAND_ENTRIES, MAX_CLIP_SEGMENTS, MAX_CLIP_WORK, MAX_EDGE_CONTACTS, MAX_OUTLINE_PIECES, NEAR_WHITE, SPOT_ANCHORS, ScreenRow};
 
 /// The most anchors the geometry rows make for one object, all its copies together.
 pub const MAX_GEOMETRY_ANCHORS: usize = 200_000;

@@ -605,7 +605,10 @@ filled non-zero. **Their ink** (the lead's decision, PIC20.5d):
   would darken twice (a pale gradient edge would show pale dots over little area).
 - `tone: fixed` and `tone: image`: the path's fill (its stroke's paint when it has no fill; black
   with neither): a red square with Ben-Day dots gets red dots. A gradient fill stays where it was
-  on the outline's box.
+  on the outline's box. A **near-white** ink would vanish on white paper, so it inks the dots black
+  instead (PIC20.5e): a solid colour whose Rec. 709 luminance is over 0.9 (white, pale greys over
+  90%, pale yellow), or a gradient whose every stop is; Ben-Day Dots on a new (white) rectangle
+  show black. A light colour under the threshold (grey 88%, a light yellow-orange) keeps its colour.
 
 **Method.** The field is sampled over the path's box (`quality` samples a cell, on a lattice fixed to
 the page), contoured by Picabia's marching squares, the rings fitted with curves (Simplify's

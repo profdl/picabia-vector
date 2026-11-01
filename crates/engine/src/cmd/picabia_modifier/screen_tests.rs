@@ -134,20 +134,23 @@ fn an_image_gives_the_tone_through_the_document() {
     assert_eq!(choices.len(), 1, "the copied image: {choices:?}");
 }
 
-/// The stencil cuts the dots: a fixed 30% screen above the stencil leaves each colour 30% of its
-/// area.
+/// The stencil cuts the dots: a fixed 30% screen above the stencil leaves 30% of the black square
+/// and of the white one, both inked black now (a near-white ink becomes black, PIC20.5e): one
+/// colour, 30% of the two squares' area.
 #[test]
 fn a_screen_above_a_stencil_cuts_its_dots() {
     let mut s = session();
     let g = super::stencil_tests::two_tone(&mut s, json!({}));
-    let white = |s: &mut Session| {
+    let colours = |s: &mut Session| -> Vec<(String, f64)> {
         let i = ex(s, "modifier.stencilInfo", json!({"id": g.0}));
-        i["colours"].as_array().unwrap().iter().find(|c| c["hex"] == "#ffffff").unwrap()["area"].as_f64().unwrap()
+        i["colours"].as_array().unwrap().iter().map(|c| (c["hex"].as_str().unwrap().to_string(), c["area"].as_f64().unwrap())).collect()
     };
-    let whole = white(&mut s);
+    let whole: f64 = colours(&mut s).iter().map(|c| c.1).sum();
     ex(&mut s, "modifier.add", json!({"ids": [g.0], "kind": "screen", "index": 0, "props": {"tone": "fixed", "amount": 30, "lpi": 10}}));
-    let dots = white(&mut s);
-    assert!((dots / whole - 0.3).abs() < 0.04, "{dots} of {whole}");
+    let after = colours(&mut s);
+    assert_eq!(after.len(), 1, "{after:?}");
+    assert_eq!(after[0].0, "#000000");
+    assert!((after[0].1 / whole - 0.3).abs() < 0.04, "{after:?} of {whole}");
 }
 
 /// The laser burns the dots' outlines: as long as the drawn dots' perimeters.
