@@ -67,6 +67,8 @@ mod tests;
 #[cfg(test)]
 mod tests_hardening;
 #[cfg(test)]
+mod tests_mesh;
+#[cfg(test)]
 mod tests_soft;
 #[cfg(test)]
 mod tests_soft_spike;

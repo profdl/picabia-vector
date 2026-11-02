@@ -267,6 +267,17 @@ The jelly scene is at the edge of the native budget even then (worst steps 2.7 f
 - A group with soft settings is one soft body (its members' outlines together).
 - Caps as phase 1: particles per object and per run, cells per object, a body that would go over
   gets a coarser mesh, with a note; untrusted geometry skipped with the reason.
+- **As built (PIC31.2):** `mesh.rs`. Cloth's axis is the outline points' principal axis (a nearly
+  round outline: its bounds' wider side), pointing left to right on the page; the strip is the
+  points' extent along it, its thickness their extent across (at least 0.5 pt), particles
+  `resolution` apart. Jelly and rubber: closed outlines cleaned (repeats and straight-line points
+  dropped), a crossing one filled as its hull (with a note), resampled to `resolution`, filled by
+  rapier's `volumetric` (parry's Delaunay refinement); a hole is an outline inside another (even-odd
+  nesting); separate outlines are pieces of one body. Caps: 1,200 particles and 2,400 cells per
+  body, 12,000 particles per run (the caller's budget): the spacing grows (estimated from the
+  outline's area and length before meshing, checked after, up to 8 tries) with a note. Open
+  outlines alone can't be jelly (refused with the reason). Never panics: rapier sees only finite,
+  simple rings of 3+ points with area and a capped cell count.
 
 ### Clones and Apply
 
@@ -352,7 +363,7 @@ do goes through these commands.
 |---|---|
 | PIC31.0 | Spike: soft bodies in the phase 1 world. Determinism hash native vs wasm32, junk sweep of the builders, step cost for 20 soft and 200 rigid bodies, snapshot cost. Go/no-go |
 | PIC31.1 | Soft settings: `bodyType: "soft"`, presets and overrides, pins; lenient parse, round trip. **Done** (2026-11-02): `soft.rs`; interfaces stubbed for PIC31.2–31.4 (`mesh.rs`, `pose.rs`, `world.rs`, `session.rs`) |
-| PIC31.2 | Bodies from objects: cloth strip and jelly/rubber cells, caps, junk; tune the presets |
+| PIC31.2 | Bodies from objects: cloth strip and jelly/rubber cells, caps, junk; tune the presets. **Meshing done** (2026-11-02); the presets are tuned once the world runs (PIC31.2b) |
 | PIC31.3 | Pose to art: rigid, cloth and jelly warps; Apply as one undo step |
 | PIC31.4 | Session and clock: world, steps, snapshots, event log, `physics.session/play/pause/reset/seek/apply/cancel`, rest detection |
 | PIC31.5 | Transport bar and clones on the canvas; Simulate to Rest; rigid bodies on the same flow |
