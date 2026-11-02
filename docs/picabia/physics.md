@@ -272,8 +272,13 @@ The jelly scene is at the edge of the native budget even then (worst steps 2.7 f
   points' extent along it, its thickness their extent across (at least 0.5 pt), particles
   `resolution` apart. Jelly and rubber: closed outlines cleaned (repeats and straight-line points
   dropped), a crossing one filled as its hull (with a note), resampled to `resolution`, filled by
-  rapier's `volumetric` (parry's Delaunay refinement); a hole is an outline inside another (even-odd
-  nesting); separate outlines are pieces of one body. Caps: 1,200 particles and 2,400 cells per
+  rapier's `volumetric` (parry's Delaunay refinement); a hole is an outline inside another of the
+  same path or compound path (even-odd nesting; a group's members never make holes in each other);
+  separate outlines are pieces of one body (at most 64; outlines smaller than a cell left out).
+  Outlines that overlap across group members, or cross within one path, are filled together as
+  their hull (with a note). Resampling keeps every corner, splitting each edge into pieces at most
+  `resolution` long. Cloth's axis weighs the outline's edges by length, so a finely flattened curve
+  doesn't turn it. Caps: 1,200 particles and 2,400 cells per
   body, 12,000 particles per run (the caller's budget): the spacing grows (estimated from the
   outline's area and length before meshing, checked after, up to 8 tries) with a note. Open
   outlines alone can't be jelly (refused with the reason). Never panics: rapier sees only finite,

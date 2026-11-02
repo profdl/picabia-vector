@@ -137,3 +137,108 @@ fn junk_outlines_are_refused_or_meshed_never_a_panic() {
         }
     }
 }
+
+// PIC31.2a (review): outline groups, corners, the axis, budgets.
+
+#[test]
+fn a_group_member_on_another_is_not_a_hole_and_overlaps_merge() {
+    // A small square on a big one, in a group: one filled body, no hole.
+    let big = Arc::new(node(1, shapes::rectangle(Rect::new(0.0, 0.0, 100.0, 100.0))));
+    let small = Arc::new(node(2, shapes::rectangle(Rect::new(40.0, 40.0, 60.0, 60.0))));
+    let g = Node::group(NodeId(3), vec![big, small]);
+    let m = soft_mesh(&body_shape(&g, None).unwrap(), &preset(Preset::Jelly, 10.0), 10_000).unwrap();
+    assert!(m.cells.iter().any(|c| {
+        let [a, b, d] = c.map(|i| m.rest[i as usize]);
+        Rect::new(40.0, 40.0, 60.0, 60.0).contains(Point::new((a.x + b.x + d.x) / 3.0, (a.y + b.y + d.y) / 3.0))
+    }));
+    assert!(!m.notes.is_empty(), "the merge is noted: {:?}", m.notes);
+    // Two members overlapping: filled together, every particle inside their hull.
+    let a = Arc::new(node(1, shapes::rectangle(Rect::new(0.0, 0.0, 60.0, 60.0))));
+    let b = Arc::new(node(2, shapes::rectangle(Rect::new(40.0, 40.0, 100.0, 100.0))));
+    let g = Node::group(NodeId(3), vec![a, b]);
+    let m = soft_mesh(&body_shape(&g, None).unwrap(), &preset(Preset::Jelly, 10.0), 10_000).unwrap();
+    assert!(m.rest.iter().any(|p| p.x > 90.0) && m.rest.iter().any(|p| p.x < 10.0));
+    assert!(m.notes.iter().any(|n| n.contains("hull")), "{:?}", m.notes);
+}
+
+#[test]
+fn separate_members_both_get_cells() {
+    let a = Arc::new(node(1, shapes::rectangle(Rect::new(0.0, 0.0, 50.0, 50.0))));
+    let b = Arc::new(node(2, shapes::rectangle(Rect::new(100.0, 0.0, 150.0, 50.0))));
+    let g = Node::group(NodeId(3), vec![a, b]);
+    let m = soft_mesh(&body_shape(&g, None).unwrap(), &preset(Preset::Jelly, 10.0), 10_000).unwrap();
+    let centres: Vec<f64> = m.cells.iter().map(|c| c.iter().map(|i| m.rest[*i as usize].x).sum::<f64>() / 3.0).collect();
+    assert!(centres.iter().any(|x| *x < 50.0) && centres.iter().any(|x| *x > 100.0));
+}
+
+#[test]
+fn corners_stay_corners() {
+    let n = node(1, shapes::rectangle(Rect::new(0.0, 0.0, 90.0, 90.0)));
+    let m = soft_mesh(&body_shape(&n, None).unwrap(), &preset(Preset::Rubber, 30.0), 10_000).unwrap();
+    for c in [Point::new(0.0, 0.0), Point::new(90.0, 0.0), Point::new(90.0, 90.0), Point::new(0.0, 90.0)] {
+        assert!(m.rest.iter().any(|p| (*p - c).hypot() < 1e-3), "corner {c:?} kept");
+    }
+}
+
+#[test]
+fn a_finely_flattened_short_side_doesnt_turn_the_strip() {
+    // 200 wide, 150 tall; the short sides drawn with a hundred points each.
+    let mut pts = vec![(0.0, 0.0), (200.0, 0.0)];
+    pts.extend((1..100).map(|i| (200.0, i as f64 * 1.5)));
+    pts.extend([(200.0, 150.0), (0.0, 150.0)]);
+    pts.extend((1..100).rev().map(|i| (0.0, i as f64 * 1.5)));
+    let n = node(1, ring(&pts, true));
+    let m = soft_mesh(&body_shape(&n, None).unwrap(), &preset(Preset::Cloth, 10.0), 10_000).unwrap();
+    let MeshKind::Strip(s) = &m.kind else { panic!("a strip") };
+    assert!(s.axis.x.abs() > 0.99, "{s:?}");
+}
+
+#[test]
+fn tiny_budgets_and_hand_made_junk_never_panic() {
+    let n = node(1, shapes::rectangle(Rect::new(0.0, 0.0, 100.0, 100.0)));
+    let shape = body_shape(&n, None).unwrap();
+    for cap in 0..5 {
+        for p in [Preset::Jelly, Preset::Cloth] {
+            if let Ok(m) = soft_mesh(&shape, &preset(p, 10.0), cap) {
+                assert!(m.rest.len() <= cap.max(2));
+            }
+        }
+    }
+    let junk = crate::shape::BodyShape {
+        pieces: vec![
+            crate::shape::Piece::Ring { pts: vec![Point::new(f64::NAN, 0.0), Point::new(1.0, 1.0), Point::new(0.0, 1.0)], closed: true },
+            crate::shape::Piece::Ring { pts: vec![], closed: true },
+            crate::shape::Piece::Ball { center: Point::new(0.0, 0.0), radius: f64::INFINITY },
+            crate::shape::Piece::Box(Rect::new(0.0, 0.0, 0.0, 0.0)),
+        ],
+        bounds: Rect::new(0.0, 0.0, 1.0, 1.0),
+        notes: vec![],
+        owners: vec![],
+    };
+    for p in [Preset::Jelly, Preset::Cloth] {
+        if let Ok(m) = soft_mesh(&junk, &preset(p, 2.0), 1_000) {
+            assert!(m.rest.iter().all(|q| q.x.is_finite() && q.y.is_finite()));
+        }
+    }
+    // Many small separate outlines: within the piece cap, quickly.
+    let kids: Vec<Arc<Node>> = (0..200)
+        .map(|i| {
+            Arc::new(node(
+                i,
+                shapes::rectangle(Rect::new(
+                    (i % 20) as f64 * 12.0,
+                    (i / 20) as f64 * 12.0,
+                    (i % 20) as f64 * 12.0 + 8.0,
+                    (i / 20) as f64 * 12.0 + 8.0,
+                )),
+            ))
+        })
+        .collect();
+    let g = Node::group(NodeId(999), kids);
+    let t = std::time::Instant::now();
+    let r = soft_mesh(&body_shape(&g, None).unwrap(), &preset(Preset::Jelly, 2.0), 1_200);
+    assert!(t.elapsed().as_secs_f64() < 20.0, "{:?}", t.elapsed());
+    if let Ok(m) = r {
+        assert!(m.rest.len() <= 1_200 && !m.notes.is_empty());
+    }
+}

@@ -336,7 +336,7 @@ fn shapes_of(shape: &BodyShape, fidelity: ColliderType, dynamic: bool, center: P
                 .iter()
                 .flat_map(|p| match p {
                     Piece::Ring { pts, closed } => simplify(pts, 32, *closed),
-                    other => BodyShape { pieces: vec![other.clone()], bounds: shape.bounds, notes: vec![] }.all_points(),
+                    other => BodyShape { pieces: vec![other.clone()], bounds: shape.bounds, notes: vec![], owners: vec![] }.all_points(),
                 })
                 .collect();
             vec![hull_or_box(&pts, shape.bounds)]

@@ -14,11 +14,13 @@
 //! area, no crossing edges (a crossing ring is its hull), a cell size estimated against the caps
 //! before meshing and the result checked after.
 
+use std::collections::BTreeMap;
+
 use rapier2d::prelude::{SoftBodyBuilder, Vector};
 use vectorcraft_geom::{Point, Rect, Vec2};
 
 use crate::PT_PER_M;
-use crate::shape::{BodyShape, Piece, clean_ring, convex_hull, is_simple, signed_area2};
+use crate::shape::{BodyShape, clean_ring, convex_hull, is_simple, segments_touch, signed_area2};
 use crate::soft::Soft;
 
 /// The most particles one soft body has (more: a coarser spacing, with a note).
@@ -30,9 +32,11 @@ pub const MAX_PARTICLES_PER_RUN: usize = 12_000;
 /// The thinnest strip, points (a hairline still has a contact skin).
 pub const MIN_THICKNESS: f64 = 0.5;
 /// Points per ring a ball becomes.
-const BALL_POINTS: usize = 32;
+const BALL_POINTS: u32 = 32;
 /// Tries at a coarser spacing before giving up.
 const MAX_TRIES: usize = 8;
+/// The most separate outlines one cell body fills (the rest are left out, with a note).
+pub const MAX_CELL_PIECES: usize = 64;
 
 /// A cloth strip's frame, document space.
 #[derive(Clone, Debug, PartialEq)]
@@ -125,19 +129,34 @@ fn outline_points(shape: &BodyShape) -> Vec<Point> {
 fn strip(shape: &BodyShape, spacing: f64, cap: usize) -> Result<SoftMesh, String> {
     let pts = outline_points(shape);
     let first = *pts.first().ok_or("it has no outline")?;
-    // The principal axis: the eigenvector of the points' covariance with the larger eigenvalue.
-    let n = pts.len() as f64;
-    let c = pts.iter().fold(Vec2::ZERO, |a, p| a + p.to_vec2()) / n;
-    let (mut sxx, mut syy, mut sxy) = (0.0, 0.0, 0.0);
-    for p in &pts {
-        let d = p.to_vec2() - c;
-        sxx += d.x * d.x;
-        syy += d.y * d.y;
-        sxy += d.x * d.y;
+    // The principal axis of the outline as drawn: its edges' midpoints weighted by their lengths,
+    // so how finely a curve was flattened doesn't turn the axis.
+    let mut weighted: Vec<(Point, f64)> = Vec::new();
+    for piece in &shape.pieces {
+        let ring = piece.outline(BALL_POINTS);
+        let n = ring.len();
+        let edges = if piece.is_closed() { n } else { n.saturating_sub(1) };
+        for i in 0..edges {
+            let (Some(&a), Some(&b)) = (ring.get(i), ring.get((i + 1) % n.max(1))) else { continue };
+            let len = a.distance(b);
+            if len.is_finite() && len > 0.0 {
+                weighted.push((a.midpoint(b), len));
+            }
+        }
     }
+    let total: f64 = weighted.iter().map(|(_, w)| w).sum();
+    let (sxx, syy, sxy) = if total > 0.0 && total.is_finite() {
+        let c = weighted.iter().fold(Vec2::ZERO, |a, (p, w)| a + p.to_vec2() * *w) / total;
+        weighted.iter().fold((0.0, 0.0, 0.0), |(xx, yy, xy), (p, w)| {
+            let d = p.to_vec2() - c;
+            (xx + w * d.x * d.x, yy + w * d.y * d.y, xy + w * d.x * d.y)
+        })
+    } else {
+        (0.0, 0.0, 0.0)
+    };
     // Nearly round (no long axis): the bounds' longer side.
     let spread = ((sxx - syy) * (sxx - syy) + 4.0 * sxy * sxy).sqrt();
-    let axis = if spread <= 0.02 * (sxx + syy) || !spread.is_finite() {
+    let axis = if !spread.is_finite() || spread <= 0.02 * (sxx + syy) {
         if shape.bounds.width() >= shape.bounds.height() { Vec2::new(1.0, 0.0) } else { Vec2::new(0.0, 1.0) }
     } else {
         let a = 0.5 * (2.0 * sxy).atan2(sxx - syy);
@@ -178,22 +197,18 @@ fn strip(shape: &BodyShape, spacing: f64, cap: usize) -> Result<SoftMesh, String
     })
 }
 
-/// One closed outline, cleaned and simple (a crossing one is its hull), counter-clockwise on the
-/// page (positive [`signed_area2`] in document axes).
-fn rings_of(shape: &BodyShape, notes: &mut Vec<String>) -> Vec<Vec<Point>> {
-    let mut out = Vec::new();
+/// The closed outlines to fill, each cleaned and simple (a crossing one is its hull), with its
+/// outline group ([`BodyShape::owners`]). Outlines of different groups that overlap, or rings of
+/// one group that cross each other, are filled together as their hull (with a note): parry would
+/// drop crossing edges and leave overlapping particles at rest.
+fn rings_of(shape: &BodyShape, notes: &mut Vec<String>) -> Vec<(Vec<Point>, usize)> {
+    let mut out: Vec<(Vec<Point>, usize)> = Vec::new();
     let mut hulled = 0;
-    for piece in &shape.pieces {
-        let ring: Vec<Point> = match piece {
-            Piece::Ring { pts, closed: true } => pts.clone(),
-            Piece::Ring { closed: false, .. } => continue,
-            Piece::Ball { center, radius } => (0..BALL_POINTS)
-                .map(|i| i as f64 * std::f64::consts::TAU / BALL_POINTS as f64)
-                .map(|a| Point::new(center.x + radius * a.cos(), center.y + radius * a.sin()))
-                .collect(),
-            Piece::Box(r) => vec![Point::new(r.x0, r.y0), Point::new(r.x1, r.y0), Point::new(r.x1, r.y1), Point::new(r.x0, r.y1)],
-        };
-        let mut ring = clean_ring(&ring);
+    for (i, piece) in shape.pieces.iter().enumerate() {
+        if !piece.is_closed() {
+            continue;
+        }
+        let mut ring = clean_ring(&piece.outline(BALL_POINTS));
         if ring.len() < 3 || signed_area2(&ring).abs() < 1e-6 {
             continue;
         }
@@ -202,13 +217,64 @@ fn rings_of(shape: &BodyShape, notes: &mut Vec<String>) -> Vec<Vec<Point>> {
             hulled += 1;
         }
         if ring.len() >= 3 {
-            out.push(ring);
+            out.push((ring, shape.owners.get(i).copied().unwrap_or(0)));
         }
     }
     if hulled > 0 {
-        notes.push(format!("{hulled} outlines cross themselves: filled as their hulls"));
+        notes.push(plural(hulled, "outline crosses itself: filled as its hull", "outlines cross themselves: filled as their hulls"));
     }
+    // Merge what overlaps across groups, or crosses within one, into hulls.
+    let mut merged = 0;
+    loop {
+        let mut pair = None;
+        'find: for i in 0..out.len() {
+            for j in i + 1..out.len() {
+                let (Some((a, ga)), Some((b, gb))) = (out.get(i), out.get(j)) else { continue };
+                let nested = a.first().is_some_and(|p| inside(b, *p)) || b.first().is_some_and(|p| inside(a, *p));
+                if rings_cross(a, b) || (ga != gb && nested) {
+                    pair = Some((i, j));
+                    break 'find;
+                }
+            }
+        }
+        let Some((i, j)) = pair else { break };
+        let b = out.swap_remove(j);
+        if let Some(a) = out.get_mut(i) {
+            let mut all = std::mem::take(&mut a.0);
+            all.extend(b.0);
+            a.0 = convex_hull(&all);
+        }
+        merged += 1;
+    }
+    if merged > 0 {
+        notes.push(plural(merged, "overlapping outline filled with its neighbour as their hull", "overlapping outlines filled as their hulls"));
+    }
+    out.retain(|(r, _)| r.len() >= 3);
     out
+}
+
+/// Whether two rings' edges cross or touch.
+fn rings_cross(a: &[Point], b: &[Point]) -> bool {
+    let (na, nb) = (a.len(), b.len());
+    let bounds = |r: &[Point]| r.iter().fold(Rect::new(f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY), |r, p| r.union_pt(*p));
+    let (ra, rb) = (bounds(a), bounds(b));
+    if ra.x1 < rb.x0 || rb.x1 < ra.x0 || ra.y1 < rb.y0 || rb.y1 < ra.y0 {
+        return false;
+    }
+    for i in 0..na {
+        let (Some(&p), Some(&q)) = (a.get(i), a.get((i + 1) % na)) else { continue };
+        for j in 0..nb {
+            let (Some(&r), Some(&t)) = (b.get(j), b.get((j + 1) % nb)) else { continue };
+            if segments_touch(p, q, r, t) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn plural(n: usize, one: &str, many: &str) -> String {
+    if n == 1 { format!("1 {one}") } else { format!("{n} {many}") }
 }
 
 /// Whether `p` is inside ring `r` (even-odd).
@@ -216,7 +282,7 @@ fn inside(r: &[Point], p: Point) -> bool {
     let mut on = false;
     let n = r.len();
     for i in 0..n {
-        let (a, b) = (r[i], r[(i + n - 1) % n]);
+        let (Some(a), Some(b)) = (r.get(i), r.get((i + n - 1) % n)) else { continue };
         if (a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x {
             on = !on;
         }
@@ -224,47 +290,40 @@ fn inside(r: &[Point], p: Point) -> bool {
     on
 }
 
-/// `ring` resampled to points `spacing` apart along it (at least 3 per ring, its corners kept when
-/// they fall between samples is not needed: the cells follow the samples).
+/// The length of closed ring `r`.
+fn ring_length(r: &[Point]) -> f64 {
+    let n = r.len();
+    (0..n).filter_map(|i| Some(r.get(i)?.distance(*r.get((i + 1) % n)?))).sum()
+}
+
+/// `ring` with each edge split into pieces at most about `spacing` long; its corners are kept.
 fn resample(ring: &[Point], spacing: f64) -> Vec<Point> {
     let n = ring.len();
-    let per: f64 = (0..n).map(|i| ring[i].distance(ring[(i + 1) % n])).sum();
-    let count = ((per / spacing).round() as usize).max(3);
-    if count >= n && n >= 3 && per / n as f64 <= spacing * 1.5 {
-        return ring.to_vec();
-    }
-    let step = per / count as f64;
-    let mut out = Vec::with_capacity(count);
-    let mut seg = 0usize;
-    let mut seg_start = 0.0;
-    for k in 0..count {
-        let at = k as f64 * step;
-        while seg + 1 < n && seg_start + ring[seg].distance(ring[(seg + 1) % n]) < at {
-            seg_start += ring[seg].distance(ring[(seg + 1) % n]);
-            seg += 1;
-        }
-        let (a, b) = (ring[seg], ring[(seg + 1) % n]);
-        let len = a.distance(b);
-        let t = if len > 0.0 { ((at - seg_start) / len).clamp(0.0, 1.0) } else { 0.0 };
-        out.push(a.lerp(b, t));
+    let mut out = Vec::new();
+    for i in 0..n {
+        let (Some(&a), Some(&b)) = (ring.get(i), ring.get((i + 1) % n)) else { continue };
+        let k = (a.distance(b) / spacing).ceil();
+        let k = if k.is_finite() { (k as usize).clamp(1, MAX_PARTICLES_PER_BODY) } else { 1 };
+        out.extend((0..k).map(|j| a.lerp(b, j as f64 / k as f64)));
     }
     out
 }
 
 fn cells(shape: &BodyShape, spacing: f64, cap: usize) -> Result<SoftMesh, String> {
     let mut notes = Vec::new();
-    let rings = rings_of(shape, &mut notes);
+    let mut rings = rings_of(shape, &mut notes);
     if rings.is_empty() {
         return Err("a jelly needs a closed outline with some area".into());
     }
-    // Outer outlines (even depth) with the holes directly inside them (odd depth).
-    let depth: Vec<usize> = rings
-        .iter()
-        .enumerate()
-        .map(|(i, r)| rings.iter().enumerate().filter(|(j, o)| *j != i && r.first().is_some_and(|p| inside(o, *p))).count())
-        .collect();
-    let area: f64 = rings.iter().zip(&depth).map(|(r, d)| if d % 2 == 0 { 1.0 } else { -1.0 } * signed_area2(r).abs() / 2.0).sum();
-    let perimeter: f64 = rings.iter().map(|r| (0..r.len()).map(|i| r[i].distance(r[(i + 1) % r.len()])).sum::<f64>()).sum();
+    // Holes: an outline inside another of its group (even-odd depth within the group).
+    let depth = |rings: &[(Vec<Point>, usize)], i: usize| -> usize {
+        let Some((r, g)) = rings.get(i) else { return 0 };
+        rings.iter().enumerate().filter(|(j, (o, og))| *j != i && og == g && r.first().is_some_and(|p| inside(o, *p))).count()
+    };
+    let area: f64 = (0..rings.len())
+        .map(|i| if depth(&rings, i) % 2 == 0 { 1.0 } else { -1.0 } * rings.get(i).map_or(0.0, |(r, _)| signed_area2(r).abs() / 2.0))
+        .sum();
+    let perimeter: f64 = rings.iter().map(|(r, _)| ring_length(r)).sum();
     if !(area.is_finite() && area > 0.0) {
         return Err("a jelly needs a closed outline with some area".into());
     }
@@ -275,51 +334,80 @@ fn cells(shape: &BodyShape, spacing: f64, cap: usize) -> Result<SoftMesh, String
     while estimate(h) > cap as f64 || 2.0 * estimate(h) > MAX_CELLS_PER_BODY as f64 {
         h *= 1.1;
     }
+    // Outlines smaller than a cell can't be filled: outer ones are left out, holes filled in.
+    let before = rings.len();
+    let tiny = |r: &[Point], h: f64| signed_area2(r).abs() / 2.0 < h * h * 0.25;
+    let keep: Vec<bool> = rings.iter().map(|(r, _)| !tiny(r, h)).collect();
+    let mut k = 0;
+    rings.retain(|_| {
+        k += 1;
+        keep.get(k - 1).copied().unwrap_or(false)
+    });
+    let dropped = before - rings.len();
+    if dropped > 0 {
+        notes.push(plural(dropped, "outline smaller than a cell left out", "outlines smaller than a cell left out"));
+    }
+    if rings.is_empty() {
+        return Err("its outlines are all smaller than a cell".into());
+    }
+    let depth: Vec<usize> = (0..rings.len()).map(|i| depth(&rings, i)).collect();
+    let outer: Vec<usize> = (0..rings.len()).filter(|i| depth.get(*i).is_some_and(|d| d % 2 == 0)).collect();
+    if outer.len() > MAX_CELL_PIECES {
+        notes.push(format!("{} separate outlines (at most {MAX_CELL_PIECES}): the rest left out", outer.len()));
+    }
     let origin = shape.bounds.center();
     let to_m = |p: Point| Vector::new(((p.x - origin.x) / PT_PER_M) as f32, ((p.y - origin.y) / PT_PER_M) as f32);
     for _ in 0..MAX_TRIES {
         let mut body: Option<SoftBodyBuilder> = None;
-        for (i, r) in rings.iter().enumerate() {
-            if depth[i] % 2 == 1 {
-                continue;
-            }
+        let mut unfilled = 0;
+        let mut over = false;
+        for &i in outer.iter().take(MAX_CELL_PIECES) {
+            let (Some((r, g)), Some(&d)) = (rings.get(i), depth.get(i)) else { continue };
             // This outline and the holes directly inside it.
             let mut verts: Vec<Vector> = Vec::new();
             let mut segs: Vec<[u32; 2]> = Vec::new();
-            let mut add = |ring: &[Point], ccw: bool| {
-                let mut s = resample(ring, h);
-                if (signed_area2(&s) > 0.0) != ccw {
-                    s.reverse();
-                }
+            let mut add = |ring: &[Point]| {
+                let s = resample(ring, h);
                 let base = verts.len() as u32;
                 let k = s.len() as u32;
                 verts.extend(s.iter().map(|p| to_m(*p)));
                 segs.extend((0..k).map(|j| [base + j, base + (j + 1) % k]));
             };
-            add(r, true);
-            for (j, hole) in rings.iter().enumerate() {
-                if depth[j] == depth[i] + 1 && hole.first().is_some_and(|p| inside(r, *p)) {
-                    add(hole, false);
+            add(r);
+            for (j, (hole, hg)) in rings.iter().enumerate() {
+                if hg == g && depth.get(j) == Some(&(d + 1)) && hole.first().is_some_and(|p| inside(r, *p)) {
+                    add(hole);
                 }
             }
-            let cell = (h / PT_PER_M) as f32;
-            let piece = SoftBodyBuilder::volumetric(&verts, &segs, cell).or_else(|| {
-                let flipped: Vec<[u32; 2]> = segs.iter().map(|[a, b]| [*b, *a]).collect();
-                SoftBodyBuilder::volumetric(&verts, &flipped, cell)
-            });
-            if let Some(p) = piece {
-                body = Some(match body {
-                    Some(b) => b.append(p),
-                    None => p,
-                });
+            if verts.len() > cap {
+                over = true;
+                break;
             }
+            match SoftBodyBuilder::volumetric(&verts, &segs, (h / PT_PER_M) as f32) {
+                Some(p) => {
+                    let b = match body.take() {
+                        Some(b) => b.append(p),
+                        None => p,
+                    };
+                    // Over the caps already: try again coarser without meshing the rest.
+                    if b.positions.len() > cap || b.cells.len() > MAX_CELLS_PER_BODY {
+                        over = true;
+                        break;
+                    }
+                    body = Some(b);
+                }
+                None => unfilled += 1,
+            }
+        }
+        if over {
+            h *= 1.25;
+            continue;
         }
         let Some(b) = body else {
             return Err("its outline couldn't be filled with cells".into());
         };
-        if b.positions.len() > cap || b.cells.len() > MAX_CELLS_PER_BODY {
-            h *= 1.25;
-            continue;
+        if unfilled > 0 {
+            notes.push(plural(unfilled, "outline couldn't be filled with cells: left out", "outlines couldn't be filled with cells: left out"));
         }
         if h > spacing * 1.001 {
             notes.push(format!("about {wanted:.0} particles at {spacing:.1} pt (at most {cap}): spacing {h:.1} pt"));
@@ -342,7 +430,7 @@ fn cells(shape: &BodyShape, spacing: f64, cap: usize) -> Result<SoftMesh, String
 
 /// The edges of `cells` used by one cell only (the outline and the holes).
 fn boundary(cells: &[[u32; 3]]) -> Vec<[u32; 2]> {
-    let mut count: std::collections::BTreeMap<[u32; 2], (u32, [u32; 2])> = std::collections::BTreeMap::new();
+    let mut count: BTreeMap<[u32; 2], (u32, [u32; 2])> = BTreeMap::new();
     for c in cells {
         for k in 0..3 {
             let (a, b) = (c[k], c[(k + 1) % 3]);
