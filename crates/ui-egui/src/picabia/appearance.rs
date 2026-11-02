@@ -127,7 +127,10 @@ const DEFORM_AXES: &[(&str, &str)] = &[("horizontal", "Horizontal"), ("vertical"
 const FALLOFFS: &[(&str, &str)] = &[("linear", "Linear"), ("easeIn", "Ease in"), ("easeOut", "Ease out"), ("smooth", "Smooth")];
 const SHEAR_ORIGINS: &[(&str, &str)] =
     &[("center", "Centre"), ("topLeft", "Top left"), ("bottomLeft", "Bottom left"), ("topRight", "Top right"), ("bottomRight", "Bottom right")];
-const DISPLACE_MODES: &[(&str, &str)] = &[("spatial", "Spatial"), ("radial", "Radial")];
+const DISPLACE_MODES: &[(&str, &str)] =
+    &[("spatial", "Smooth noise"), ("radial", "Radial ripple"), ("wave", "Wave"), ("jitter", "Jitter"), ("fractal", "Fractal")];
+const DISPLACE_DIRECTIONS: &[(&str, &str)] = &[("own", "Pattern's own"), ("normal", "Normal"), ("x", "X"), ("y", "Y"), ("angle", "Angle")];
+const WAVEFORMS: &[(&str, &str)] = &[("sine", "Sine"), ("square", "Square"), ("triangle", "Triangle"), ("sawtooth", "Sawtooth")];
 const SPOTS: &[(&str, &str)] =
     &[("round", "Round"), ("ellipse", "Ellipse"), ("line", "Line"), ("square", "Square"), ("diamond", "Diamond"), ("cross", "Cross")];
 const TONES: &[(&str, &str)] = &[("fill", "Fill colour"), ("fixed", "Fixed"), ("image", "Image")];
@@ -230,14 +233,27 @@ pub(super) fn fields(kind: &str) -> &'static [(&'static str, &'static str, F)] {
             ("progressiveAmount", "Ramp amount", FRACTION),
             ("progressiveReverse", "Ramp reversed", F::Bool),
         ],
-        // tlprocedural's Noise panel: its ranges, fields shown by mode and by the ramp (labelled
-        // as Deform's).
+        // tlprocedural's Noise, Wave, Randomize Points and Subdivision Growth panels: their
+        // ranges, fields shown by pattern, direction and the ramp (labelled as Deform's).
+        // Amplitude reaches 200 for the fractal only (`field_range`).
         "displace" => &[
-            ("mode", "Mode", F::Choice(DISPLACE_MODES)),
+            ("mode", "Pattern", F::Choice(DISPLACE_MODES)),
+            ("direction", "Direction", F::Choice(DISPLACE_DIRECTIONS)),
+            ("angle", "Angle", F::Deg(-360.0, 360.0)),
             ("amplitude", "Amplitude", F::Len(0.0, 100.0)),
             ("scale", "Scale", F::Num(0.01, 1.0)),
             ("octaves", "Octaves", F::Int(1.0, 6.0)),
             ("rippleCount", "Ripple count", F::Int(2.0, 12.0)),
+            ("waveform", "Waveform", F::Choice(WAVEFORMS)),
+            ("frequency", "Cycles", F::Num(0.1, 10.0)),
+            ("phase", "Phase", F::Deg(0.0, 360.0)),
+            ("jitterMin", "Least move", F::Pct(-1.0, 1.0)),
+            ("steps", "Steps", F::Int(1.0, 8.0)),
+            ("decay", "Decay", F::Num(0.0, 0.5)),
+            ("wander", "Wander", F::Num(0.0, 1.0)),
+            ("edgeVariance", "Edge variance", F::Num(0.0, 1.0)),
+            ("normalBias", "Normal bias", F::Num(0.0, 1.0)),
+            ("inward", "Inward", F::Bool),
             ("seed", "Seed", F::Int(0.0, 999_999.0)),
             ("progressive", "Ramp copies", F::Bool),
             ("progressiveAmount", "Ramp amount", FRACTION),
@@ -275,6 +291,45 @@ fn deform_applies(d: &vectorcraft_modifiers::Deform, key: &str) -> bool {
     }
 }
 
+/// Whether a displace in `d`'s pattern uses field `key` (each pattern's tlprocedural fields; the
+/// angle only with direction angle; the ramp's amount and direction only with the ramp on).
+fn displace_applies(d: &vectorcraft_modifiers::Displace, key: &str) -> bool {
+    use vectorcraft_modifiers::DisplaceMode::{Fractal, Jitter, Radial, Spatial, Wave};
+    match key {
+        "angle" => d.direction == vectorcraft_modifiers::DisplaceDirection::Angle,
+        "scale" | "octaves" => d.mode == Spatial,
+        "rippleCount" => d.mode == Radial,
+        "waveform" | "frequency" | "phase" => d.mode == Wave,
+        "jitterMin" => d.mode == Jitter,
+        "steps" | "decay" | "wander" | "edgeVariance" | "inward" => d.mode == Fractal,
+        // The blend steers the own direction (and its share along an axis), not the normal.
+        "normalBias" => d.mode == Fractal && d.direction != vectorcraft_modifiers::DisplaceDirection::Normal,
+        // A wave has no seed (its phase is its own).
+        "seed" => d.mode != Wave,
+        "progressiveAmount" | "progressiveReverse" => d.progressive,
+        _ => true,
+    }
+}
+
+/// Field `key`'s range on row `m` where it depends on the row: a fractal displace's amplitude
+/// reaches 200 (tlprocedural's Subdivision Growth displacement), the other patterns' 100.
+fn field_range(m: &Modifier, key: &str, how: F) -> F {
+    match (&m.kind, key) {
+        (ModifierKind::Displace(d), "amplitude") if d.mode == vectorcraft_modifiers::DisplaceMode::Fractal => F::Len(0.0, 200.0),
+        _ => how,
+    }
+}
+
+/// The length range field `key` edits on row `m` (tests).
+#[cfg(test)]
+pub(super) fn length_range(m: &Modifier, key: &str) -> Option<(f64, f64)> {
+    let how = fields(m.kind.id()).iter().find(|(k, ..)| *k == key)?.2;
+    match field_range(m, key, how) {
+        F::Len(lo, hi) => Some((lo, hi)),
+        _ => None,
+    }
+}
+
 /// Whether row `m` uses field `key`: a wallpaper's group decides (picabia-craft's
 /// `wallpaper_applies`), a resample's mode and a tidy's close and order (tlprocedural's
 /// `isVisible`).
@@ -304,15 +359,7 @@ fn applies(m: &Modifier, key: &str) -> bool {
             "image" => s.tone == vectorcraft_modifiers::ToneSource::Image,
             _ => true,
         },
-        ModifierKind::Displace(d) => {
-            let radial = d.mode == vectorcraft_modifiers::DisplaceMode::Radial;
-            match key {
-                "scale" | "octaves" => !radial,
-                "rippleCount" => radial,
-                "progressiveAmount" | "progressiveReverse" => d.progressive,
-                _ => true,
-            }
-        }
+        ModifierKind::Displace(d) => displace_applies(d, key),
         _ => true,
     }
 }
@@ -671,6 +718,7 @@ fn editor(app: &mut VectorcraftApp, ui: &mut Ui, doc: &Document, ids: &[NodeId],
         }
         for (key, label, how) in list {
             let Some(v) = params.get(*key).filter(|_| applies(&r.first, key)) else { continue };
+            let how = &field_range(&r.first, key, *how);
             ui.horizontal(|ui| {
                 let name = ui.add_sized(vec2(84.0, 22.0), egui::Label::new(egui::RichText::new(tl!(label)).size(11.5).color(t.text)).truncate());
                 ui.label_inputs_by(name.id, |ui| {

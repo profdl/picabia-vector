@@ -10,19 +10,19 @@ use super::{GeometryOp, GeometryRow, RowAt, Shaper, shape_path};
 use crate::model::{Displace, DisplaceMode, ModifierKind};
 use crate::{Output, evaluate, parse};
 
-fn stack(rows: Value) -> crate::Stack {
+pub(super) fn stack(rows: Value) -> crate::Stack {
     parse(&json!({"v": 1, "stack": rows}).to_string()).unwrap()
 }
 
-fn path_node(sp: SubPath) -> Node {
+pub(super) fn path_node(sp: SubPath) -> Node {
     Node::path(NodeId(1), PathData::new(vec![sp]), Appearance::default_art())
 }
 
-fn square() -> SubPath {
+pub(super) fn square() -> SubPath {
     shapes::rectangle(Rect::new(0.0, 0.0, 100.0, 100.0)).subpaths[0].clone()
 }
 
-fn circle() -> SubPath {
+pub(super) fn circle() -> SubPath {
     shapes::ellipse(Rect::new(0.0, 0.0, 200.0, 200.0)).subpaths[0].clone()
 }
 
@@ -34,7 +34,7 @@ fn radial() -> Displace {
     Displace { mode: DisplaceMode::Radial, progressive: false, ..Displace::default() }
 }
 
-fn bits(sp: &SubPath) -> Vec<[u64; 6]> {
+pub(super) fn bits(sp: &SubPath) -> Vec<[u64; 6]> {
     sp.anchors.iter().map(|a| [a.p.x, a.p.y, a.h_in.x, a.h_in.y, a.h_out.x, a.h_out.y].map(f64::to_bits)).collect()
 }
 
@@ -343,7 +343,7 @@ fn copies_below_an_array_differ_and_above_it_match() {
 }
 
 /// A lopsided 14-point outline in 0..100 (no mirror symmetry of its own).
-fn lopsided() -> SubPath {
+pub(super) fn lopsided() -> SubPath {
     let pts: Vec<Point> = (0..14)
         .map(|i| {
             let t = f64::from(i) / 14.0 * std::f64::consts::TAU;
@@ -355,7 +355,7 @@ fn lopsided() -> SubPath {
 }
 
 /// `rows`' copies of [`lopsided`], with their instances.
-fn copies_of(rows: Value) -> (Output, Vec<Vec<Point>>) {
+pub(super) fn copies_of(rows: Value) -> (Output, Vec<Vec<Point>>) {
     let out = evaluate(&stack(rows), Rect::new(0.0, 0.0, 100.0, 100.0));
     let (copies, notes) = super::shaped_copies(&path_node(lopsided()), &out);
     assert!(notes.is_empty(), "{notes:?}");
@@ -364,14 +364,14 @@ fn copies_of(rows: Value) -> (Output, Vec<Vec<Point>>) {
 }
 
 /// How far `a`'s points are from `b`'s, one by one, at most.
-fn apart(a: &[Point], b: &[Point]) -> f64 {
+pub(super) fn apart(a: &[Point], b: &[Point]) -> f64 {
     assert_eq!(a.len(), b.len());
     a.iter().zip(b).map(|(p, q)| p.distance(*q)).fold(0.0, f64::max)
 }
 
 /// Each mirrored copy against its partner (the copy at the same array place, not reflected): the
 /// reflection that takes the partner's placement to the mirrored copy's, applied to the partner.
-fn mirror_pairs(out: &Output, pts: &[Vec<Point>]) -> Vec<(usize, usize, f64)> {
+pub(super) fn mirror_pairs(out: &Output, pts: &[Vec<Point>]) -> Vec<(usize, usize, f64)> {
     let det = |t: vectorcraft_geom::Affine| {
         let [a, b, c, d, ..] = t.as_coeffs();
         a * d - b * c

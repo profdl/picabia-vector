@@ -227,10 +227,14 @@ fn the_displace_row_shows_the_fields_its_mode_uses() {
     app.run("modifier.add", json!({"ids": [a], "kind": "displace"})).unwrap();
     set_pstate(&ctx, &format!("pc-open-{a}-m2"), true);
     let shown = texts(&mut app, &ctx);
-    for want in ["Displace", "Mode", "Amplitude", "Scale", "Octaves", "Seed", "Ramp copies", "Ramp amount", "Ramp reversed"] {
+    for want in
+        ["Displace", "Pattern", "Smooth noise", "Direction", "Amplitude", "Scale", "Octaves", "Seed", "Ramp copies", "Ramp amount", "Ramp reversed"]
+    {
         assert!(shown.iter().any(|s| s == want), "{want} in {shown:?}");
     }
-    assert!(!shown.iter().any(|s| s == "Ripple count"), "{shown:?}");
+    for hidden in ["Ripple count", "Angle", "Waveform", "Cycles", "Least move", "Steps"] {
+        assert!(!shown.iter().any(|s| s == hidden), "{hidden} hidden in {shown:?}");
+    }
     // Scale reads with two decimals.
     assert!(shown.iter().any(|s| s.starts_with("0.05")), "{shown:?}");
     app.run("modifier.set", json!({"ids": [a], "index": 1, "props": {"mode": "radial", "progressive": false}})).unwrap();
@@ -238,6 +242,46 @@ fn the_displace_row_shows_the_fields_its_mode_uses() {
     assert!(shown.iter().any(|s| s == "Ripple count"), "{shown:?}");
     for hidden in ["Scale", "Octaves", "Ramp amount", "Ramp reversed"] {
         assert!(!shown.iter().any(|s| s == hidden), "{hidden} hidden in {shown:?}");
+    }
+}
+
+/// PIC20.4c: the wave, jitter and fractal patterns show their own fields (tlprocedural's Wave,
+/// Randomize Points and Subdivision Growth); the angle only with direction angle.
+#[test]
+fn the_displace_row_shows_each_patterns_fields() {
+    let (mut app, ctx, a) = arrayed();
+    app.run("modifier.add", json!({"ids": [a], "kind": "displace"})).unwrap();
+    set_pstate(&ctx, &format!("pc-open-{a}-m2"), true);
+    let all = [
+        "Scale",
+        "Octaves",
+        "Ripple count",
+        "Waveform",
+        "Cycles",
+        "Phase",
+        "Least move",
+        "Steps",
+        "Decay",
+        "Wander",
+        "Edge variance",
+        "Normal bias",
+        "Inward",
+        "Seed",
+        "Angle",
+    ];
+    let cases: [(serde_json::Value, &[&str]); 4] = [
+        (json!({"mode": "wave"}), &["Waveform", "Cycles", "Phase"]),
+        (json!({"mode": "jitter"}), &["Least move", "Seed"]),
+        (json!({"mode": "fractal"}), &["Steps", "Decay", "Wander", "Edge variance", "Normal bias", "Inward", "Seed"]),
+        (json!({"mode": "wave", "direction": "angle"}), &["Waveform", "Cycles", "Phase", "Angle"]),
+    ];
+    for (props, want) in cases {
+        app.run("modifier.set", json!({"ids": [a], "index": 1, "props": props})).unwrap();
+        let shown = texts(&mut app, &ctx);
+        for key in all {
+            assert_eq!(shown.iter().any(|s| s == key), want.contains(&key), "{key} with {props}: {shown:?}");
+        }
+        assert!(shown.iter().any(|s| s == "Direction" || s == "Amplitude"), "{shown:?}");
     }
 }
 
@@ -296,4 +340,17 @@ fn the_screen_row_shows_the_fields_its_tone_uses() {
     let p = stack.modifiers[2].kind.params();
     assert_eq!((p["spot"].as_str(), p["tone"].as_str(), p["amount"].as_f64()), (Some("line"), Some("fixed"), Some(30.0)));
     assert!(super::menu::object_items().iter().any(|i| matches!(i, crate::menus::Item::Cmd("Ben-Day Dots", "modifier.add", _))));
+}
+
+/// PIC20.4d: the displace amplitude field reaches 200 for the fractal only (the row's clamp),
+/// 100 for the other patterns.
+#[test]
+fn the_displace_amplitude_range_follows_the_pattern() {
+    let mut m = vectorcraft_modifiers::Modifier::new("m", "displace").unwrap();
+    for (mode, hi) in [("spatial", 100.0), ("radial", 100.0), ("wave", 100.0), ("jitter", 100.0), ("fractal", 200.0)] {
+        if let vectorcraft_modifiers::ModifierKind::Displace(d) = &mut m.kind {
+            d.mode = serde_json::from_value(json!(mode)).unwrap();
+        }
+        assert_eq!(super::appearance::length_range(&m, "amplitude"), Some((0.0, hi)), "{mode}");
+    }
 }

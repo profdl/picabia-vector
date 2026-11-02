@@ -108,7 +108,7 @@ pub use model::{
 };
 pub use model::{CloseMethod, Resample, ResampleMode, SortBy, SubdivideMethod, Tidy, Trim};
 pub use model::{Deform, DeformAxis, DeformMode, Falloff, ShearOrigin};
-pub use model::{Displace, DisplaceMode};
+pub use model::{Displace, DisplaceDirection, DisplaceMode, Waveform};
 pub use model::{
     MAX_CORNER_ANGLE, MAX_HOSHI_DIAMETER_MM, MAX_PATTERN_SPACING_MM, MAX_TIE_WIDTH_MM, MAX_TIES_PER_ISLAND, MIN_HOSHI_DIAMETER_MM,
     MIN_PATTERN_SPACING_MM, MIN_TIE_WIDTH_MM, STENCIL_CLOTH, STENCIL_PAPER, STENCIL_PASTE,

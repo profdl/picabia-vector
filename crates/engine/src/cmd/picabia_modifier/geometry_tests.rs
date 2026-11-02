@@ -215,3 +215,38 @@ fn displace_below_an_array_is_written_to_svg_and_apply_bakes_it() {
     ex(&mut s, "edit.undo", json!({}));
     assert_eq!(super::tests::data(&s, r), before);
 }
+
+/// PIC20.4c: the wave, jitter and fractal patterns below an array: the SVG writes the shaped
+/// copies (a fractal's added anchors too), Apply bakes the same ones, undo restores the live row.
+#[test]
+fn displace_patterns_are_written_to_svg_and_apply_bakes_them() {
+    for (props, anchors) in [
+        (json!({"mode": "wave", "amplitude": 20, "direction": "normal"}), 4),
+        (json!({"mode": "jitter", "amplitude": 20, "jitterMin": -1}), 4),
+        (json!({"mode": "fractal", "amplitude": 30, "steps": 2}), 16),
+    ] {
+        let mut s = session();
+        let r = rect(&mut s, 0.0);
+        add(&mut s, r.0, "linearArray", json!({"count": 3, "offsetX": 150}));
+        add(&mut s, r.0, "displace", props.clone());
+        let svg = ex(&mut s, "document.serialize", json!({"format": "svg", "preserveEditing": false}))["text"].as_str().unwrap().to_string();
+        let written = subpaths(&reopen_svg(&svg).doc().unwrap().doc);
+        assert_eq!(written.len(), 3, "{props}: {svg}");
+        // The ramp: copy 0 is the square, the others shaped.
+        assert_eq!(written[0].anchors.len(), 4, "{props}");
+        assert_eq!(written[2].anchors.len(), anchors, "{props}");
+        let before = super::tests::data(&s, r);
+        let out = ex(&mut s, "modifier.apply", json!({"ids": [r.0]}));
+        assert_eq!(out["applied"][0]["copies"], 3, "{props}");
+        assert_eq!(out["warnings"], json!([]), "{props}");
+        let baked = subpaths(&s.doc().unwrap().doc);
+        for (b, w) in baked.iter().zip(&written) {
+            assert_eq!(b.anchors.len(), w.anchors.len(), "{props}");
+            for (p, q) in b.anchors.iter().zip(&w.anchors) {
+                assert!(p.p.distance(q.p) < 1e-2, "{props}: baked as written");
+            }
+        }
+        ex(&mut s, "edit.undo", json!({}));
+        assert_eq!(super::tests::data(&s, r), before, "{props}");
+    }
+}

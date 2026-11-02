@@ -27,7 +27,10 @@ mod deform;
 mod deform_tests;
 mod displace;
 #[cfg(test)]
+mod displace_pattern_tests;
+#[cfg(test)]
 mod displace_tests;
+mod fractal;
 mod halftone;
 #[cfg(test)]
 mod halftone_tests;
@@ -134,10 +137,21 @@ pub(crate) fn clamped(kind: &ModifierKind) -> Option<(GeometryOp, Vec<String>)> 
         }),
         ModifierKind::Displace(p) => {
             let mut p = p.clone();
-            p.amplitude = c.within("amplitude", p.amplitude, 0.0, 100.0, 10.0);
+            // Subdivision Growth's displacement reaches 200; the other patterns' amplitude 100.
+            let most = if p.mode == crate::model::DisplaceMode::Fractal { 200.0 } else { 100.0 };
+            p.amplitude = c.within("amplitude", p.amplitude, 0.0, most, 10.0);
+            p.angle = c.within("angle", p.angle, -360.0, 360.0, 0.0);
             p.scale = c.within("scale", p.scale, 0.01, 1.0, 0.05);
             p.octaves = whole(&mut c, "octaves", p.octaves, 1, 6);
             p.ripple_count = whole(&mut c, "rippleCount", p.ripple_count, 2, 12);
+            p.frequency = c.within("frequency", p.frequency, 0.1, 10.0, 2.0);
+            p.phase = c.within("phase", p.phase, 0.0, 360.0, 0.0);
+            p.jitter_min = c.within("jitterMin", p.jitter_min, -1.0, 1.0, 0.0);
+            p.steps = whole(&mut c, "steps", p.steps, 1, fractal::MAX_STEPS);
+            p.decay = c.within("decay", p.decay, 0.0, 0.5, 0.45);
+            p.wander = c.within("wander", p.wander, 0.0, 1.0, 0.15);
+            p.edge_variance = c.within("edgeVariance", p.edge_variance, 0.0, 1.0, 0.0);
+            p.normal_bias = c.within("normalBias", p.normal_bias, 0.0, 1.0, 0.5);
             p.seed = whole(&mut c, "seed", p.seed, 0, 999_999);
             p.progressive_amount = c.within("progressiveAmount", p.progressive_amount, 0.0, 1.0, 1.0);
             GeometryOp::Displace(p)
@@ -331,7 +345,9 @@ fn projected(n: &Node, op: &GeometryOp, depth: usize) -> usize {
                 GeometryOp::Trim(_) | GeometryOp::Tidy(_) => sp.anchors.len(),
                 // A deform fits its pieces in the room it is given (`Shaper::deform`).
                 GeometryOp::Deform(_) => sp.anchors.len(),
-                // A displace moves anchors, never adds them.
+                // A fractal displace splits every segment `steps` times; the others move anchors,
+                // never add them.
+                GeometryOp::Displace(p) if p.mode == crate::model::DisplaceMode::Fractal => fractal::count(sp, p.steps),
                 GeometryOp::Displace(_) => sp.anchors.len(),
                 // A screen checks its dots against the budget itself (`Shaper::screen`).
                 GeometryOp::Screen(_) => sp.anchors.len(),
@@ -367,23 +383,68 @@ fn apply(n: &mut Node, op: &GeometryOp, field: Option<&displace::Field>, depth: 
     }
 }
 
-/// A displace's field for `n` (the radial centre is the mean of `n`'s anchors) at ramp position
-/// `copy` (position, total); `None` for the other rows.
+/// A displace's field for `n` (the radial and jitter centre is the mean of `n`'s anchors, a wave
+/// runs across their extent) at ramp position `copy` (position, total); `None` for the other rows.
 fn field(n: &Node, op: &GeometryOp, copy: Option<(usize, usize)>, frame: displace::Frame) -> Option<displace::Field> {
-    field_from(|| anchor_sum(n, 0), op, copy, frame)
+    field_from(Object { sum: || anchor_sum(n, 0), span: |along| anchor_span(n, along, 0) }, op, copy, frame)
 }
 
-/// The field for `op` (a displace), the anchors' sum and count read only when radial needs them.
-fn field_from(sum: impl FnOnce() -> (Vec2, usize), op: &GeometryOp, copy: Option<(usize, usize)>, frame: displace::Frame) -> Option<displace::Field> {
+/// What a displace reads from the whole object, each only when its pattern needs it: the anchors'
+/// sum and count, and their least and greatest projection on a direction.
+struct Object<S, P> {
+    sum: S,
+    span: P,
+}
+
+/// The field for `op` (a displace).
+fn field_from<S, P>(object: Object<S, P>, op: &GeometryOp, copy: Option<(usize, usize)>, frame: displace::Frame) -> Option<displace::Field>
+where
+    S: FnOnce() -> (Vec2, usize),
+    P: FnOnce(Vec2) -> (f64, f64),
+{
     let GeometryOp::Displace(p) = op else { return None };
-    let centre = match p.mode {
-        crate::model::DisplaceMode::Radial => match sum() {
+    let centre = if displace::needs_centre(p) {
+        match (object.sum)() {
             (s, count) if count > 0 => (s / count as f64).to_point(),
             _ => Point::ZERO,
-        },
-        crate::model::DisplaceMode::Spatial => Point::ZERO,
+        }
+    } else {
+        Point::ZERO
     };
-    Some(displace::Field::new(p, centre, copy, frame))
+    let field = displace::Field::new(p, centre, copy, frame);
+    Some(match displace::wave_along(p, frame) {
+        Some(along) => {
+            let (lo, hi) = (object.span)(along);
+            field.spanning(lo, hi)
+        }
+        None => field,
+    })
+}
+
+/// The least and greatest projection on `along` of the finite anchor points of the plain paths in
+/// `n` (`(∞, -∞)` when there are none).
+fn anchor_span(n: &Node, along: Vec2, depth: usize) -> (f64, f64) {
+    let none = (f64::INFINITY, f64::NEG_INFINITY);
+    if depth > vectorcraft_doc::MAX_DEPTH {
+        return none;
+    }
+    match &n.kind {
+        NodeKind::Path { guide: true, .. } => none,
+        NodeKind::Path { path, .. } => path_span(path, along),
+        NodeKind::Group { children, .. } | NodeKind::Layer { children, .. } | NodeKind::Compound { children, .. } => {
+            children.iter().map(|c| anchor_span(c, along, depth + 1)).fold(none, |(lo, hi), (l, h)| (lo.min(l), hi.max(h)))
+        }
+        _ => none,
+    }
+}
+
+fn path_span(path: &PathData, along: Vec2) -> (f64, f64) {
+    path.subpaths
+        .iter()
+        .flat_map(|s| &s.anchors)
+        .filter(|a| a.p.is_finite())
+        .map(|a| along.dot(a.p.to_vec2()))
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), s| (lo.min(s), hi.max(s)))
 }
 
 /// The sum of the anchor points of the plain paths in `n`, and how many.
@@ -486,6 +547,6 @@ pub fn shaped_copies(n: &Node, out: &Output) -> (Vec<Node>, Vec<String>) {
 /// displace as on the object: its radial centre the mean of `path`'s anchors, no copy ramp). A
 /// screen needs the path's paint and returns `path` as it is: it runs on nodes ([`Shaper`]).
 pub fn shape_path(path: &PathData, op: &GeometryOp) -> PathData {
-    let field = field_from(|| path_sum(path), op, None, displace::Frame::IDENTITY);
+    let field = field_from(Object { sum: || path_sum(path), span: |along| path_span(path, along) }, op, None, displace::Frame::IDENTITY);
     shaped(path, op, field.as_ref()).unwrap_or_else(|| path.clone())
 }

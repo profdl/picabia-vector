@@ -1,21 +1,34 @@
-//! Displace: move every anchor by seeded fractal simplex noise (spatial) or by a radial sine
-//! ripple round the centre of the anchors (radial).
+//! Displace: move every anchor by one of five patterns, along the pattern's own direction, the
+//! path's normal, or an axis of the copy:
+//! - smooth noise (`spatial`): seeded fractal simplex noise where the anchor sits;
+//! - `radial`: a sine ripple round the centre of the anchors;
+//! - `wave`: a sine, square, triangle or sawtooth wave across the object (or along its outline);
+//! - `jitter`: a seeded random amount per anchor;
+//! - `fractal`: subdivision growth, which adds anchors ([`super::fractal`]).
 //!
-//! Ported from tlprocedural's Noise modifier (`NoiseModifierProcessor.displacePolygon`, its
-//! simplex after Stefan Gustavson's public-domain description, its fractal sum and its radial
-//! ripple). Differences, on purpose: each anchor moves with its handles, so curves stay curves
+//! Ported from tlprocedural (permission in NOTICE): the Noise modifier
+//! (`NoiseModifierProcessor.displacePolygon`, its simplex after Stefan Gustavson's public-domain
+//! description, its fractal sum and its radial ripple), the Wave modifier
+//! (`WaveModifierProcessor.wavePolygon`, `computeWave`), Randomize Points
+//! (`applyRandomizeToPolygon`) and Subdivision Growth (`SubdivisionGrowthProcessor`).
+//! Differences, on purpose: each anchor moves with its handles, so curves stay curves
 //! (tlprocedural flattened shapes to polygons first: a circle became 32 straight sides; put a
-//! Resample row above for more points); the permutation table's LCG is exact integer arithmetic
-//! (tlprocedural's multiplied past 2^53 in doubles and lost bits, so a seed gives a different,
-//! equally stable, pattern here); the radial phase comes from the crate's seeded stream per copy
-//! (tlprocedural's LCG of `seed + index` alternated between two phases); and every step is plain arithmetic (no `sin`, `cos` or `atan2`
-//! from the platform), so the result is the same on every platform and in wasm.
+//! Resample row above for more points); the LCGs are exact integer arithmetic (tlprocedural's
+//! multiplied past 2^53 in doubles and lost bits, so a seed gives a different, equally stable,
+//! pattern here); the radial phase and the jitter's stream come from the crate's seeded stream per
+//! copy (tlprocedural's LCG of `seed + index` alternated between two phases, and its jitter was
+//! the same on every copy); `x`, `y` and `angle` are read in each copy's frame (as tlprocedural
+//! waved each copy unrotated); and every step is plain arithmetic (no `sin`, `cos`, `atan2`,
+//! `hypot` or `pow` from the platform), so the result is the same on every platform and in wasm.
+
+use std::cell::Cell;
 
 use vectorcraft_geom::{Anchor, Point, SubPath, Vec2};
 
-use crate::model::{Displace, DisplaceMode};
+use super::fractal;
+use crate::model::{Displace, DisplaceDirection, DisplaceMode, Waveform};
 
-/// tlprocedural's LCG multiplier and increment (`buildPermTable`).
+/// tlprocedural's LCG multiplier and increment (`buildPermTable`, `createSeededRandom`).
 const LCG_A: u64 = 1_103_515_245;
 const LCG_C: u64 = 12_345;
 const LCG_MASK: u64 = 0x7fff_ffff;
@@ -24,22 +37,75 @@ const LCG_MASK: u64 = 0x7fff_ffff;
 const MAX_OCTAVES: u32 = 6;
 const MAX_RIPPLES: u32 = 12;
 
+/// tlprocedural's `MIN_RANDOMIZE_LENGTH`: a jittered anchor this close to the centre stays put,
+/// and none is pulled closer than this.
+const MIN_JITTER_LENGTH: f64 = 1e-4;
+
+/// The shortest extent a wave runs across (tlprocedural's 0.001).
+const MIN_WAVE_SPAN: f64 = 0.001;
+
 /// The eight gradient directions of tlprocedural's 2D simplex.
 const GRAD2: [(f64, f64); 8] = [(1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0), (1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)];
 
 /// A displacement ready to run on one object (or one copy): its params clamped, its amount after
-/// the progressive ramp, and what it reads from the whole object (the radial centre).
+/// the progressive ramp, and what it reads from the whole object (the centre, the wave's span).
 pub(super) struct Field {
     amplitude: f64,
     how: How,
+    aim: Aim,
+    /// The anchors of the object displaced so far: a fractal seeds its segments by their place in
+    /// the whole object, not just their subpath.
+    seen: Cell<usize>,
+}
+
+/// Which way an anchor moves.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Aim {
+    /// The pattern's own direction.
+    Own,
+    /// The path's outward normal.
+    Normal,
+    /// This unit vector, in document space.
+    Along(Vec2),
 }
 
 enum How {
-    Spatial { scale: f64, octaves: u32, perm: Vec<u8> },
-    Radial { centre: Point, ripples: u32, phase_cos: f64, phase_sin: f64, frame: Frame },
+    Spatial {
+        scale: f64,
+        octaves: u32,
+        perm: Vec<u8>,
+    },
+    Radial {
+        centre: Point,
+        ripples: u32,
+        phase_cos: f64,
+        phase_sin: f64,
+        frame: Frame,
+    },
+    Wave {
+        form: Waveform,
+        cycles: f64,
+        turns: f64,
+        across: Across,
+    },
+    /// `state`: the LCG, carried from one anchor to the next across the object's subpaths.
+    Jitter {
+        centre: Point,
+        least: f64,
+        state: Cell<u64>,
+    },
+    Fractal(fractal::Grow),
 }
 
-/// The frame a copy's radial ripple is read in: its turn (the direction of its transform's x axis)
+/// What a wave runs across.
+enum Across {
+    /// Each subpath's outline, start to end (direction normal).
+    Outline,
+    /// The object's extent along `along` (document space), `lo` to `lo + len` once known.
+    Span { along: Vec2, span: Option<(f64, f64)> },
+}
+
+/// The frame a copy's pattern is read in: its turn (the direction of its transform's x axis)
 /// and whether it is reflected, so a rotated copy's ripple turns with it and a mirrored copy's is
 /// the mirror image of its partner's (as Deform reads each copy in its frame). Found with plain
 /// arithmetic, no `atan2`.
@@ -65,55 +131,170 @@ impl Frame {
         Frame { cos: a / len, sin: b / len, flip: det.is_finite() && det < 0.0 }
     }
 
+    /// Whether the frame is reflected.
+    pub fn flipped(&self) -> bool {
+        self.flip
+    }
+
     /// `v` read in the frame: turned back, then unreflected.
     fn local(&self, v: Vec2) -> (f64, f64) {
         let x = self.cos * v.x + self.sin * v.y;
         let y = self.cos * v.y - self.sin * v.x;
         (x, if self.flip { -y } else { y })
     }
+
+    /// Local `(x, y)` in document space: reflected, then turned ([`Frame::local`]'s inverse).
+    fn to_doc(self, x: f64, y: f64) -> Vec2 {
+        let y = if self.flip { -y } else { y };
+        Vec2::new(self.cos * x - self.sin * y, self.sin * x + self.cos * y)
+    }
+}
+
+/// `(sin, cos)` of `deg` degrees ([`sin_cos`]); 0° when it isn't finite.
+fn sin_cos_deg(deg: f64) -> (f64, f64) {
+    sin_cos(if deg.is_finite() { deg % 360.0 } else { 0.0 } * std::f64::consts::PI / 180.0)
+}
+
+/// The axis `p.direction` names, in the copy's own axes (`None`: own or normal).
+fn local_axis(p: &Displace) -> Option<(f64, f64)> {
+    match p.direction {
+        DisplaceDirection::Own | DisplaceDirection::Normal => None,
+        DisplaceDirection::X => Some((1.0, 0.0)),
+        DisplaceDirection::Y => Some((0.0, 1.0)),
+        DisplaceDirection::Angle => {
+            let (s, c) = sin_cos_deg(p.angle);
+            Some((c, s))
+        }
+    }
+}
+
+/// The direction a wave runs across, in document space (it moves anchors across it); `None` when
+/// it runs along the outline (direction normal) or `p` isn't a wave. tlprocedural's `axis`:
+/// horizontal (its default, our own and `y`) runs across the width and moves in y, vertical (`x`)
+/// along the height moving in x; an angle runs across it, 0° being `x` and 90° `y`.
+pub(super) fn wave_along(p: &Displace, frame: Frame) -> Option<Vec2> {
+    if p.mode != DisplaceMode::Wave {
+        return None;
+    }
+    let (x, y) = match p.direction {
+        DisplaceDirection::Normal => return None,
+        // One turning family: the wave runs a quarter turn back from the way it moves, so angle 0
+        // is `x` and 90° is `y` exactly. `y` is tlprocedural's horizontal axis; `x` runs up the
+        // height (tlprocedural's vertical axis ran down it: the same wave, mirrored top to bottom).
+        DisplaceDirection::Own | DisplaceDirection::Y => (1.0, 0.0),
+        DisplaceDirection::X => (0.0, -1.0),
+        DisplaceDirection::Angle => {
+            let (s, c) = sin_cos_deg(p.angle);
+            (s, -c)
+        }
+    };
+    Some(frame.to_doc(x, y))
+}
+
+/// Whether `p` reads the centre of the object's anchors.
+pub(super) fn needs_centre(p: &Displace) -> bool {
+    match p.mode {
+        DisplaceMode::Radial => true,
+        DisplaceMode::Jitter => p.direction == DisplaceDirection::Own,
+        _ => false,
+    }
 }
 
 impl Field {
-    /// `p` (clamped) for an object whose anchors centre on `centre` (read in radial mode only);
+    /// `p` (clamped) for an object whose anchors centre on `centre` (read by radial and jitter);
     /// `copy`: the copy's place among the array copies and their number
-    /// ([`crate::Output::ramp_position`]; `None`: the whole effect, phase of place 0); `frame`:
-    /// the copy's frame for the radial ripple.
+    /// ([`crate::Output::ramp_position`]; `None`: the whole effect, phase and stream of place 0);
+    /// `frame`: the copy's frame. A wave runs across nothing until [`Field::spanning`].
     pub fn new(p: &Displace, centre: Point, copy: Option<(usize, usize)>, frame: Frame) -> Field {
         let amplitude = p.amplitude * ramp(p, copy);
+        let place = copy.map_or(0, |c| c.0);
+        let mut aim = match (p.direction, local_axis(p)) {
+            (DisplaceDirection::Normal, _) => Aim::Normal,
+            (_, Some((x, y))) => Aim::Along(frame.to_doc(x, y)),
+            _ => Aim::Own,
+        };
         // The loops are capped here too: `GeometryOp` and `shape_path` are public, so `p` may not
         // have been through `clamped`.
         let how = match p.mode {
             DisplaceMode::Spatial => How::Spatial { scale: p.scale, octaves: p.octaves.min(MAX_OCTAVES), perm: perm_table(p.seed) },
             DisplaceMode::Radial => {
-                let (phase_sin, phase_cos) = sin_cos(phase(p.seed, copy.map_or(0, |c| c.0)));
+                let (phase_sin, phase_cos) = sin_cos(phase(p.seed, place));
                 How::Radial { centre, ripples: p.ripple_count.min(MAX_RIPPLES), phase_cos, phase_sin, frame }
             }
+            DisplaceMode::Wave => {
+                // A wave's own direction is tlprocedural's default: across the width, moving in y.
+                if aim == Aim::Own {
+                    aim = Aim::Along(frame.to_doc(0.0, 1.0));
+                }
+                let across = match wave_along(p, frame) {
+                    Some(along) => Across::Span { along, span: None },
+                    None => Across::Outline,
+                };
+                let turns = if p.phase.is_finite() { p.phase / 360.0 } else { 0.0 };
+                How::Wave { form: p.waveform, cycles: p.frequency, turns, across }
+            }
+            DisplaceMode::Jitter => How::Jitter { centre, least: p.jitter_min, state: Cell::new(jitter_start(p.seed, place)) },
+            DisplaceMode::Fractal => How::Fractal(fractal::Grow::new(p, place, frame.flipped())),
         };
-        Field { amplitude, how }
+        Field { amplitude, how, aim, seen: Cell::new(0) }
     }
 
-    /// `sp` with every anchor moved (its handles with it); `None` when nothing moves.
+    /// A wave across the object's extent from `lo` to `hi` along [`wave_along`] (the anchors'
+    /// projections); other patterns are as they were.
+    pub fn spanning(mut self, lo: f64, hi: f64) -> Field {
+        if let How::Wave { across: Across::Span { span, .. }, .. } = &mut self.how {
+            let len = hi - lo;
+            *span = (lo.is_finite() && len.is_finite() && len >= MIN_WAVE_SPAN).then_some((lo, len));
+        }
+        self
+    }
+
+    /// `sp` with every anchor moved (its handles with it), or grown (fractal); `None` when nothing
+    /// changes.
     pub fn displace(&self, sp: &SubPath) -> Option<SubPath> {
+        let before = self.seen.get();
+        self.seen.set(before.saturating_add(sp.anchors.len()));
         if self.amplitude == 0.0 || !self.amplitude.is_finite() || sp.anchors.is_empty() {
             return None;
         }
+        if let How::Fractal(g) = &self.how {
+            return fractal::grow(sp, g, self.amplitude, self.aim, before);
+        }
+        let normals = if self.aim == Aim::Normal { normals(sp) } else { Vec::new() };
+        let along = match &self.how {
+            How::Wave { across: Across::Outline, .. } => Some(outline_fractions(sp)?),
+            How::Wave { across: Across::Span { span: None, .. }, .. } => return None,
+            _ => None,
+        };
         let anchors = sp
             .anchors
             .iter()
-            .map(|a| {
-                let d = self.offset(a.p);
+            .enumerate()
+            .map(|(i, a)| {
+                let dir = match self.aim {
+                    Aim::Own => None,
+                    Aim::Normal => Some(normals.get(i).copied().unwrap_or(Vec2::ZERO)),
+                    Aim::Along(v) => Some(v),
+                };
+                let t = along.as_ref().and_then(|t| t.get(i).copied()).map(|t| (t, sp.closed));
+                let d = self.offset(a.p, dir, t);
                 Anchor { p: a.p + d, h_in: a.h_in + d, h_out: a.h_out + d, kind: a.kind }
             })
             .collect();
         Some(SubPath::new(anchors, sp.closed))
     }
 
-    /// How far the anchor at `p` moves.
-    fn offset(&self, p: Point) -> Vec2 {
+    /// How far the anchor at `p` moves: along `dir` when given (else the pattern's own way);
+    /// `outline`: its fraction of its subpath's outline (a wave along it), and whether the subpath
+    /// is closed.
+    fn offset(&self, p: Point, dir: Option<Vec2>, outline: Option<(f64, bool)>) -> Vec2 {
         match &self.how {
             How::Spatial { scale, octaves, perm } => {
                 let (x, y) = (p.x * scale, p.y * scale);
                 let nx = fbm(x, y, *octaves, perm);
+                if let Some(d) = dir {
+                    return d * (nx * self.amplitude);
+                }
                 let ny = fbm(x + 100.0, y + 100.0, *octaves, perm);
                 Vec2::new(nx * self.amplitude, ny * self.amplitude)
             }
@@ -136,10 +317,188 @@ impl Field {
                 let wave = im * phase_cos + re * phase_sin;
                 // tlprocedural: bump = dist · amplitude/100 · 0.25 · wave, along the anchor's
                 // direction from the centre.
-                v * (self.amplitude / 100.0 * 0.25 * wave)
+                let k = self.amplitude / 100.0 * 0.25 * wave;
+                match dir {
+                    Some(d) => d * (dist * k),
+                    None => v * k,
+                }
             }
+            How::Wave { form, cycles, turns, across } => {
+                let (t, cycles) = match (across, outline) {
+                    // Round a closed outline: a whole number of cycles, so the wave meets itself
+                    // where the outline starts (no seam).
+                    (Across::Outline, Some((t, true))) => (t, whole_cycles(*cycles)),
+                    (Across::Outline, Some((t, false))) => (t, *cycles),
+                    (Across::Span { along, span: Some((lo, len)) }, _) => ((along.dot(p.to_vec2()) - lo) / len, *cycles),
+                    _ => return Vec2::ZERO,
+                };
+                let w = waveform(*form, t * cycles + turns);
+                dir.map_or(Vec2::ZERO, |d| d * (self.amplitude * w))
+            }
+            How::Jitter { centre, least, state } => {
+                let span = (1.0 - least).max(0.0);
+                let amount = || {
+                    // tlprocedural draws only when there is a range to draw from.
+                    let u = if span > 0.0 { lcg_unit(state) } else { 0.0 };
+                    self.amplitude * (least + u * span)
+                };
+                match dir {
+                    Some(d) => d * amount(),
+                    None => {
+                        let v = p - *centre;
+                        let len = (v.x * v.x + v.y * v.y).sqrt();
+                        if !(len >= MIN_JITTER_LENGTH && len.is_finite()) {
+                            return Vec2::ZERO;
+                        }
+                        // Along the anchor's direction from the centre, never through it.
+                        let target = (len + amount()).max(MIN_JITTER_LENGTH);
+                        v * (target / len - 1.0)
+                    }
+                }
+            }
+            How::Fractal(_) => Vec2::ZERO,
         }
     }
+}
+
+/// `cycles` rounded to the nearest whole number, at least 1 (a wave round a closed outline).
+pub(super) fn whole_cycles(cycles: f64) -> f64 {
+    if cycles.is_finite() { cycles.round().max(1.0) } else { cycles }
+}
+
+/// A wave's value at `x` cycles, -1..=1 (tlprocedural's `computeWave`). The square wave reads the
+/// cycle's half directly (tlprocedural took the sine's sign, which is the same except exactly on
+/// a half cycle, where its sine's last bits decided).
+pub(super) fn waveform(form: Waveform, x: f64) -> f64 {
+    if !x.is_finite() {
+        return 0.0;
+    }
+    let m = ((x % 1.0) + 1.0) % 1.0;
+    match form {
+        // sin(2πx), read from the cycle's fraction (the same sine, without reducing a large angle).
+        Waveform::Sine => sin_cos(m * std::f64::consts::TAU).0,
+        Waveform::Square => {
+            if m < 0.5 {
+                1.0
+            } else {
+                -1.0
+            }
+        }
+        Waveform::Triangle => {
+            if m < 0.25 {
+                m * 4.0
+            } else if m < 0.75 {
+                2.0 - m * 4.0
+            } else {
+                m * 4.0 - 4.0
+            }
+        }
+        Waveform::Sawtooth => m * 2.0 - 1.0,
+    }
+}
+
+/// The jitter's first LCG state for `seed` at array place `place`: tlprocedural's `seed || 1` on
+/// the object and the first copy; another copy's from the crate's seeded stream, so each copy
+/// jitters its own way.
+pub(super) fn jitter_start(seed: u32, place: usize) -> u64 {
+    let s = if place == 0 {
+        u64::from(seed)
+    } else {
+        let unit = (crate::kinds::rng_stream(seed, place).signed() + 1.0) / 2.0;
+        (unit * LCG_MASK as f64) as u64 & LCG_MASK
+    };
+    if s == 0 { 1 } else { s }
+}
+
+/// The next of tlprocedural's `createSeededRandom` in 0..=1, in exact integer arithmetic.
+fn lcg_unit(state: &Cell<u64>) -> f64 {
+    let s = state.get().wrapping_mul(LCG_A).wrapping_add(LCG_C) & LCG_MASK;
+    state.set(s);
+    s as f64 / LCG_MASK as f64
+}
+
+/// The outward normal at each anchor of `sp` (zero where it has no direction): square to the
+/// tangent (the handles' line, or the neighbours' chord at a corner), outward by the winding of
+/// the anchors' polygon.
+pub(super) fn normals(sp: &SubPath) -> Vec<Vec2> {
+    let a = &sp.anchors;
+    let n = a.len();
+    // The winding of the curve itself (its exact area, handles included): a curved shape with few
+    // anchors (a two-anchor lens) has no anchor-polygon area to read it from.
+    let sign = if bezier_area(a, sp.closed) >= 0.0 { 1.0 } else { -1.0 };
+    (0..n)
+        .map(|i| {
+            let Some(here) = a.get(i) else { return Vec2::ZERO };
+            let handles = here.h_out - here.h_in;
+            let t = if handles.x * handles.x + handles.y * handles.y > 1e-18 {
+                handles
+            } else {
+                let prev = if i > 0 {
+                    a.get(i - 1)
+                } else if sp.closed {
+                    a.last()
+                } else {
+                    None
+                };
+                let next = if i + 1 < n {
+                    a.get(i + 1)
+                } else if sp.closed {
+                    a.first()
+                } else {
+                    None
+                };
+                next.map_or(here.p, |b| b.p) - prev.map_or(here.p, |b| b.p)
+            };
+            let len = (t.x * t.x + t.y * t.y).sqrt();
+            if !(len > 1e-12 && len.is_finite()) {
+                return Vec2::ZERO;
+            }
+            // The right-hand normal points out of a positively wound polygon.
+            Vec2::new(t.y, -t.x) * (sign / len)
+        })
+        .collect()
+}
+
+/// The signed area of the curve through `a` (closed back to its first anchor, by its own segment
+/// when `closed`, else by a line), positive for the anchor polygon's positive winding: kurbo's
+/// exact cubic area, plain arithmetic.
+pub(super) fn bezier_area(a: &[Anchor], closed: bool) -> f64 {
+    use vectorcraft_geom::kurbo::{CubicBez, Line, ParamCurveArea};
+    let n = a.len();
+    let segments = if closed { n } else { n.saturating_sub(1) };
+    let mut area: f64 = (0..segments)
+        .filter_map(|i| Some((a.get(i)?, a.get((i + 1) % n)?)))
+        .map(|(p, q)| CubicBez::new(p.p, p.h_out, q.h_in, q.p).signed_area())
+        .sum();
+    if !closed && let (Some(f), Some(l)) = (a.first(), a.last()) {
+        area += Line::new(l.p, f.p).signed_area();
+    }
+    area
+}
+
+/// Each anchor's place along `sp`'s outline (the anchors' chords, a closed one's closing chord
+/// too) as a fraction of it; `None` when it has no length.
+fn outline_fractions(sp: &SubPath) -> Option<Vec<f64>> {
+    let a = &sp.anchors;
+    let mut at = Vec::with_capacity(a.len());
+    let mut total = 0.0;
+    for (i, x) in a.iter().enumerate() {
+        if let Some(prev) = i.checked_sub(1).and_then(|j| a.get(j)) {
+            let d = x.p - prev.p;
+            total += (d.x * d.x + d.y * d.y).sqrt();
+        }
+        at.push(total);
+    }
+    if sp.closed
+        && let (Some(first), Some(last)) = (a.first(), a.last())
+    {
+        let d = first.p - last.p;
+        total += (d.x * d.x + d.y * d.y).sqrt();
+    }
+    if !(total >= MIN_WAVE_SPAN && total.is_finite()) {
+        return None;
+    }
+    Some(at.into_iter().map(|s| s / total).collect())
 }
 
 /// The share of the amplitude for copy `copy` (index, count): tlprocedural's
@@ -231,8 +590,9 @@ pub(super) fn fbm(x: f64, y: f64, octaves: u32, p: &[u8]) -> f64 {
 }
 
 /// `(sin x, cos x)` by Taylor series after reducing `x` to -π..π: plain arithmetic, so the same
-/// bits on every platform (the platform's `sin` may differ in the last place). `x` is a phase in
-/// 0..2π here.
+/// bits on every platform (the platform's `sin` may differ in the last place). Accurate to the
+/// last few bits for a phase or angle (|x| up to a few turns); larger `x` loses what `x % 2π`
+/// loses.
 pub(super) fn sin_cos(x: f64) -> (f64, f64) {
     use std::f64::consts::{PI, TAU};
     if !x.is_finite() {
