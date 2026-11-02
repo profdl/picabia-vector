@@ -325,9 +325,9 @@ copies (the copies above it stand), and enabled rows below it are ignored with o
 the first enabled stencil counts). Apply bakes only the rows above it; the stencil row moves onto
 the new group, live.
 
-**Status here:** the `stencil` kind is in the ported stack crate (PIC1.1) and is parsed, saved and
-evaluated there; the sheet, islands, ties, preview and laser export are being ported (picabia-craft
-P8 to P12, P17). The fields below are picabia-craft's and stay the contract.
+**Status here:** ported (picabia-craft P8 to P12, P17): the sheet, islands, ties, preview, laser
+export and test card (`vectorcraft-stencil`; see [`ROADMAP.md`](ROADMAP.md)). The fields below are
+picabia-craft's and stay the contract.
 
 **On the canvas and in exports (PIC9.5b, PIC11.10).** Once a sheet is computed (in the background;
 a stale one is shown until the new one lands), the canvas draws the object as its sheet: the paper
