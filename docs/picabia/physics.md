@@ -1,8 +1,8 @@
 # Physics
 
 **Status:** 2026-11-02, phase 1 (PIC30.1, PIC30.2): drop-and-settle; phase 2 (PIC31, soft bodies
-and live simulation) planned; its gate (PIC31.0) failed on cross-platform determinism, see
-[PIC31.0 result](#pic310-result-no-go-2026-11-02), so nothing past it is built (see [Phase 2](#phase-2-soft-bodies-and-live-simulation-planned)). Ported from the owner's
+and live simulation) under way: its gate (PIC31.0) failed on cross-platform bits and the owner
+accepted per-platform soft results (see [Decisions](#decisions)). Ported from the owner's
 tlprocedural (its Physics modifier: `PhysicsSettings` in `src/types/modifiers.ts`, defaults in
 `modifierConfig.ts`, ranges in `modifierSchemas.ts`, the world in
 `src/store/modifiers/core/PhysicsEngine.ts` and `PhysicsGeometryConverter.ts`).
@@ -153,6 +153,7 @@ objects change only on **Apply**.
 | First presets | **Cloth** and **Jelly / Rubber** (one elastic model, two presets: soft and wobbly, stiff and bouncy), each fine-tuned in the panel |
 | What bodies collide with | **Only objects with physics settings** (static, dynamic, kinematic, soft), as in phase 1. To drape over a drawing, give it Make Static |
 | Holding cloth up | **Pin chosen points** (fixed in place) and **attach points to an object** (they move with that body) |
+| Cross-platform bits for soft bodies (2026-11-02, after PIC31.0) | **Given up for soft bodies** (option 3 below). Picabia ships for the desktop; Apply bakes the result into the art, and scrubbing and replay happen on one machine, so a pose that differs slightly between platforms costs little. Soft bodies give the same bits on one machine and build (replay, scrubbing, snapshots: tested) and may differ between platforms and in wasm32. Rigid-only scenes keep phase 1's guarantee (its fingerprint is pinned in `tests.rs`). rapier isn't patched or vendored; cross-platform bits can come back when a rapier release carries the fix below (re-run PIC31.0's hash check then) |
 | Rigid physics | **One flow**: rigid and soft bodies share one world, one transport bar, clones and Apply. Today's instant Simulate becomes **Simulate to Rest** (run to rest, show it, Apply); `physics.simulate` keeps working for scripts (runs to rest and applies, as now) |
 
 ### The engine
@@ -170,9 +171,10 @@ natively and in wasm32 with `enhanced-determinism`, no panic on junk input (dege
 self-crossing outlines), and a step cost that allows live playback. If any fails, the plan is
 revisited before more is built.
 
-### PIC31.0 result: no-go (2026-11-02)
+### PIC31.0 result: no-go (2026-11-02), overruled by the owner
 
-The spike failed condition 1, so nothing past PIC31.0 was built. The spike's code is in
+The spike failed condition 1. The owner accepted that soft bodies may differ between platforms
+(Decisions, above), so the work goes on from PIC31.1. The spike's code is in
 `crates/physics/src/spike_scene.rs` (plain rapier, no Picabia types) and `tests_soft_spike.rs`.
 
 | Condition | Result | Numbers |
@@ -220,6 +222,31 @@ Microsoft's CRT differ), which phase 1 promises.
 
 Recommendation: 1 and 2 together. Patch now (option 2, recorded in `SEAMS.md` as a temporary
 seam), file the upstream fix, and drop the patch when a release carries it.
+
+**Upstream bug report** (text for the owner to file at dimforge/rapier; not posted):
+
+> **2D soft bodies are not deterministic across platforms with `enhanced-determinism`**
+>
+> rapier2d 0.36.1, features `dim2 f32 std block-solver enhanced-determinism`. A scene of soft
+> bodies (`polyline`, `polygon`, `volumetric`) and rigid bodies, stepped at 1/60 s, hashed over every
+> rigid pose and particle position (FNV-1a of the f32 bits): native x86_64 Linux and
+> wasm32-unknown-unknown (Node 22) agree for 30 steps, then differ; after 240 steps
+> `4c5b3c80604096f9` (native) vs `4c67464e3567face` (wasm32). Rigid-only scenes agree.
+>
+> Cause: `extract_rotation` (`src/dynamics/soft_body/soft_body_shape_matching.rs`, line 23, 2D
+> branch) calls `sin.atan2(cos)` on the `f32` primitive, which is the platform's libm (glibc,
+> Apple's, the MSVC CRT, or Rust's libm port in wasm32), not simba's `RealField::atan2`, which
+> `enhanced-determinism` routes through `libm`. It runs every step for every soft body (cluster
+> frames, shape matching, corotational cells). Fix, one line:
+> `Rotation::new(<Real as simba::scalar::RealField>::atan2(sin, cos))`; with it, the native and
+> wasm32 hashes match at every checkpoint (`4c67464e3567face` at 240 steps).
+>
+> Other std calls on primitives in the same code paths, worth routing through simba too: `acos` in
+> `soft_scalar_constraint.rs` (3D dihedral bending) and `soft_body_builder_mesh_helpers.rs`;
+> `powf` in `soft_constraint_plasticity.rs` and `soft_element_constraint_assembly.rs` (the
+> corotational cell size); `exp` in `soft_element_constraint_assembly.rs` (deformation damping) and
+> `soft_body_material.rs` (tear smoothing); `sin`/`cos` in the `disk` and 3D builders (input
+> only).
 
 **Cost findings for the next attempt:** cloth is cheap without self-contact (20 strips of 400
 particles and 200 boxes: 6.9 ms a step; of 100 particles: 1.9 ms) and very expensive with it (one

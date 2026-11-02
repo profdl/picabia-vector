@@ -168,6 +168,10 @@ fn the_same_input_gives_the_same_bits() {
     // A fingerprint of the run, printed for comparing native and wasm builds.
     let h = bits(&a).iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b).wrapping_mul(0x100_0000_01b3));
     println!("physics fingerprint {h:016x} steps {}", a.steps);
+    // Pinned (PIC31.0a): rigid-only scenes keep phase 1's guarantee, the same bits on every
+    // platform and in wasm32 (checked under Node in PIC30.1). Soft bodies (PIC31) must leave
+    // this hash alone; a rapier upgrade that changes it is a change of results to look into.
+    assert_eq!((h, a.steps), (0x6f8e_17c7_d634_739d, 109), "the rigid-only fingerprint changed");
 }
 
 #[test]
