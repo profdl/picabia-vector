@@ -237,11 +237,17 @@ fn junk_drags_stay_finite_and_in_range() {
     let all = handles(&mut s);
     assert_eq!(all.len(), 1 + 3 + 1 + 2 + 1, "{all:?}");
     for zoom in [1.0, 1.0e-9, 1.0e9, f64::NAN] {
-        let v = view(zoom);
-        for h in handles(&mut s) {
-            let at = Point::new(h["x"].as_f64().unwrap(), h["y"].as_f64().unwrap());
-            for to in [Point::new(f64::NAN, 1.0), Point::new(1.0e300, -1.0e300), Point::new(f64::INFINITY, 0.0), at + Vec2::new(-1.0e7, 3.0e7)] {
+        // Without the bounding box (whose handles would win where a knob sits on one).
+        let v = ViewInfo { show_bbox: false, ..view(zoom) };
+        let count = s.picabia_mod_handles(v).unwrap().handles.len();
+        for i in 0..count {
+            for far in [Vec2::new(f64::NAN, 1.0), Vec2::new(1.0e300, -1.0e300), Vec2::new(f64::INFINITY, 0.0), Vec2::new(-1.0e7, 3.0e7)] {
+                // Knob `i` wherever the last drag left it.
+                // (A drag can hide a knob: a ring of radius 0 has no sweep knob.)
+                let Some(at) = s.picabia_mod_handles(v).unwrap().handles.get(i).map(|h| h.at) else { continue };
+                let to = at + far;
                 ptr(&mut s, PointerKind::Down, at, v);
+                assert!(s.picabia_handles_busy(), "zoom {zoom}: the knob at {at:?} takes the press");
                 let _ = s.pointer(&PointerEvent::new(PointerKind::Drag, to.x, to.y), v);
                 let _ = s.pointer(&PointerEvent::new(PointerKind::Up, to.x, to.y), v);
                 assert!(!s.tool_busy());
@@ -260,4 +266,161 @@ fn junk_drags_stay_finite_and_in_range() {
         }
     }
     assert!(l["warnings"].as_array().is_some());
+}
+
+/// A rectangle at 0,0 (100 × 100), selected with the Selection tool, with `row` as its only row.
+fn with_row(row: Value) -> (Session, NodeId) {
+    let mut s = session();
+    let r = rect(&mut s, 0.0);
+    let mut add = row;
+    add["ids"] = json!([r.0]);
+    ex(&mut s, "modifier.add", add);
+    s.select_tool("selection", ViewInfo::default()).unwrap();
+    (s, r)
+}
+
+#[test]
+fn coincident_knobs_give_the_press_to_the_one_to_drag() {
+    let v = ViewInfo { show_bbox: false, ..view(1.0) };
+    // A ring of radius 0: the radius knob lies on the centre; dragging there pulls the radius out.
+    let (mut s, r) = with_row(json!({"kind": "circularArray", "props": {"radius": 0}}));
+    let c = handle_at(&mut s, "ringCenter");
+    assert_eq!(c, handle_at(&mut s, "ringRadius"));
+    drag(&mut s, c, c - Vec2::new(60.0, 0.0), v);
+    assert_eq!(param(&mut s, r, 0, "radius"), 30.0);
+    assert_eq!((param(&mut s, r, 0, "centerX"), param(&mut s, r, 0, "centerY")), (0.0, 0.0));
+    // A closed path's whole window: both knobs on its start point; the end takes the press.
+    let (mut s, r) = with_row(json!({"kind": "trim", "props": {"start": 0, "end": 1}}));
+    let k = handle_at(&mut s, "trimEnd");
+    assert_eq!(k, handle_at(&mut s, "trimStart"));
+    drag(&mut s, k, Point::new(0.0, 50.0), v);
+    assert_eq!(param(&mut s, r, 0, "start"), 0.0);
+    assert!((param(&mut s, r, 0, "end") - 0.875).abs() < 1e-3, "{}", param(&mut s, r, 0, "end"));
+}
+
+#[test]
+fn a_bounding_box_handle_beats_a_knob_on_it() {
+    // Trim from 0: the start knob sits on the rectangle's top-left corner, a bounding-box handle.
+    let (mut s, r) = with_row(json!({"kind": "trim", "props": {"start": 0, "end": 0.5}}));
+    let k = handle_at(&mut s, "trimStart");
+    assert_eq!(k, Point::new(0.0, 0.0));
+    let v = view(1.0);
+    ptr(&mut s, PointerKind::Down, k, v);
+    assert!(!s.picabia_handles_busy() && s.tool_busy(), "the Selection tool scales");
+    ptr(&mut s, PointerKind::Drag, k - Vec2::new(20.0, 20.0), v);
+    ptr(&mut s, PointerKind::Up, k - Vec2::new(20.0, 20.0), v);
+    assert_eq!(param(&mut s, r, 0, "start"), 0.0);
+    assert!(s.doc().unwrap().doc.node(r).unwrap().geometric_bounds().unwrap().x0 < -10.0, "scaled");
+    // With the bounding box hidden the knob takes it.
+    let k = handle_at(&mut s, "trimStart");
+    ptr(&mut s, PointerKind::Down, k, ViewInfo { show_bbox: false, ..v });
+    assert!(s.picabia_handles_busy());
+}
+
+#[test]
+fn open_rows_are_the_documents_own() {
+    let (mut s, r) = linear();
+    ex(&mut s, "modifier.add", json!({"ids": [r.0], "kind": "mirror"}));
+    s.picabia_set_handle_rows(r, vec!["m1".into()]);
+    let names = |s: &mut Session| handles(s).iter().map(|h| h["handle"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    assert_eq!(names(&mut s), ["linearEnd"]);
+    // Another document whose object has the same id and rows: its own (none open) apply.
+    let first = s.active_index().unwrap();
+    ex(&mut s, "file.new", json!({"width": 2000, "height": 2000}));
+    let r2 = rect(&mut s, 0.0);
+    assert_eq!(r2, r, "ids repeat across documents");
+    ex(&mut s, "modifier.add", json!({"ids": [r2.0], "kind": "linearArray"}));
+    ex(&mut s, "modifier.add", json!({"ids": [r2.0], "kind": "mirror"}));
+    s.select_tool("selection", ViewInfo::default()).unwrap();
+    assert_eq!(names(&mut s), ["mirrorVertical"]);
+    assert!(s.set_active(first));
+    assert_eq!(names(&mut s), ["linearEnd"], "back in the first document");
+}
+
+#[test]
+fn a_drag_ends_cleanly_when_its_document_or_object_goes() {
+    let v = view(1.0);
+    // Switching documents mid-drag: the first document is put back, the drag is gone.
+    let (mut s, r) = linear();
+    let first = s.active_index().unwrap();
+    let steps = undo_labels(&s).len();
+    let end = handle_at(&mut s, "linearEnd");
+    ptr(&mut s, PointerKind::Down, end, v);
+    ptr(&mut s, PointerKind::Drag, end + Vec2::new(-100.0, 0.0), v);
+    ex(&mut s, "file.new", json!({"width": 500, "height": 500}));
+    let other = rect(&mut s, 0.0);
+    assert_eq!(other, r);
+    assert!(!s.tool_busy() && !s.tool_claims_key(ToolKey::Escape, v));
+    ptr(&mut s, PointerKind::Drag, end + Vec2::new(-200.0, 0.0), v);
+    ptr(&mut s, PointerKind::Up, end + Vec2::new(-200.0, 0.0), v);
+    assert!(vectorcraft_modifiers::node_source(s.doc().unwrap().doc.node(other).unwrap()).is_none(), "the other document untouched");
+    assert!(s.set_active(first));
+    assert_eq!(param(&mut s, r, 0, "offsetX"), 120.0);
+    assert_eq!(undo_labels(&s).len(), steps);
+    assert!(s.doc().unwrap().interaction.is_none());
+    // Deleting the object mid-drag (an agent's command): no stray step, nothing left open.
+    let (mut s, r) = linear();
+    let end = handle_at(&mut s, "linearEnd");
+    ptr(&mut s, PointerKind::Down, end, v);
+    ptr(&mut s, PointerKind::Drag, end + Vec2::new(-100.0, 0.0), v);
+    let _ = s.execute("edit.clear", &json!({"ids": [r.0]}));
+    ptr(&mut s, PointerKind::Drag, end + Vec2::new(-150.0, 0.0), v);
+    ptr(&mut s, PointerKind::Up, end + Vec2::new(-150.0, 0.0), v);
+    assert!(!s.tool_busy() && s.doc().unwrap().interaction.is_none());
+    // Undo mid-drag: the drag doesn't commit over it.
+    let (mut s, r) = linear();
+    let end = handle_at(&mut s, "linearEnd");
+    ptr(&mut s, PointerKind::Down, end, v);
+    ptr(&mut s, PointerKind::Drag, end + Vec2::new(-100.0, 0.0), v);
+    let _ = s.execute("edit.undo", &json!({}));
+    let after_undo = (undo_labels(&s), s.doc().unwrap().doc.node(r).is_some());
+    ptr(&mut s, PointerKind::Drag, end + Vec2::new(-150.0, 0.0), v);
+    ptr(&mut s, PointerKind::Up, end + Vec2::new(-150.0, 0.0), v);
+    assert!(!s.tool_busy() && s.doc().unwrap().interaction.is_none());
+    let labels = undo_labels(&s);
+    assert!(labels.len() <= after_undo.0.len() + 1 && labels.iter().filter(|l| *l == "Set Modifier").count() <= 1, "{labels:?}");
+    // A press without a release: the drag ends where it was, one step.
+    let (mut s, r) = linear();
+    let steps = undo_labels(&s).len();
+    let end = handle_at(&mut s, "linearEnd");
+    ptr(&mut s, PointerKind::Down, end, v);
+    ptr(&mut s, PointerKind::Drag, end + Vec2::new(-120.0, 0.0), v);
+    ptr(&mut s, PointerKind::Down, end + Vec2::new(-120.0, 0.0), v);
+    assert!(!s.picabia_handles_busy());
+    assert_eq!(param(&mut s, r, 0, "offsetX"), 90.0);
+    assert_eq!(undo_labels(&s).len(), steps + 1);
+}
+
+#[test]
+fn the_handles_are_built_once_per_document_version() {
+    let (mut s, r) = linear();
+    // A zoom not built yet.
+    let v = view(2.0);
+    let end = handle_at(&mut s, "linearEnd");
+    let before = s.picabia_handle_builds();
+    for _ in 0..3 {
+        ptr(&mut s, PointerKind::Move, end, v);
+        let _ = s.cursor(end, Mods::default(), v);
+        let _ = s.picabia_mod_handles(v);
+    }
+    assert_eq!(s.picabia_handle_builds(), before + 1, "a frame's hover, cursor and drawing share one build");
+    ex(&mut s, "modifier.set", json!({"ids": [r.0], "index": 0, "props": {"offsetX": 50}}));
+    let _ = s.picabia_mod_handles(v);
+    let _ = s.picabia_mod_handles(v);
+    assert_eq!(s.picabia_handle_builds(), before + 2, "built again once the document changed");
+}
+
+#[test]
+fn hovering_follows_the_selection() {
+    let (mut s, r) = linear();
+    let v = view(1.0);
+    let end = handle_at(&mut s, "linearEnd");
+    ptr(&mut s, PointerKind::Move, end, v);
+    assert!(s.picabia_mod_handles(v).unwrap().handles.iter().any(|h| h.hot));
+    // Another object with the same row id and the knob in the same place: not hot.
+    let other = rect(&mut s, 0.0);
+    ex(&mut s, "modifier.add", json!({"ids": [other.0], "kind": "linearArray", "props": {"count": 5, "offsetX": 120}}));
+    ex(&mut s, "select.set", json!({"ids": [other.0]}));
+    assert_ne!(other, r);
+    assert!(s.picabia_mod_handles(v).unwrap().handles.iter().all(|h| !h.hot));
 }

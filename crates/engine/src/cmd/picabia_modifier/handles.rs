@@ -3,22 +3,33 @@
 //! Which rows: with one editable object selected whose stack has enabled rows with handles
 //! ([`vectorcraft_modifiers::handles`]), the rows open (or picked) in the Appearance panel show
 //! theirs; with none open there, the last enabled row with handles does (picabia-craft's rule).
-//! The panel reports its open rows each frame ([`Session::picabia_set_handle_rows`]); the engine
+//! The panel reports its open rows each frame ([`Session::picabia_set_handle_rows`]), for the
+//! active document (they're kept by its uid: object ids repeat across documents); the engine
 //! can't see egui's memory.
 //!
-//! A press on a handle (within [`HIT_PX`] screen pixels; the nearest wins, the bounding box's own
-//! handles win where they overlap) takes the gesture before the Selection tool sees it, as the
-//! Plane Switching Widget does: Alt, Cmd and Ctrl presses stay the tool's. Dragging previews
+//! A press on a handle (within [`HIT_PX`] screen pixels; the nearest wins, ties going to the later
+//! row and, within a row, to the knob listed first; the bounding box's own handles win where they
+//! overlap) takes the gesture before the Selection tool sees it, as the Plane Switching Widget
+//! does: Alt, Cmd and Ctrl presses stay the tool's (a Shift-press on a knob is the knob's, for its
+//! Shift constraint, so Shift-click deselecting doesn't happen on a knob). Dragging previews
 //! `modifier.set` inside one interaction, so the drag is one undo step ("Set Modifier"); a drag
-//! that ends where it began leaves none; Escape puts the params back. A handle whose field is
-//! bound to a parameter or an expression is drawn greyed and doesn't drag: a press on it says why
-//! in the status bar. Positions are in document space, so zoom and Rotate View need nothing extra;
-//! knobs placed off the box keep [`vectorcraft_modifiers::handles::HANDLE_GAP_PX`] on screen.
+//! that ends where it began leaves none; Escape puts the params back. A drag whose document was
+//! switched, whose object went, or whose interaction something else ended (an agent's command
+//! mid-drag) is dropped: its own preview, if still open in its document, is rolled back. A handle
+//! whose field is bound to a parameter or an expression is drawn greyed and doesn't drag: a press
+//! on it says why in the status bar. Positions are in document space, so zoom and Rotate View need
+//! nothing extra; knobs placed off the box keep
+//! [`vectorcraft_modifiers::handles::HANDLE_GAP_PX`] on screen.
+//!
+//! The handles of a document version, selection, zoom and open rows are built once and kept
+//! ([`HandleState`]'s cache): the cursor, hover and drawing of a frame share them.
+
+use std::sync::{Arc, Mutex, PoisonError};
 
 use serde_json::{Map, Value, json};
 use vectorcraft_doc::{Document, NodeId};
 use vectorcraft_geom::{Point, Rect, Vec2};
-use vectorcraft_modifiers::handles::{Frame, HandleKind, Motion};
+use vectorcraft_modifiers::handles::{Frame, HandleKind, Motion, Spot};
 use vectorcraft_modifiers::{Guide, Modifier, ModifierKind};
 use vectorcraft_tools::{Action, Cursor, Mods, PointerEvent, PointerKind, ToolKey};
 
@@ -30,18 +41,25 @@ pub const HIT_PX: f64 = 7.0;
 /// Selection tool's own reach for them).
 const BOX_HANDLE_PX: f64 = 5.0;
 
-/// What the Appearance panel has open, and the gesture in progress ([`super::PicabiaState`]).
+/// What the Appearance panel has open, the hovered handle, the gesture in progress and the kept
+/// handles ([`super::PicabiaState`]).
 #[derive(Debug, Default)]
 pub(crate) struct HandleState {
-    /// The object whose rows are open in the panel, and those rows' ids.
-    rows: Option<(NodeId, Vec<String>)>,
-    /// The handle under the pointer: row id and handle.
-    hover: Option<(String, HandleKind)>,
+    /// The document (uid) and object whose rows are open in the panel, and those rows' ids.
+    rows: Option<(u64, NodeId, Vec<String>)>,
+    /// The handle under the pointer: document uid, object, row id and handle.
+    hover: Option<(u64, NodeId, String, HandleKind)>,
     drag: Option<HandleDrag>,
+    /// The handles last built and what for (`None`: the object has none to show).
+    cache: Mutex<Option<(BaseKey, Option<Arc<Base>>)>>,
+    #[cfg(test)]
+    builds: std::sync::atomic::AtomicUsize,
 }
 
 #[derive(Debug)]
 struct HandleDrag {
+    /// The document it edits.
+    uid: u64,
     id: NodeId,
     modifier: String,
     handle: HandleKind,
@@ -85,11 +103,35 @@ pub struct ModHandlesView {
 }
 
 /// One row whose handles show, with what they need.
+#[derive(Debug)]
 struct Row {
     index: usize,
     modifier: Modifier,
     /// Its params with bound fields resolved (where the handles sit).
     kind: ModifierKind,
+}
+
+/// What the kept handles were built for.
+#[derive(Clone, Debug, PartialEq)]
+struct BaseKey {
+    uid: u64,
+    /// Moves with every change of the document or its selection.
+    revision: u64,
+    zoom: u64,
+    id: NodeId,
+    open: Option<Vec<String>>,
+}
+
+/// The handles of one object, built once per [`BaseKey`].
+#[derive(Debug)]
+struct Base {
+    id: NodeId,
+    bounds: Rect,
+    rows: Vec<Row>,
+    /// Each handle: its row (a position in `rows`), where it is, whether it is bound. In row
+    /// order, each row's in [`vectorcraft_modifiers::handles::spots`]' order.
+    handles: Vec<(usize, Spot, bool)>,
+    guides: Vec<Guide>,
 }
 
 fn sane_zoom(z: f64) -> f64 {
@@ -138,6 +180,25 @@ fn is_bound(m: &Modifier, h: HandleKind) -> bool {
     h.fields(&m.kind).iter().any(|f| m.bind.contains_key(*f))
 }
 
+/// Object `id`'s handles at `zoom` for the rows `open`.
+fn build(doc: &Document, id: NodeId, zoom: f64, open: Option<&[String]>) -> Option<Base> {
+    let n = doc.node(id)?;
+    let bounds = vectorcraft_modifiers::node_bounds_in_doc(doc, n);
+    let rows = rows(doc, id, open);
+    if rows.is_empty() {
+        return None;
+    }
+    let f = Frame { node: n, bounds, zoom };
+    let (mut handles, mut guides) = (Vec::new(), Vec::new());
+    for (i, r) in rows.iter().enumerate() {
+        guides.extend(vectorcraft_modifiers::handles::guides(&r.kind, &f));
+        for s in vectorcraft_modifiers::handles::spots(&r.kind, &f) {
+            handles.push((i, s, is_bound(&r.modifier, s.kind)));
+        }
+    }
+    Some(Base { id, bounds, rows, handles, guides })
+}
+
 /// The bounding-box handles' places (corners and side middles) of the selection box `b`.
 fn box_handles(b: &vectorcraft_doc::OrientedBox) -> Vec<Point> {
     let c = b.corners();
@@ -172,99 +233,144 @@ fn motion_cursor(motion: Motion, turn: f64) -> Cursor {
     }
 }
 
+/// The handle under `p` in `base` within `reach`: the nearest; where several are as near, the
+/// later row's, and within a row the one [`vectorcraft_modifiers::handles::spots`] lists first.
+fn nearest(base: &Base, p: Point, reach: f64) -> Option<(usize, Spot, bool)> {
+    let mut order: Vec<&(usize, Spot, bool)> = base.handles.iter().collect();
+    // Stable: each row keeps its own order.
+    order.sort_by_key(|h| std::cmp::Reverse(h.0));
+    let mut best: Option<(f64, (usize, Spot, bool))> = None;
+    for h in order {
+        let d = h.1.at.distance(p);
+        if d.is_finite() && d <= reach && best.as_ref().is_none_or(|(bd, _)| d < *bd) {
+            best = Some((d, *h));
+        }
+    }
+    best.map(|(_, h)| h)
+}
+
 impl Session {
-    /// The Appearance panel's open modifier rows of object `id` (their ids): their handles show
-    /// on the canvas. An empty list: the last enabled row with handles shows them.
+    /// The Appearance panel's open modifier rows of object `id` in the active document (their
+    /// ids): their handles show on the canvas. An empty list: the last enabled row with handles
+    /// shows them.
     pub fn picabia_set_handle_rows(&mut self, id: NodeId, rows: Vec<String>) {
+        let Some(uid) = self.active().map(|st| st.uid) else { return };
         let rows: Vec<String> = rows.into_iter().take(vectorcraft_modifiers::MAX_STACK_LEN).collect();
-        self.picabia.handles.rows = Some((id, rows));
+        self.picabia.handles.rows = Some((uid, id, rows));
+    }
+
+    /// The drag in progress, if it is the active document's.
+    fn live_drag(&self) -> Option<&HandleDrag> {
+        let uid = self.active()?.uid;
+        self.picabia.handles.drag.as_ref().filter(|d| d.uid == uid)
+    }
+
+    /// Drop a drag whose document was switched, whose object went or whose interaction something
+    /// else ended; its preview, still open in its own (active) document, is rolled back. Whether
+    /// there was one to drop.
+    fn drop_stale_drag(&mut self) -> bool {
+        let Some(d) = &self.picabia.handles.drag else { return false };
+        let st = self.active();
+        let same = st.is_some_and(|st| st.uid == d.uid);
+        let node = same && st.is_some_and(|st| st.doc.node(d.id).is_some());
+        let open = st.is_some_and(|st| st.interaction.is_some());
+        let previewed = d.last.is_some();
+        if same && node && (!previewed || open) {
+            return false;
+        }
+        self.picabia.handles.drag = None;
+        if same && previewed && open {
+            // Its own preview: put the document back as the drag found it.
+            let _ = self.apply_actions(vec![Action::Cancel]);
+        }
+        true
     }
 
     /// Whether modifier handles show now: the Selection tool (not lent for a Cmd-drag) is idle or
     /// dragging one.
     fn handles_shown(&self) -> bool {
-        let dragging = self.picabia.handles.drag.is_some();
+        let dragging = self.live_drag().is_some();
         self.tool.id() == "selection" && self.lender.is_none() && (dragging || !self.tool.busy())
     }
 
-    /// The selected object, its bounds and the rows whose handles show.
-    fn handle_rows(&self) -> Option<(NodeId, Rect, Vec<Row>)> {
+    /// The selected object's handles at `zoom` (built once per document version, selection, zoom
+    /// and open rows).
+    fn handle_base(&self, zoom: f64) -> Option<Arc<Base>> {
         if !self.handles_shown() {
             return None;
         }
         let st = self.active()?;
-        let id = match &self.picabia.handles.drag {
+        let id = match self.live_drag() {
             Some(d) => d.id,
             None => target(&st.doc, &st.selection)?,
         };
-        let n = st.doc.node(id)?;
-        let bounds = vectorcraft_modifiers::node_bounds_in_doc(&st.doc, n);
-        let open = self.picabia.handles.rows.as_ref().filter(|(o, _)| *o == id).map(|(_, r)| r.as_slice());
-        let rows = rows(&st.doc, id, open);
-        (!rows.is_empty()).then_some((id, bounds, rows))
+        let open = self.picabia.handles.rows.as_ref().filter(|(u, o, _)| *u == st.uid && *o == id).map(|(.., r)| r.clone());
+        let key = BaseKey { uid: st.uid, revision: st.revision, zoom: zoom.to_bits(), id, open };
+        let mut cache = self.picabia.handles.cache.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((k, b)) = cache.as_ref()
+            && *k == key
+        {
+            return b.clone();
+        }
+        #[cfg(test)]
+        self.picabia.handles.builds.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let base = build(&st.doc, id, zoom, key.open.as_deref()).map(Arc::new);
+        *cache = Some((key, base.clone()));
+        base
     }
 
     /// The selected object's modifier handles as the canvas draws them now, at `view`'s zoom.
     pub fn picabia_mod_handles(&self, view: ViewInfo) -> Option<ModHandlesView> {
-        let (id, bounds, rows) = self.handle_rows()?;
-        let n = self.active()?.doc.node(id)?;
-        let f = Frame { node: n, bounds, zoom: sane_zoom(view.zoom) };
+        let base = self.handle_base(sane_zoom(view.zoom))?;
+        let uid = self.active()?.uid;
         let hs = &self.picabia.handles;
-        let hot = |m: &str, h: HandleKind| match (&hs.drag, &hs.hover) {
+        let drag = self.live_drag();
+        let hot = |m: &str, h: HandleKind| match (drag, &hs.hover) {
             (Some(d), _) => d.modifier == m && d.handle == h,
-            (None, Some((hm, hh))) => hm == m && *hh == h,
+            (None, Some((u, id, hm, hh))) => *u == uid && *id == base.id && hm == m && *hh == h,
             _ => false,
         };
-        let mut out = ModHandlesView::default();
-        for r in &rows {
-            out.guides.extend(vectorcraft_modifiers::handles::guides(&r.kind, &f));
-            for s in vectorcraft_modifiers::handles::spots(&r.kind, &f) {
-                let (bound, hot) = (is_bound(&r.modifier, s.kind), hot(&r.modifier.id, s.kind));
-                if hot && out.readout.is_none() {
-                    let text = if bound {
-                        Some("Bound to a parameter: change it in the Appearance panel".to_string())
-                    } else {
-                        vectorcraft_modifiers::handles::label(&r.kind, s.kind)
-                    };
-                    out.readout = text.map(|t| (s.at, t));
-                }
-                out.handles.push(ModHandleView { modifier: r.modifier.id.clone(), index: r.index, kind: s.kind, at: s.at, bound, hot });
+        let mut out = ModHandlesView { guides: base.guides.clone(), ..ModHandlesView::default() };
+        for (row, s, bound) in &base.handles {
+            let Some(r) = base.rows.get(*row) else { continue };
+            let hot = hot(&r.modifier.id, s.kind);
+            if hot && out.readout.is_none() {
+                let text = if *bound {
+                    Some("Bound to a parameter: change it in the Appearance panel".to_string())
+                } else {
+                    vectorcraft_modifiers::handles::label(&r.kind, s.kind)
+                };
+                out.readout = text.map(|t| (s.at, t));
             }
+            out.handles.push(ModHandleView { modifier: r.modifier.id.clone(), index: r.index, kind: s.kind, at: s.at, bound: *bound, hot });
         }
         Some(out)
     }
 
-    /// The handle under `p` (the nearest within reach, the later rows first where they tie), with
-    /// its row; none where a bounding-box handle is.
-    fn handle_at(&mut self, p: Point, view: ViewInfo) -> Option<(ModHandleView, ModifierKind, Rect)> {
+    /// The handle under `p` and the kept handles it is one of; none where a bounding-box handle is.
+    fn handle_at(&mut self, p: Point, view: ViewInfo) -> Option<((usize, Spot, bool), Arc<Base>)> {
         if !(p.x.is_finite() && p.y.is_finite()) {
             return None;
         }
         let zoom = sane_zoom(view.zoom);
-        let hs = self.picabia_mod_handles(view)?;
-        let reach = HIT_PX / zoom;
-        let best = hs
-            .handles
-            .into_iter()
-            .rev()
-            .map(|h| (h.at.distance(p), h))
-            .filter(|(d, _)| d.is_finite() && *d <= reach)
-            .min_by(|a, b| a.0.total_cmp(&b.0))
-            .map(|(_, h)| h)?;
+        let base = self.handle_base(zoom)?;
+        let hit = nearest(&base, p, HIT_PX / zoom)?;
         if view.show_bbox {
             let bx = self.with_tool_cx(view, |_, cx| vectorcraft_tools::select::selection_box(cx));
             if bx.is_some_and(|b| box_handles(&b).iter().any(|q| q.distance(p) <= BOX_HANDLE_PX / zoom)) {
                 return None;
             }
         }
-        let (_, bounds, rows) = self.handle_rows()?;
-        let r = rows.into_iter().find(|r| r.modifier.id == best.modifier)?;
-        Some((best, r.kind, bounds))
+        Some((hit, base))
     }
 
     /// A pointer event for the modifier handles, before the tool sees it: `Some` when they take it.
     pub(crate) fn picabia_handles_pointer(&mut self, ev: &PointerEvent, view: ViewInfo) -> Option<Result<Vec<UiRequest>>> {
         if self.picabia.handles.drag.is_some() {
+            if self.drop_stale_drag() {
+                // The gesture is gone: the press (or the rest of the drag) is nobody's.
+                return Some(Ok(vec![]));
+            }
             return match ev.kind {
                 PointerKind::Drag => Some(self.handle_drag(ev.pos, ev.mods)),
                 PointerKind::Up => Some(self.handle_drag(ev.pos, ev.mods).and_then(|mut ui| {
@@ -277,35 +383,36 @@ impl Session {
             };
         }
         let plain = !(ev.mods.alt || ev.mods.cmd || ev.mods.ctrl);
+        let uid = self.active().map(|st| st.uid);
         match ev.kind {
             PointerKind::Move => {
                 let h = if plain { self.handle_at(ev.pos, view) } else { None };
-                self.picabia.handles.hover = h.map(|(h, ..)| (h.modifier, h.kind));
+                self.picabia.handles.hover = h.and_then(|((row, s, _), b)| Some((uid?, b.id, b.rows.get(row)?.modifier.id.clone(), s.kind)));
                 None
             }
             PointerKind::Down if plain => {
-                let (h, kind, bounds) = self.handle_at(ev.pos, view)?;
-                self.picabia.handles.hover = Some((h.modifier.clone(), h.kind));
-                if h.bound {
+                let ((row, s, bound), base) = self.handle_at(ev.pos, view)?;
+                let r = base.rows.get(row)?;
+                self.picabia.handles.hover = Some((uid?, base.id, r.modifier.id.clone(), s.kind));
+                if bound {
                     return Some(Ok(vec![UiRequest::Status(format!(
                         "{} is bound to a parameter or an expression: change it in the Appearance panel",
-                        h.kind.fields(&kind).join(" and ")
+                        s.kind.fields(&r.kind).join(" and ")
                     ))]));
                 }
-                let id = self.handle_rows()?.0;
-                let m = self.active()?.doc.node(id).and_then(vectorcraft_modifiers::node_stack)?.ok()?.modifiers.get(h.index).cloned()?;
-                let params = kind.params();
-                let from = h.kind.fields(&kind).iter().filter_map(|f| Some(((*f).to_string(), params.get(*f)?.clone()))).collect();
+                let params = r.kind.params();
+                let from = s.kind.fields(&r.kind).iter().filter_map(|f| Some(((*f).to_string(), params.get(*f)?.clone()))).collect();
                 self.picabia.handles.drag = Some(HandleDrag {
-                    id,
-                    modifier: h.modifier,
-                    handle: h.kind,
-                    bound: m.bind.keys().cloned().collect(),
-                    kind,
-                    bounds,
+                    uid: uid?,
+                    id: base.id,
+                    modifier: r.modifier.id.clone(),
+                    handle: s.kind,
+                    bound: r.modifier.bind.keys().cloned().collect(),
+                    kind: r.kind.clone(),
+                    bounds: base.bounds,
                     zoom: sane_zoom(view.zoom),
-                    grab: h.at - ev.pos,
-                    start: h.at,
+                    grab: s.at - ev.pos,
+                    start: s.at,
                     from,
                     last: None,
                 });
@@ -321,7 +428,9 @@ impl Session {
         let Some(d) = &self.picabia.handles.drag else { return Ok(vec![]) };
         let Some(n) = self.active().and_then(|st| st.doc.node(d.id)) else { return Ok(vec![]) };
         let f = Frame { node: n, bounds: d.bounds, zoom: d.zoom };
-        let Some(mut props) = vectorcraft_modifiers::handles::drag(&d.kind, d.handle, &f, p + d.grab, d.start, mods.shift) else { return Ok(vec![]) };
+        let Some(mut props) = vectorcraft_modifiers::handles::drag(&d.kind, d.handle, &f, p + d.grab, d.start, mods.shift, d.last.as_ref()) else {
+            return Ok(vec![]);
+        };
         props.retain(|k, _| !d.bound.contains(k));
         if props.is_empty() || d.last.as_ref().unwrap_or(&d.from) == &props {
             return Ok(vec![]);
@@ -349,7 +458,7 @@ impl Session {
 
     /// Escape during a handle drag puts the params back; `Some` when the handles took the key.
     pub(crate) fn picabia_handles_key(&mut self, key: ToolKey) -> Option<Result<Vec<UiRequest>>> {
-        if key != ToolKey::Escape {
+        if key != ToolKey::Escape || self.picabia.handles.drag.is_none() || self.drop_stale_drag() {
             return None;
         }
         let d = self.picabia.handles.drag.take()?;
@@ -358,37 +467,44 @@ impl Session {
 
     /// Whether the handles take `key` ahead of the shortcuts (Escape during a drag).
     pub(crate) fn picabia_handles_claim(&self, key: ToolKey) -> bool {
-        key == ToolKey::Escape && self.picabia.handles.drag.is_some()
+        key == ToolKey::Escape && self.live_drag().is_some()
     }
 
-    /// Whether a handle drag is in progress.
+    /// Whether a handle drag of the active document is in progress.
     pub(crate) fn picabia_handles_busy(&self) -> bool {
-        self.picabia.handles.drag.is_some()
+        self.live_drag().is_some()
     }
 
     /// The cursor over a modifier handle at `p` (or during its drag), if there is one.
     pub(crate) fn picabia_handles_cursor(&mut self, p: Point, mods: Mods, view: ViewInfo) -> Option<Cursor> {
         let turn = view_angle(&view);
-        if let Some(d) = &self.picabia.handles.drag {
+        if let Some(d) = self.live_drag() {
             return Some(motion_cursor(d.handle.motion(&d.kind), turn));
         }
         if mods.alt || mods.cmd || mods.ctrl {
             return None;
         }
-        let (h, kind, _) = self.handle_at(p, view)?;
-        Some(if h.bound { Cursor::NotAllowed } else { motion_cursor(h.kind.motion(&kind), turn) })
+        let ((row, s, bound), base) = self.handle_at(p, view)?;
+        let kind = &base.rows.get(row)?.kind;
+        Some(if bound { Cursor::NotAllowed } else { motion_cursor(s.kind.motion(kind), turn) })
     }
 
-    /// `modifier.handles {id?}`: the handles the canvas shows for the selection now (at the last
-    /// view's zoom).
+    /// `modifier.handles`: the handles the canvas shows for the selection now (at the last view's
+    /// zoom).
     pub(crate) fn picabia_handles_json(&self) -> Value {
         let Some(v) = self.picabia_mod_handles(self.last_view) else { return json!({"handles": []}) };
-        let id = self.handle_rows().map(|(id, ..)| id.0);
+        let id = self.handle_base(sane_zoom(self.last_view.zoom)).map(|b| b.id.0);
         let hs: Vec<Value> = v
             .handles
             .iter()
             .map(|h| json!({"modifier": h.modifier, "index": h.index, "handle": h.kind.id(), "x": h.at.x, "y": h.at.y, "bound": h.bound}))
             .collect();
         json!({"id": id, "handles": hs})
+    }
+
+    /// How many times the handles were built (the cache's test).
+    #[cfg(test)]
+    pub(crate) fn picabia_handle_builds(&self) -> usize {
+        self.picabia.handles.builds.load(std::sync::atomic::Ordering::Relaxed)
     }
 }

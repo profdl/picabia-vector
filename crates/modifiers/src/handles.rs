@@ -508,10 +508,21 @@ fn props<const N: usize>(kv: [(&str, f64); N]) -> Option<Map<String, Value>> {
 }
 
 /// The params dragging handle `h` of row `kind` (its params when the drag began) to `to` gives,
-/// with `from` where the handle was then (Shift's one-axis lock measures from it); `None` when
-/// `to` isn't finite, the handle isn't the row's, or the result wouldn't be finite. Values are
-/// within each field's range.
-pub fn drag(kind: &ModifierKind, h: HandleKind, f: &Frame, to: Point, from: Point, shift: bool) -> Option<Map<String, Value>> {
+/// with `from` where the handle was then (Shift's one-axis lock measures from it) and `last` the
+/// params the drag gave last (`None` at its start): the knobs that turn (sweep, twist) unwind from
+/// the last angle, not the first, so a drag can go round more than half a turn and, for a twist,
+/// past ±360°. `None` when `to` isn't finite, the handle isn't the row's, or the result wouldn't be
+/// finite. Values are within each field's range.
+pub fn drag(
+    kind: &ModifierKind,
+    h: HandleKind,
+    f: &Frame,
+    to: Point,
+    from: Point,
+    shift: bool,
+    last: Option<&Map<String, Value>>,
+) -> Option<Map<String, Value>> {
+    let last_of = |k: &str| last.and_then(|m| m.get(k)).and_then(Value::as_f64).filter(|v| v.is_finite());
     if !finite(to) || !finite(from) || !f.ok() {
         return None;
     }
@@ -538,7 +549,8 @@ pub fn drag(kind: &ModifierKind, h: HandleKind, f: &Frame, to: Point, from: Poin
                     if v.hypot() < TINY {
                         return None;
                     }
-                    let s = r.sweep + wrap180(angle_of(v) - (r.start + r.sweep));
+                    let s0 = last_of("sweep").unwrap_or(r.sweep);
+                    let s = s0 + wrap180(angle_of(v) - (r.start + s0));
                     let s = if shift { snapped(s, 15.0) } else { s };
                     props([("sweep", s.clamp(-360.0, 360.0))])
                 }
@@ -559,7 +571,7 @@ pub fn drag(kind: &ModifierKind, h: HandleKind, f: &Frame, to: Point, from: Poin
         (ModifierKind::Mirror(_), HandleKind::MirrorVertical) => props([("offset", len(to.x - pv.x))]),
         (ModifierKind::Mirror(_), HandleKind::MirrorHorizontal) => props([("offset", len(to.y - pv.y))]),
         (ModifierKind::Wallpaper(p), _) => wallpaper_drag(p, h, f, to, from, shift),
-        (ModifierKind::Deform(d), _) => deform_drag(d, h, f, to, shift),
+        (ModifierKind::Deform(d), _) => deform_drag(d, h, f, to, shift, last_of("angle")),
         (ModifierKind::Trim(t), HandleKind::TrimStart | HandleKind::TrimEnd) => {
             let tp = TrimPath::of(f.node)?;
             let at = tp.nearest(to)? - within(t.offset, 0.0, 1.0, 0.0);
@@ -596,7 +608,7 @@ fn wallpaper_drag(p: &Wallpaper, h: HandleKind, f: &Frame, to: Point, from: Poin
     }
 }
 
-fn deform_drag(d: &Deform, h: HandleKind, f: &Frame, to: Point, shift: bool) -> Option<Map<String, Value>> {
+fn deform_drag(d: &Deform, h: HandleKind, f: &Frame, to: Point, shift: bool, last_angle: Option<f64>) -> Option<Map<String, Value>> {
     let x = deform_frame(d, f)?;
     match (d.mode, h) {
         (DeformMode::Taper, HandleKind::TaperStart | HandleKind::TaperEnd) => {
@@ -613,7 +625,7 @@ fn deform_drag(d: &Deform, h: HandleKind, f: &Frame, to: Point, shift: bool) -> 
                 return None;
             }
             let (_, base) = x.twist_arm(f);
-            let a0 = within(d.angle, -720.0, 720.0, 0.0);
+            let a0 = last_angle.unwrap_or_else(|| within(d.angle, -720.0, 720.0, 0.0));
             let a = a0 + 2.0 * wrap180(angle_of(v) - base - a0 / 2.0);
             let a = if shift { snapped(a, 15.0) } else { a };
             props([("angle", a.clamp(-720.0, 720.0))])

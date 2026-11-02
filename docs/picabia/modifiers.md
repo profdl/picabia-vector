@@ -823,9 +823,9 @@ a selection of several objects, and turned-off rows show none.
 The handles are round knobs ringed in the selection colour, larger under the pointer, a fixed size
 on screen at any zoom. A press within 7 screen pixels takes the nearest (before the Selection tool
 sees the press, so a knob over the object wins over clicking the object; the bounding box's own
-handles win where they overlap a knob); Alt, Cmd and Ctrl presses stay the tool's. A drag shows a
+handles win where they overlap a knob; where two knobs coincide the later row's wins, and within a row the one listed first in the table below, so a ring of radius 0 drags its radius out and a trim window over the whole closed path drags its end). Alt, Cmd and Ctrl presses stay the tool's; a Shift-press on a knob is the knob's (for its Shift constraint), so Shift-click doesn't deselect there. A drag shows a
 readout beside the knob, previews `modifier.set` and is **one undo step** ("Set Modifier"); a drag
-that ends where it began leaves none, and **Esc** puts the params back. The math is in document
+that ends where it began leaves none, and **Esc** puts the params back. A drag whose document is switched, whose object is deleted or whose interaction another command ends (an agent mid-drag) is dropped, its own open preview rolled back. The open rows are kept per document. The handles of one document version, selection, zoom and open rows are built once and shared by the hover, cursor and drawing. The math is in document
 points, so a zoomed or turned view (Rotate View) drags the same values; the cursor shows how the
 knob moves (four-way, a resize arrow turned with the view, or the rotate cursor).
 
@@ -841,14 +841,14 @@ and tests). Knobs that would sit on the bounding box's handles at the default pa
 | linearArray | the last copy's centre (count > 1) | `offsetX`, `offsetY` (`count` stays) | 45° steps |
 | circularArray | the ring's centre | `centerX`, `centerY` (the whole ring moves) | one axis |
 | circularArray | a knob on the ring opposite the original | `radius` (the original stays; the ring grows away from it) | |
-| circularArray | a knob just outside the ring where the sweep ends | `sweep` (−360…360, the nearest way round from where it was) | 15° steps |
+| circularArray | a knob just outside the ring where the sweep ends | `sweep` (−360…360; it follows the pointer round, more than half a turn) | 15° steps |
 | gridArray | the left edge of the last column, the top of the last row (more than one) | `gapX` / `gapY` | both gaps equal |
 | mirror | a knob at the end of each axis line | `offset` (the axis moves across) | |
 | wallpaper | the symmetry origin (not p1, which has none) | `originX`, `originY` | one axis |
 | wallpaper | the end of the cell's first side | `cellWidth` | |
 | wallpaper | the end of the second side (oblique, rectangular and centred groups) | `cellHeight`; for p1 and p2 also `angle` | keeps the angle |
 | deform taper | knobs past each end of the axis, at the scale's height | `startScale`, `endScale` | |
-| deform twist | a knob past the end of the axis, turned by half the angle | `angle` | 15° steps |
+| deform twist | a knob past the end of the axis, turned by half the angle | `angle` (follows the pointer round, past ±360° to ±720°) | 15° steps |
 | deform bend | the bend point on the axis | `bendPoint` | |
 | deform bulge | a knob on the reach, up and to the right of the centre | `radius` | |
 | deform shear | a knob above (beside) the box, slanted with it | `shearX` (`shearY`) | |

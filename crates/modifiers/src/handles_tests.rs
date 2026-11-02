@@ -30,7 +30,7 @@ fn at(kind: &ModifierKind, f: &Frame, h: HandleKind) -> Point {
 /// `m` with the drag of `h` to `to` applied.
 fn dragged(m: &Modifier, f: &Frame, h: HandleKind, to: Point, shift: bool) -> Modifier {
     let from = at(&m.kind, f, h);
-    let props = drag(&m.kind, h, f, to, from, shift).unwrap_or_else(|| panic!("{h:?} to {to:?}"));
+    let props = drag(&m.kind, h, f, to, from, shift, None).unwrap_or_else(|| panic!("{h:?} to {to:?}"));
     let mut m = m.clone();
     m.set_props(&props).unwrap();
     m
@@ -81,7 +81,7 @@ fn a_drag_to_where_a_handle_is_keeps_its_params() {
             let all = spots(&m.kind, &f);
             assert!(!all.is_empty(), "{r} has handles");
             for s in all {
-                let props = drag(&m.kind, s.kind, &f, s.at, s.at, false).unwrap_or_else(|| panic!("{r} {:?}", s.kind));
+                let props = drag(&m.kind, s.kind, &f, s.at, s.at, false, None).unwrap_or_else(|| panic!("{r} {:?}", s.kind));
                 let before = m.kind.params();
                 for (k, v) in &props {
                     let (a, b) = (v.as_f64().unwrap(), before.get(k).and_then(Value::as_f64).unwrap());
@@ -140,7 +140,7 @@ fn knobs_off_the_box_stay_a_fixed_distance_on_screen() {
         // A displace knob dragged 10 pt up is 10 more amplitude, whatever the zoom.
         let m = row(json!({"kind": "displace", "amplitude": 5}));
         let k = at(&m.kind, &f, HandleKind::DisplaceAmplitude);
-        let p = drag(&m.kind, HandleKind::DisplaceAmplitude, &f, k - Vec2::new(0.0, 10.0), k, false).unwrap();
+        let p = drag(&m.kind, HandleKind::DisplaceAmplitude, &f, k - Vec2::new(0.0, 10.0), k, false, None).unwrap();
         assert_eq!(p["amplitude"], json!(15.0));
     }
 }
@@ -180,27 +180,27 @@ fn shift_constrains_the_drags() {
     let f = frame(&n, 1.0);
     let m = row(json!({"kind": "linearArray", "count": 2, "offsetX": 100}));
     let end = at(&m.kind, &f, HandleKind::LinearEnd);
-    let p = drag(&m.kind, HandleKind::LinearEnd, &f, Point::new(150.0, 120.0), end, true).unwrap();
+    let p = drag(&m.kind, HandleKind::LinearEnd, &f, Point::new(150.0, 120.0), end, true, None).unwrap();
     let (x, y) = (p["offsetX"].as_f64().unwrap(), p["offsetY"].as_f64().unwrap());
     assert!((x - y).abs() < 1e-9 && x > 0.0, "45°: {x}, {y}");
     let m = row(json!({"kind": "gridArray", "cols": 2, "rows": 2}));
     let k = at(&m.kind, &f, HandleKind::GridGapX);
-    let p = drag(&m.kind, HandleKind::GridGapX, &f, k + Vec2::new(30.0, 0.0), k, true).unwrap();
+    let p = drag(&m.kind, HandleKind::GridGapX, &f, k + Vec2::new(30.0, 0.0), k, true, None).unwrap();
     assert_eq!((p["gapX"].clone(), p["gapY"].clone()), (json!(130.0), json!(130.0)));
     let m = row(json!({"kind": "circularArray"}));
     let c = at(&m.kind, &f, HandleKind::RingCenter);
-    let p = drag(&m.kind, HandleKind::RingCenter, &f, c + Vec2::new(40.0, 7.0), c, true).unwrap();
+    let p = drag(&m.kind, HandleKind::RingCenter, &f, c + Vec2::new(40.0, 7.0), c, true, None).unwrap();
     assert_eq!((p["centerX"].clone(), p["centerY"].clone()), (json!(40.0), json!(0.0)));
     let k = at(&m.kind, &f, HandleKind::RingSweep);
     let r = 100.0 + HANDLE_GAP_PX;
-    let p = drag(&m.kind, HandleKind::RingSweep, &f, c + Vec2::new(r * 0.2, -r), k, true).unwrap();
+    let p = drag(&m.kind, HandleKind::RingSweep, &f, c + Vec2::new(r * 0.2, -r), k, true, None).unwrap();
     assert_eq!(p["sweep"].as_f64().unwrap().rem_euclid(15.0), 0.0);
     // p2's second side: free, it sets the angle too; Shift keeps the angle.
     let m = row(json!({"kind": "wallpaper", "group": "p2", "cellHeight": 50, "angle": 90}));
     let k = at(&m.kind, &f, HandleKind::CellB);
-    let p = drag(&m.kind, HandleKind::CellB, &f, k + Vec2::new(50.0, 0.0), k, false).unwrap();
+    let p = drag(&m.kind, HandleKind::CellB, &f, k + Vec2::new(50.0, 0.0), k, false, None).unwrap();
     assert!((p["angle"].as_f64().unwrap() - 45.0).abs() < 1e-9 && (p["cellHeight"].as_f64().unwrap() - 50.0 * 2f64.sqrt()).abs() < 1e-9);
-    let p = drag(&m.kind, HandleKind::CellB, &f, k + Vec2::new(50.0, 10.0), k, true).unwrap();
+    let p = drag(&m.kind, HandleKind::CellB, &f, k + Vec2::new(50.0, 10.0), k, true, None).unwrap();
     assert!(p.get("angle").is_none() && (p["cellHeight"].as_f64().unwrap() - 60.0).abs() < 1e-9);
 }
 
@@ -213,10 +213,10 @@ fn junk_drags_set_nothing_or_stay_in_range() {
     for r in rows() {
         let m = row(r.clone());
         for s in spots(&m.kind, &f) {
-            assert!(drag(&m.kind, s.kind, &f, nan, s.at, false).is_none(), "{r}");
-            assert!(drag(&m.kind, s.kind, &f, s.at, Point::new(f64::INFINITY, 0.0), false).is_none(), "{r}");
+            assert!(drag(&m.kind, s.kind, &f, nan, s.at, false, None).is_none(), "{r}");
+            assert!(drag(&m.kind, s.kind, &f, s.at, Point::new(f64::INFINITY, 0.0), false, None).is_none(), "{r}");
             for shift in [false, true] {
-                if let Some(p) = drag(&m.kind, s.kind, &f, far, s.at, shift) {
+                if let Some(p) = drag(&m.kind, s.kind, &f, far, s.at, shift, None) {
                     let mut m2 = m.clone();
                     m2.set_props(&p).unwrap_or_else(|e| panic!("{r} {:?}: {e}", s.kind));
                     for (k, v) in &p {
@@ -228,7 +228,7 @@ fn junk_drags_set_nothing_or_stay_in_range() {
             }
         }
         // A handle of another row sets nothing.
-        assert!(drag(&m.kind, HandleKind::LinearEnd, &f, Point::ZERO, Point::ZERO, false).is_none() || m.kind.id() == "linearArray");
+        assert!(drag(&m.kind, HandleKind::LinearEnd, &f, Point::ZERO, Point::ZERO, false, None).is_none() || m.kind.id() == "linearArray");
     }
     // Bad zooms and a non-finite box draw no knob that isn't finite.
     for zoom in [0.0, -1.0, f64::NAN, f64::INFINITY] {
@@ -278,4 +278,60 @@ fn labels_read_the_values() {
     let m = row(json!({"kind": "wallpaper", "group": "p2", "cellHeight": 80, "angle": 60}));
     assert_eq!(label(&m.kind, HandleKind::CellB).as_deref(), Some("Cell height 80, 60°"));
     assert_eq!(HandleKind::CellB.fields(&m.kind), ["cellHeight", "angle"]);
+}
+
+/// Steps the pointer round `c` at radius `r` from `a0` to `a1` degrees (8° a step), carrying the
+/// last params as a drag does; the final value of `key`.
+#[allow(clippy::too_many_arguments)]
+fn turn_drag(m: &Modifier, f: &Frame, h: HandleKind, c: Point, r: f64, a0: f64, a1: f64, key: &str) -> f64 {
+    let from = at(&m.kind, f, h);
+    let mut last: Option<serde_json::Map<String, Value>> = None;
+    let steps = ((a1 - a0).abs() / 8.0).ceil().max(1.0) as usize;
+    for k in 1..=steps {
+        let a = (a0 + (a1 - a0) * k as f64 / steps as f64).to_radians();
+        let to = c + Vec2::new(a.cos(), a.sin()) * r;
+        if let Some(p) = drag(&m.kind, h, f, to, from, false, last.as_ref()) {
+            last = Some(p);
+        }
+    }
+    last.unwrap()[key].as_f64().unwrap()
+}
+
+#[test]
+fn turning_knobs_unwind_past_half_a_turn() {
+    let n = square_node();
+    let f = frame(&n, 1.0);
+    // Sweep 90 → 280: the pointer goes 190° round the ring, more than half a turn.
+    let m = row(json!({"kind": "circularArray", "radius": 100, "sweep": 90}));
+    let c = at(&m.kind, &f, HandleKind::RingCenter);
+    let s = turn_drag(&m, &f, HandleKind::RingSweep, c, 150.0, 90.0, 280.0, "sweep");
+    assert!((s - 280.0).abs() < 1e-6, "{s}");
+    // Past a full turn it stays at 360; the other way it goes below −180.
+    assert_eq!(turn_drag(&m, &f, HandleKind::RingSweep, c, 150.0, 90.0, 500.0, "sweep"), 360.0);
+    let s = turn_drag(&m, &f, HandleKind::RingSweep, c, 150.0, 90.0, -200.0, "sweep");
+    assert!((s + 200.0).abs() < 1e-6, "{s}");
+    // A twist's knob turns half the angle: 300° of the pointer is 600°, past ±360; a turn and a
+    // half is held at −720.
+    let m = row(json!({"kind": "deform", "mode": "twist", "angle": 0}));
+    let c = f.bounds.center();
+    let a = turn_drag(&m, &f, HandleKind::TwistEnd, c, 80.0, 0.0, 300.0, "angle");
+    assert!((a - 600.0).abs() < 1e-6, "{a}");
+    assert_eq!(turn_drag(&m, &f, HandleKind::TwistEnd, c, 80.0, 0.0, -540.0, "angle"), -720.0);
+    let a = turn_drag(&m, &f, HandleKind::TwistEnd, c, 80.0, 0.0, -200.0, "angle");
+    assert!((a + 400.0).abs() < 1e-6, "{a}");
+}
+
+#[test]
+fn coincident_knobs_list_the_one_to_drag_first() {
+    let n = square_node();
+    let f = frame(&n, 1.0);
+    // Radius 0: the radius knob sits on the centre and comes first, so it can be dragged out.
+    let m = row(json!({"kind": "circularArray", "radius": 0}));
+    let kinds: Vec<HandleKind> = spots(&m.kind, &f).iter().map(|s| s.kind).collect();
+    assert_eq!(kinds.first(), Some(&HandleKind::RingRadius));
+    // A closed path's whole window (start 0, end 1): both on the start point, the end first.
+    let m = row(json!({"kind": "trim", "start": 0, "end": 1}));
+    let s = spots(&m.kind, &f);
+    assert_eq!(s.first().map(|s| s.kind), Some(HandleKind::TrimEnd));
+    assert!(s.first().unwrap().at.distance(s.get(1).unwrap().at) < 1e-9);
 }
