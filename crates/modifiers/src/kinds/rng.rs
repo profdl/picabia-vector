@@ -21,3 +21,14 @@ impl Stream {
         unit * 2.0 - 1.0
     }
 }
+
+/// A number in `-1.0..1.0` fixed by `(seed, index, channel)` alone: a channel's draw doesn't
+/// depend on which other channels are drawn (the `color` row's jitter).
+pub(crate) fn unit(seed: u32, index: usize, channel: u64) -> f64 {
+    let idx = u64::try_from(index).unwrap_or(u64::MAX);
+    let x = splitmix64((u64::from(seed) << 32) ^ idx.wrapping_mul(0xD6E8_FEB8_6659_FD93));
+    let z = splitmix64(x ^ channel.wrapping_add(1).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    // 53 random bits to a double in [0, 1): exact.
+    let unit = (z >> 11) as f64 / 9_007_199_254_740_992.0;
+    unit * 2.0 - 1.0
+}

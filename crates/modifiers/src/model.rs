@@ -13,6 +13,7 @@ use serde_json::{Map, Value};
 
 use crate::bind::Binding;
 
+pub use crate::model_colour::{COLOUR_PRESETS, Colour, ColourOrder, ColourStroke};
 pub use crate::model_deform::{Deform, DeformAxis, DeformMode, Falloff, ShearOrigin};
 pub use crate::model_displace::{Displace, DisplaceDirection, DisplaceMode, Waveform};
 pub use crate::model_screen::{SCREEN_PRESETS, Screen, SpotShape, ToneSource};
@@ -161,6 +162,8 @@ pub enum ModifierKind {
     Deform(Deform),
     Displace(Displace),
     Screen(Screen),
+    /// A per-copy row: shifts each copy's colours (see [`Colour`]).
+    Colour(Colour),
     /// A kind this build doesn't know, or a known kind whose params don't read (`error` says
     /// why). Kept on a round trip, ignored when evaluating.
     Other {
@@ -840,6 +843,7 @@ pub fn expr_fields(kind: &str) -> &'static [&'static str] {
     match kind {
         "transformEach" => &["offsetX", "offsetY", "rotate", "scaleX", "scaleY"],
         "randomize" => &["position", "rotation", "scale"],
+        "color" => &["hue", "chroma", "lightness"],
         _ => &[],
     }
 }
@@ -920,6 +924,7 @@ impl ModifierKind {
             ModifierKind::Deform(_) => "deform",
             ModifierKind::Displace(_) => "displace",
             ModifierKind::Screen(_) => "screen",
+            ModifierKind::Colour(_) => "color",
             ModifierKind::Other { kind, .. } => kind,
         }
     }
@@ -942,6 +947,7 @@ impl ModifierKind {
             "deform" => ModifierKind::Deform(Deform::default()),
             "displace" => ModifierKind::Displace(Displace::default()),
             "screen" => ModifierKind::Screen(Screen::default()),
+            "color" => ModifierKind::Colour(Colour::default()),
             _ => return None,
         })
     }
@@ -964,6 +970,7 @@ impl ModifierKind {
             ModifierKind::Deform(p) => params_of(p),
             ModifierKind::Displace(p) => params_of(p),
             ModifierKind::Screen(p) => params_of(p),
+            ModifierKind::Colour(p) => params_of(p),
             ModifierKind::Other { .. } => Map::new(),
         }
     }
@@ -990,6 +997,7 @@ impl ModifierKind {
             "deform" => wrap(read(rest), ModifierKind::Deform),
             "displace" => wrap(read(rest), ModifierKind::Displace),
             "screen" => wrap(read(rest), ModifierKind::Screen),
+            "color" => wrap(read(rest), ModifierKind::Colour),
             _ => return (ModifierKind::Other { kind: kind.to_string(), error: None }, rest.clone()),
         };
         r.unwrap_or_else(|e| (ModifierKind::Other { kind: kind.to_string(), error: Some(e) }, rest.clone()))

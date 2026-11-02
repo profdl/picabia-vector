@@ -229,6 +229,31 @@ follows them without asking again:
 Anything else the spec doesn't settle: choose what the best expert would, write the choice and why
 into this page and the commit message, and carry on.
 
+## Choices made while building
+
+Points the spec left open, settled as the implementing session judged best (PIC32.1 onwards):
+
+- **Array rows** for `order: array` are the rows that repeated the copies (`Output::array_stages`:
+  linear, circular and grid arrays, and mirror, wallpaper and copy to shape), counted from the top
+  among the enabled ones; geometry, per-copy and colour rows don't count. Every one of them gives
+  each copy a number, so the ramp can run along any.
+- **Jitter in the position orders** (`leftRight`, `topBottom`, `diagonal`) uses the copy's rank in
+  that order, as the spec's `order` row says ("the order the ramp and jitter count copies in");
+  `copies` uses the flat index, and `array` the flat index too (Settings).
+- **Achromatic colours have hue 0.** White, greys and black have no hue: their OKLab `a` and `b`
+  are rounding noise, so below a chroma of 1e-6 the hue reads as 0 (red's side), and a hue shift on
+  a neutral starts from there, the same on every platform. tlprocedural's culori leaves the hue
+  undefined.
+- **Chroma injection** compares the chroma after the chroma shift (`C < 0.02`), so a row that
+  removes chroma and turns the hue still shows the turn.
+- **An expression that gives no number** falls back to `field × ramp` (what the row does without
+  it), counted and reported like every per-copy expression's failures.
+- **A Color row breaks the stencil's lattice** (`Output::repeat` is `None`, like Transform Each
+  and Randomize): copies in one tile no longer match the next.
+- **Jitter draws** are SplitMix64 of `(seed << 32) ^ index × 0xD6E8FEB86659FD93`, mixed again with
+  `(channel + 1) × 0x9E3779B97F4A7C15` (channels: fill hue, chroma, lightness = 0, 1, 2; stroke
+  hue, chroma, lightness = 3, 4, 5).
+
 ## Revision history
 
 - 2026-11-02: planned (PIC32), from tlprocedural's Color and Color Each and the porting plan's step 3.
