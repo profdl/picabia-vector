@@ -5,7 +5,7 @@ use super::{NodeId, Value, cmd};
 /// Objects and Distribute Spacing with Align to Artboard distribute objects across it, All on
 /// Active Artboard selects on it, and Edit Symbol from the Symbols panel centers the symbol's art
 /// on it. A `command.batch` given `artboard` passes it on to each of their steps that names none.
-pub const ON_ACTIVE_ARTBOARD: [&str; 8] = [
+pub const ON_ACTIVE_ARTBOARD: [&str; 9] = [
     "edit.pasteInPlace",
     "edit.pasteInFront",
     "edit.pasteInBack",
