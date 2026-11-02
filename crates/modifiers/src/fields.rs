@@ -72,11 +72,22 @@ const DEFORM: &[NumberField] = &[
     f("radius", 0.01, 2.0),
     f("progressiveAmount", 0.0, 1.0),
 ];
+/// In the panel's order. A bound fractal `amplitude` is clamped to 100 like the other patterns'
+/// (the panel widens its own field to 200 for the fractal only).
 const DISPLACE: &[NumberField] = &[
+    f("angle", -360.0, 360.0),
     f("amplitude", 0.0, 100.0),
     f("scale", 0.01, 1.0),
     w("octaves", 1.0, 6.0),
     w("rippleCount", 2.0, 12.0),
+    f("frequency", 0.1, 10.0),
+    f("phase", 0.0, 360.0),
+    f("jitterMin", -1.0, 1.0),
+    w("steps", 1.0, 8.0),
+    f("decay", 0.0, 0.5),
+    f("wander", 0.0, 1.0),
+    f("edgeVariance", 0.0, 1.0),
+    f("normalBias", 0.0, 1.0),
     w("seed", 0.0, 999_999.0),
     f("progressiveAmount", 0.0, 1.0),
 ];

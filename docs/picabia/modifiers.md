@@ -491,20 +491,75 @@ Differences from tlprocedural, on purpose:
 
 #### displace
 
-Ported from tlprocedural's **Noise** modifier (PIC20.4; `NoiseModifierProcessor`, its
-`NOISE_DEFAULTS` and `NOISE_SCHEMA`). Every anchor moves; its handles move with it.
+One row with five patterns (the handoff's D4), sharing a direction, an amplitude, a size and a
+phase or seed. Ported from tlprocedural: its **Noise** modifier (PIC20.4; `NoiseModifierProcessor`,
+`NOISE_DEFAULTS`, `NOISE_SCHEMA`: smooth noise and radial), its **Wave** modifier
+(`WaveModifierProcessor`, `WAVE_DEFAULTS`, `WAVE_SCHEMA`), **Randomize Points**
+(`applyRandomizeToPolygon`, `RANDOMIZE_DEFAULTS`: jitter) and **Subdivision Growth**
+(`SubdivisionGrowthProcessor`, `SUBDIVISION_GROWTH_DEFAULTS`, `SUBDIVISION_GROWTH_SCHEMA`: fractal)
+(PIC20.4c). Every anchor moves with its handles; the fractal also adds anchors. Roughen and Zig Zag
+stay VectorCraft's own effects.
 
-| Field | Unit | Range | Default | Meaning |
-|---|---|---|---|---|
-| `mode` | choice | `spatial`, `radial` | `spatial` | `spatial`: each anchor moves by fractal simplex noise sampled where it sits: x by `fbm(x·scale, y·scale)`, y by `fbm(x·scale + 100, y·scale + 100)`, each times `amplitude`. `radial`: each anchor moves along the line from the centre of the anchors (their mean) by `distance × amplitude/100 × 0.25 × sin(rippleCount·angle + phase)`: `rippleCount` bumps round the centre |
-| `amplitude` | points | 0 to 100 | 10 | Spatial: the most an anchor moves on each axis. Radial: percent of its distance from the centre (times a quarter). 0 leaves the path alone |
-| `scale` | per point | 0.01 to 1 | 0.05 | `spatial` only: the noise frequency (smaller: broader waves) |
-| `octaves` | | 1 to 6 | 3 | `spatial` only: layers of noise, each twice as fine and half as strong, summed and normalised |
-| `rippleCount` | | 2 to 12 | 4 | `radial` only |
-| `seed` | | 0 to 999999 | 42 | Spatial: shuffles the noise's permutation table. Radial: the ripple's phase, drawn from `seed` and the copy's place among the array copies (see *What the ramp counts* below) |
-| `progressive` | on/off | | on | Ramp the amplitude across the array copies made above the row: none on the first, `progressiveAmount` of it on the last, evenly between |
-| `progressiveAmount` | fraction | 0 to 1 | 1 | ramp on: the last copy's share (the panel shows a percentage) |
-| `progressiveReverse` | on/off | | off | ramp on: the first copy gets the most |
+The pattern is saved as `mode` (its first two values' field), and every field added with PIC20.4c
+defaults to what the row did before (`direction: own`), so a stack saved before reads and draws the
+same bits (a test pins them).
+
+| Field | Unit | Range | Default | Used by | Meaning |
+|---|---|---|---|---|---|
+| `mode` | choice | `spatial`, `radial`, `wave`, `jitter`, `fractal` | `spatial` | | The pattern (the panel's **Pattern**: Smooth noise, Radial ripple, Wave, Jitter, Fractal), below |
+| `direction` | choice | `own`, `normal`, `x`, `y`, `angle` | `own` | all | Which way anchors move. `own`: the pattern's (tlprocedural's) own: smooth noise in both axes, radial and jitter away from the centre, wave in y across the width, fractal between the radial direction and the segment's normal. `normal`: along the path's outward normal at the anchor (square to the handles' line, or to the neighbours' chord at a corner; outward by the winding of the curve itself, handles included, so a two-anchor lens knows its outside). `x`, `y`, `angle`: along that axis of the copy (read in the copy's frame, so a turned copy moves turned) |
+| `angle` | degrees | -360 to 360 | 0 | direction `angle` | From the copy's x axis, clockwise on screen |
+| `amplitude` | points | 0 to 100 (fractal 0 to 200) | 10 | all | The most an anchor moves. Radial: percent of its distance from the centre (times a quarter). Fractal: the first step's push (tlprocedural's `displacement`, which reached 200). 0 leaves the path alone |
+| `scale` | per point | 0.01 to 1 | 0.05 | smooth noise | The noise frequency (smaller: broader waves) |
+| `octaves` | | 1 to 6 | 3 | smooth noise | Layers of noise, each twice as fine and half as strong, summed and normalised |
+| `rippleCount` | | 2 to 12 | 4 | radial | Bumps round the centre |
+| `waveform` | choice | `sine`, `square`, `triangle`, `sawtooth` | `sine` | wave | tlprocedural's `waveType` |
+| `frequency` | cycles | 0.1 to 10 | 2 | wave | Cycles across the object (the panel's **Cycles**) |
+| `phase` | degrees | 0 to 360 | 0 | wave | Shifts the wave along |
+| `jitterMin` | share of the amplitude | -1 to 1 | 0 | jitter | The least an anchor moves (the panel's **Least move**, a percentage): each moves between `jitterMin × amplitude` and `amplitude`; -1 moves either way |
+| `steps` | | 1 to 8 | 4 | fractal | Subdivision steps; each doubles the segments |
+| `decay` | | 0 to 0.5 | 0.45 | fractal | Each step's push is this share of the one before |
+| `wander` | | 0 to 1 | 0.15 | fractal | Turns each push by a seeded angle, up to an eighth of a turn either way (tlprocedural's `jitter`, renamed so it doesn't read as the Jitter pattern) |
+| `edgeVariance` | | 0 to 1 | 0 | fractal | How far from a segment's middle the new anchor may sit (seeded; 0.1 to 0.9 of the way along) |
+| `normalBias` | | 0 to 1 | 0.5 | fractal, not direction `normal` | 0 pushes away from the centre, 1 square to the segment (an axis direction takes this blend's share along it) |
+| `inward` | on/off | | off | fractal | Push in instead of out |
+| `seed` | | 0 to 999999 | 42 | not wave | Smooth noise: shuffles the noise's permutation table. Radial: the ripple's phase. Jitter: the random stream. Fractal: the split places and wander. Each drawn with the copy's place among the array copies (see *What the ramp counts* below) |
+| `progressive` | on/off | | on | all | Ramp the amplitude across the array copies made above the row: none on the first, `progressiveAmount` of it on the last, evenly between |
+| `progressiveAmount` | fraction | 0 to 1 | 1 | ramp on | The last copy's share (the panel shows a percentage) |
+| `progressiveReverse` | on/off | | off | ramp on | The first copy gets the most |
+
+**The patterns.**
+
+- **Smooth noise** (`spatial`): each anchor moves by fractal simplex noise sampled where it sits:
+  x by `fbm(x·scale, y·scale)`, y by `fbm(x·scale + 100, y·scale + 100)`, each times `amplitude`.
+  Along a direction: the first of the two, times `amplitude`, along it.
+- **Radial ripple** (`radial`): each anchor moves along the line from the centre of the anchors
+  (their mean) by `distance × amplitude/100 × 0.25 × sin(rippleCount·angle + phase)`:
+  `rippleCount` bumps round the centre. Along a direction: that amount, along it.
+- **Wave** (`wave`): tlprocedural's `wavePolygon`. Each anchor's place `t` (0..1) across the
+  object's extent (all its anchors) moves it by `amplitude × wave(t × frequency + phase/360)`.
+  The wave runs across the direction it moves in: own and `y` across the width, moving in y
+  (tlprocedural's horizontal axis, its default); `x` along the height from the bottom up, moving in x;
+  `angle` across that angle, a quarter turn back from the way it moves (0° is `x`, 90° is `y`: one turning family). With `normal` the wave runs along each subpath's outline
+  (`t` its share of the anchors' chord length from the first anchor) and moves out along the
+  normal; round a **closed** outline the cycles are rounded to the nearest whole number (at least 1), so the wave meets itself where the outline starts (no seam; a square or sawtooth wave jumps there only as it does at every cycle). An extent under 0.001 pt (a column, for a wave across the width) is left alone, as
+  there. Square, triangle and sawtooth are `computeWave`'s.
+- **Jitter** (`jitter`): tlprocedural's Randomize Points. Each anchor moves by
+  `amplitude × (jitterMin + u × (1 − jitterMin))`, `u` the next of tlprocedural's seeded LCG
+  (one step per anchor, across the object's subpaths in order; none drawn when `jitterMin` is 1).
+  Own direction: along the anchor's line from the centre, never through it (it stops 0.0001 pt
+  short); an anchor at the centre stays (and draws nothing), as there.
+- **Fractal** (`fractal`): tlprocedural's Subdivision Growth. `steps` times: every segment is
+  split (in the middle, or at a seeded place with `edgeVariance`) and the new anchor pushed by
+  `amplitude × decay^step` (in with `inward`): own direction, tlprocedural's blend of the
+  direction from the subpath's area-weighted centre and the segment's normal (turned into the
+  radial half-plane) by `normalBias`; `normal`, out along the segment's normal; an axis, the own
+  direction's share along it. Then turned by the seeded `wander`. Segments shorter than 0.15 of the
+  average are split but not pushed, as there. A closed subpath of n anchors ends with n·2^steps, an
+  open one (n − 1)·2^steps + 1. The geometry cap (200,000 anchors for an object and all its copies)
+  is checked **before** growing: a row that would pass it is skipped for that copy with the note
+  "Displace would make more than 200000 anchors for this object and its copies; it is skipped"
+  (lower `steps` or put the row above the array).
 
 **What the ramp counts** is Deform's (above): only **array** copies (linear, circular, grid),
 stacked arrays read as one combined array, the first array's copies counting fastest. Copies a
@@ -521,13 +576,16 @@ ramp reads, and the ripple's angle is read in the copy's own frame (its turn, an
 when it has one, as Deform's): the two halves of a mirror pair share a phase and an amount and are
 mirror images, and a rotated copy's ripple turns with it; copies with no array place use place 0. Above every copy row the object is displaced
 once and every copy is that same shape. tlprocedural sampled page space and seeded radial by the
-clone's array index, as here.
+clone's array index, as here. Wave, jitter and fractal are read in each copy's frame too (its
+axes, its reflection: a reflected copy's wander turns the other way), and seeded by its array place,
+so a mirror pair is a mirror image in those patterns (tested).
 
 **Deterministic.** The noise is a seeded simplex (after Stefan Gustavson's public-domain
 description, as tlprocedural's own self-contained one; no noise library), its permutation table
-shuffled by an integer LCG; the radial ripple uses only `+ − × ÷ √` (the angle's multiple by complex
-powers, the phase's sine by series), so the same stack gives the same bits on every platform and in
-wasm.
+shuffled by an integer LCG; the ripple, the wave, the jitter and the fractal use only `+ − × ÷ √`
+(the angle's multiple by complex powers, sines by series, `decay^step` by products, tlprocedural's
+mulberry32 and LCG in exact 32- and 64-bit integers), so the same stack gives the same bits on every
+platform and in wasm.
 
 Differences from tlprocedural, on purpose:
 
@@ -548,8 +606,34 @@ Differences from tlprocedural, on purpose:
   Bézier's sampled points, a ring's repeated closing vertex counted once more), so on a path with
   unevenly spaced anchors the centre, and the ripple round it, can sit a little differently.
 - **Not ported:** `animated` and `animationSpeed` (tlprocedural's panel showed them, its processor
-  never read them; Picabia has no time line), and tlprocedural's separate **Wave** modifier
-  (sinusoidal displacement along an axis), which isn't part of this row yet.
+  never read them; Picabia has no time line).
+- **One row, shared fields.** tlprocedural's Wave, Randomize Points and Subdivision Growth were
+  separate modifiers; here they are patterns of this row (the handoff's D4). Wave's `axis` became
+  the shared `direction` (`y` horizontal, `x` vertical) and gained `angle` and `normal`; Randomize's
+  `minDistance`/`maxDistance` in points became `jitterMin` (a share of the amplitude) and the
+  amplitude; Subdivision Growth's `displacement` is the amplitude and its `jitter` is `wander`.
+  Wave and jitter take the shared ramp (tlprocedural's Randomize had none; its Subdivision Growth
+  defaulted the ramp off, the row's default is on).
+- **Jitter**: tlprocedural's Randomize unioned the shapes first (a boolean modifier) and jittered
+  the union's polygon round its centroid; here each path is jittered as it is, round the mean of
+  the object's anchors, and its curves stay curves. The same stream on every copy there; here
+  copies past the first draw their own (the crate's seeded stream for `(seed, place)`).
+  tlprocedural picked a random seed when a row was added; the default here is 42, so a new row is
+  reproducible.
+- **Wave**: the square wave reads the cycle's half (tlprocedural took the sign of a sine, which
+  differs only exactly on a half cycle); each copy waves across its own extent, in its own frame,
+  as tlprocedural waved each instance unrotated. `x` runs up the height (tlprocedural's vertical axis ran down it: the same wave mirrored top to bottom) so that `x`, `y` and `angle` are one turning family; a wave round a closed outline takes whole cycles (tlprocedural had no outline wave). (PIC20.4d)
+- **Fractal**: segments split as curves (de Casteljau), so a circle grows as curves; a straight
+  segment's new anchor is a corner. Each subpath grows round its own centre (tlprocedural used the
+  whole shape's), an open path grows its segments only (tlprocedural grew the outline of its
+  stroke), and a closed subpath with no area is left alone, as there (no area counting its curves: the outside is read from the curve's own winding, handles included, so curves round anchors in a line still grow; a segment too short to have a direction pushes along the radial direction, not tlprocedural's fixed (0, 1)). The anchors are never
+  thinned (tlprocedural thinned the source to 4096 / 2^steps points and capped each step at 4096):
+  a row past the geometry cap is refused with a note instead. **Not ported:** repulsion (an
+  iterative point-repulsion pass), intersection clean-up (a polygon-clipping self-union),
+  growth bias and shape influence (they read other shapes on the page): so a high `wander` or
+  `edgeVariance` can make the outline cross itself where tlprocedural's repulsion and union would
+  have smoothed it. Segment seeds count anchors through the object's subpaths (tlprocedural's ring
+  offset), doubling each step.
 - Stacked arrays ramp as one combined array (tlprocedural read the most recent array's own
   index), as Deform's ramp does.
 
