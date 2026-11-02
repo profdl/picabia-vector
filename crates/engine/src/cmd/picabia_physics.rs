@@ -9,7 +9,7 @@
 use std::collections::HashSet;
 
 use serde_json::{Map, Value, json};
-use vectorcraft_doc::{Document, Node, NodeId, NodeKind, Scaling};
+use vectorcraft_doc::{Document, Node, NodeId, NodeKind};
 use vectorcraft_geom::{Rect, Vec2};
 use vectorcraft_physics::{BodyInput, BodyType, Settings, SimParams, sim};
 
@@ -288,24 +288,13 @@ fn simulate(s: &mut Session, p: &Value) -> Result<Value> {
     let params = SimParams { gravity: Vec2::new(gx, gy), walls: wall_rect, max_steps: steps, stop_when_settled: settle };
     let out = vectorcraft_physics::simulate(&bodies, &params);
 
-    let moves: Vec<(NodeId, vectorcraft_geom::Affine)> = ids.iter().zip(&out.outcomes).filter_map(|(id, o)| Some((*id, o.moved?))).collect();
+    let poses: Vec<vectorcraft_physics::pose::Pose> = out.outcomes.iter().map(|o| vectorcraft_physics::pose::Pose::Rigid(o.moved)).collect();
+    let items: Vec<apply::Baking> = ids.iter().zip(&poses).map(|(id, pose)| apply::Baking { id: *id, pose, mesh: None }).collect();
+    let moved = apply::bake(s, "Simulate Physics", p, &items)?;
     let lost: Vec<u64> = ids.iter().zip(&out.outcomes).filter(|(_, o)| o.lost).map(|(id, _)| id.0).collect();
-    if !moves.is_empty() {
-        let moved_ids: Vec<NodeId> = moves.iter().map(|(id, _)| *id).collect();
-        let sc = Scaling { patterns: super::object::transform_patterns(s, p, &moved_ids)?, ..Scaling::default() };
-        s.edit("Simulate Physics", |d, _| {
-            let paths = d.index_paths(moved_ids.iter().copied());
-            for (id, xf) in &moves {
-                if let Some(n) = paths.get(id).and_then(|path| d.node_mut_at(path)) {
-                    super::object::transform_node(n, *xf, sc, true);
-                }
-            }
-            Ok(())
-        })?;
-    }
     Ok(json!({
         "bodies": bodies.len(),
-        "moved": moves.iter().map(|(id, _)| id.0).collect::<Vec<_>>(),
+        "moved": moved.iter().map(|id| id.0).collect::<Vec<_>>(),
         "steps": out.steps,
         "seconds": f64::from(out.steps) / sim::HZ,
         "settled": out.settled,
@@ -317,6 +306,12 @@ fn simulate(s: &mut Session, p: &Value) -> Result<Value> {
     }))
 }
 
+#[path = "picabia_physics_apply.rs"]
+pub(crate) mod apply;
+
+#[cfg(test)]
+#[path = "picabia_physics_apply_tests.rs"]
+mod apply_tests;
 #[cfg(test)]
 #[path = "picabia_physics_tests.rs"]
 mod tests;

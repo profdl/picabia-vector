@@ -288,6 +288,15 @@ The jelly scene is at the edge of the native budget even then (worst steps 2.7 f
   offset across it). **Jelly clone:** the art carried through the simulated cells (each point by its
   position in its rest cell), with curves subdivided so straight sides bend smoothly
   (`vectorcraft_doc::live::map_nonlinear_within`, as Deform uses).
+- **As built (PIC31.3):** `pose.rs`. Cloth: a point's distance along the rest axis finds its place
+  on the simulated centre line (beyond the ends the end segment is extended), its offset across is
+  kept along the line's normal, which turns smoothly between particles. Jelly: a uniform grid of the
+  rest cells finds the cell under a point (barycentric); a point outside every cell (the art's
+  edge between resampled points) follows the nearest cell's affine. Paths are split into pieces of
+  half the particle spacing (at most 50,000 anchors a path); linear gradients follow the warp; type,
+  images, symbol instances and other kinds take the warp's best-fit affine at their centre. Apply
+  (engine `picabia_physics_apply.rs`) bakes rigid motions with `transform_node` and replaces soft
+  bodies' objects with their warped art in one edit; phase 1's Simulate now bakes through it too.
 - **Apply** bakes the shown pose into every body in the session and closes it (one undo step,
   "Apply Physics"). **Cancel** closes it and leaves the art untouched. A live rectangle or ellipse a
   soft body bends becomes a path; a rigid one stays live.
@@ -368,7 +377,7 @@ do goes through these commands.
 | PIC31.0 | Spike: soft bodies in the phase 1 world. Determinism hash native vs wasm32, junk sweep of the builders, step cost for 20 soft and 200 rigid bodies, snapshot cost. Go/no-go |
 | PIC31.1 | Soft settings: `bodyType: "soft"`, presets and overrides, pins; lenient parse, round trip. **Done** (2026-11-02): `soft.rs`; interfaces stubbed for PIC31.2–31.4 (`mesh.rs`, `pose.rs`, `world.rs`, `session.rs`) |
 | PIC31.2 | Bodies from objects: cloth strip and jelly/rubber cells, caps, junk; tune the presets. **Meshing done** (2026-11-02); the presets are tuned once the world runs (PIC31.2b) |
-| PIC31.3 | Pose to art: rigid, cloth and jelly warps; Apply as one undo step |
+| PIC31.3 | Pose to art: rigid, cloth and jelly warps; Apply as one undo step. **Done** (2026-11-02): warps and the bake; the `physics.apply` command comes with the session (PIC31.4) |
 | PIC31.4 | Session and clock: world, steps, snapshots, event log, `physics.session/play/pause/reset/seek/apply/cancel`, rest detection |
 | PIC31.5 | Transport bar and clones on the canvas; Simulate to Rest; rigid bodies on the same flow |
 | PIC31.6 | Poke (Selection tool drag while the session is open) and `physics.poke` |
