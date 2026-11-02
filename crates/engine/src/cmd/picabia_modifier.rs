@@ -31,6 +31,8 @@ pub(crate) struct PicabiaState {
     /// What the connected laser machine reports, for the G-code commands' defaults (the laser
     /// link fills it while connected; empty: the machine profile's values are used).
     pub(crate) laser_machine: LaserMachine,
+    /// The canvas handles: the panel's open rows, the hovered handle and a drag in progress.
+    pub(crate) handles: handles::HandleState,
 }
 
 /// What a connected laser machine reports ([`PicabiaState::laser_machine`]). The G-code commands
@@ -166,6 +168,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{ids?|id?, modifier?: id | index?} put a copy of the row right below it, with a fresh id, as one undo step → {modifier: the new id on the first object, duplicated: [{id, modifier}]}",
             has_selection,
             targets::duplicate
+        ),
+        cmd!(
+            query "modifier.handles",
+            "Modifier Handles",
+            [],
+            None,
+            "{} → {id: the selected object, handles: [{modifier, index, handle: linearEnd|ringCenter|ringRadius|ringSweep|gridGapX|gridGapY|mirrorVertical|mirrorHorizontal|cellOrigin|cellA|cellB|taperStart|taperEnd|twistEnd|bendPoint|bulgeRadius|shearX|shearY|trimStart|trimEnd|displaceAmplitude, x, y: document points, bound: a field it sets is bound (not draggable)}]}: the canvas handles the Selection tool shows now for the one selected object's open (or last) modifier rows; dragging one sets its fields as one modifier.set undo step",
+            has_doc,
+            |s, _| Ok(s.picabia_handles_json())
         ),
         cmd!(
             query "modifier.targets",
@@ -536,6 +547,9 @@ fn remove_all(s: &mut Session, p: &Value) -> Result<Value> {
 
 mod apply;
 mod export;
+mod handles;
+#[cfg(test)]
+mod handles_tests;
 mod laser;
 mod laser_design;
 pub mod laser_gcode;
@@ -546,6 +560,7 @@ mod params_tests;
 mod stencil;
 mod targets;
 pub(crate) use export::{bake_copies, baked_export, export_warning};
+pub use handles::{HIT_PX, ModHandleView, ModHandlesView};
 pub use targets::{check_target, image_choices, target_choices};
 pub(crate) use targets::{remap_copies, remap_pasted, snapshot};
 #[cfg(test)]

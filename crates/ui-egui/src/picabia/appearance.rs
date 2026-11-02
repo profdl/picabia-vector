@@ -561,6 +561,11 @@ fn modifier_rows(app: &mut VectorcraftApp, ui: &mut Ui) {
                 let sel = selected.as_ref().is_some_and(|(n, m)| *n == first.0 && *m == r.first.id);
                 modifier_row(app, ui, &doc, &ids, rows.len(), i, r, sel);
             }
+            // The canvas shows the handles of the open (or picked) rows.
+            let shown = |r: &&RowView| {
+                pstate::<bool>(ui.ctx(), &open_key(first, r)) || selected.as_ref().is_some_and(|(n, m)| *n == first.0 && *m == r.first.id)
+            };
+            app.session.picabia_set_handle_rows(first, rows.iter().filter(shown).map(|r| r.first.id.clone()).collect());
             for n in notes.iter().take(4) {
                 note(ui, n);
             }
