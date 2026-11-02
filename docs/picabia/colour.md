@@ -61,7 +61,8 @@ tlprocedural's units and mean what they mean there (see The maths).
 | `progressive` | on/off | | on | The ramp: shifts are multiplied by `t × amount` (see below). Off: every copy gets the full shift |
 | `amount` | factor | 0 to 1 | 1 | Ramp intensity (tlprocedural's `progressiveAmount`) |
 | `reverse` | on/off | | off | Ramp runs the other way (the last copy keeps its colour) |
-| `order` | enum | `copies`, `leftRight`, `topBottom`, `diagonal` | `copies` | The order the ramp and jitter count copies in: copy index, or the copy's centre left to right, top to bottom, or by `x + y` (tlprocedural's `sortBy`; its `selection` and `z-index` orders don't apply to copies of one object). Ties keep copy order |
+| `order` | enum | `copies`, `array`, `leftRight`, `topBottom`, `diagonal` | `copies` | The order the ramp and jitter count copies in: copy index across all copies; `array`: the copy number in one array row only (below); or the copy's centre left to right, top to bottom, or by `x + y` (tlprocedural's `sortBy`; its `selection` and `z-index` orders don't apply to copies of one object). Ties keep copy order |
+| `array` | integer | 1 to the number of array rows | 1 | With `order: array`: which array row the ramp runs along, counting array rows from the top of the stack (1 = the first). The ramp uses that row's copy number `k` and count `n` (`Instance::stage_indices`), so with Grid then Circular and `array: 2` every grid in the ring gets one step of the ramp, and with `array: 1` each ring repeats the same gradient across its grid (tlprocedural's behaviour). Clamped to the arrays there are; with no array rows it acts as `copies`. Jitter still uses the flat copy index |
 | `jitterHue`, `jitterChroma`, `jitterLightness` | % | 0 to 100 | 0 | Random extra shift per copy, plus or minus, added to the fill's shift |
 | `strokeJitterHue`, `strokeJitterChroma`, `strokeJitterLightness` | % | 0 to 100 | 0 | Stroke jitter when `stroke` is `own` |
 | `seed` | integer | 0 to 4 294 967 295 | 42 | Jitter seed (tlprocedural's default) |
@@ -101,14 +102,19 @@ Per copy `k` (counted in `order`), with `n` copies:
    - `H = (H + s_h / 100 × 360) mod 360`, and when `s_h ≠ 0` and `C < 0.02` (white, greys, black),
      `C = min(0.4, |s_h / 100| × 0.2)` so a hue shift shows on a neutral (tlprocedural does this;
      keep it, it's why Rainbow works on the default white rectangle).
-   - Back to sRGB, each channel clamped to [0, 1] (what culori's `formatHex` does; no gamut
-     mapping in phase 1).
+   - Back to sRGB, **keeping the colour in gamut by reducing chroma** (owner's decision,
+     2026-11-02): if the result falls outside sRGB, keep `L` and `H` and lower `C` by bisection
+     (a fixed 20 steps, so the result is the same bits natively and in wasm) to the largest chroma
+     whose linear sRGB channels all lie in [0, 1] (a tolerance of 1e-6); then clamp each channel to
+     [0, 1] to remove rounding. tlprocedural clamps each channel instead (culori's `formatHex`),
+     which can turn the hue of very saturated results; this is a deliberate difference.
    - A shift of 0 on all three channels leaves the colour bit-for-bit as it was (no round trip).
 
 Golden values for tests: compute them once from the formulas above with a tiny reference (the
 crate's own test, not tlprocedural's code), including red with hue 50 (half a turn), white with hue
 10 (chroma injected), black with lightness -10 (clamped at 0), and chroma 100 on a saturated blue
-(clamped at 0.4, then sRGB clamped).
+(clamped at 0.4, then chroma reduced into sRGB with the hue kept: test that the result's OKLCH hue
+is within 0.5° of the input's).
 
 ## Which colours change
 
@@ -124,9 +130,9 @@ and a visitor that runs the fill shift on fills and the stroke shift on strokes:
   through the document's colour conversion, shifted, and converted back to their own model (a spot
   colour becomes a process colour of the document's mode). A Gray colour that gains chroma becomes
   RGB (or CMYK in a CMYK document). Alpha and the paint's opacity never change.
-- **Left alone:** None, Registration, pattern swatches' tiles (phase 1; noted under the row when
-  the object has one), embedded and linked images' pixels, and effect colours (drop shadow, glows).
-  See Open questions.
+- **Left alone** (owner's decisions, 2026-11-02): None, Registration, pattern swatches' tiles (a
+  note under the row when the object has one: "pattern fills keep their colours"), embedded and
+  linked images' pixels, and effect colours (drop shadow, glows, Inner Glow).
 - Members of a group or compound shape all get their copy's shift (one shift per copy, not per
   member; per-member colour is PIC32.6).
 
@@ -173,9 +179,10 @@ and a visitor that runs the fill shift on fills and the stroke shift on strokes:
 - Jitter per copy and channel from SplitMix64 of seed, index and channel, so copies are stable as
   the count changes and match natively and in wasm; tlprocedural uses one sequential mulberry32
   stream.
-- The ramp counts the final copies (`t` as in [`modifiers.md`](modifiers.md)), not "the upstream
-  array index" read from metadata; with nested arrays tlprocedural's Color ramps along one array
-  only.
+- The ramp counts the final copies by default (`t` as in [`modifiers.md`](modifiers.md));
+  tlprocedural's Color ramps along one array's index, which is `order: array` here, with the array
+  chosen.
+- Out-of-gamut colours keep their hue (chroma reduced), where tlprocedural clamps each channel.
 - Multi-selection (`sourceShapeIds`) isn't ported: a Picabia stack lives on one object; group the
   objects instead (and PIC32.6 colours members one by one).
 - Colours in VectorCraft are not only sRGB hex: the model rules above are new.
@@ -208,18 +215,22 @@ A cloud session is building physics phase 2 at the same time. To keep merges sma
   on `origin/main` before each push; the second to land resolves.
 - Use a separate `CARGO_TARGET_DIR` and delete it when done.
 
-## Open questions
+## Decisions (owner, 2026-11-02)
 
-- Should effect colours (drop shadow, glows, Inner Glow) shift too? Phase 1 leaves them; tlprocedural
-  had no effects to shift.
-- Gamut: clamp per channel (tlprocedural's behaviour) or reduce chroma until the colour fits? Clamping
-  can shift the hue of very saturated results; reducing chroma is what a colour scientist would do.
-  Phase 1 clamps, to match the source; revisit with the OKLCH picker.
-- Pattern fills: shift the tile's colours (a recoloured copy of the pattern per shift, more swatches
-  in exports) or leave them?
-- Should the ramp run along one chosen array of a nested stack (tlprocedural's behaviour) as an
-  `order` option?
+The owner answered these before the build and won't be watching it; the implementing session
+follows them without asking again:
+
+- **Effect colours** (drop shadow, glows, Inner Glow) are left alone.
+- **Out of gamut:** reduce chroma until the colour fits, keeping hue and lightness (The maths, step 4).
+- **Pattern fills** keep their tiles' colours, with a note under the row.
+- **Nested arrays:** the ramp runs across all copies by default, and `order: array` with `array`
+  picks one array row to ramp along (Settings).
+
+Anything else the spec doesn't settle: choose what the best expert would, write the choice and why
+into this page and the commit message, and carry on.
 
 ## Revision history
 
 - 2026-11-02: planned (PIC32), from tlprocedural's Color and Color Each and the porting plan's step 3.
+- 2026-11-02: the owner's decisions on effect colours, gamut, patterns and nested arrays; `order:
+  array` and `array` added.
