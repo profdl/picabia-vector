@@ -544,7 +544,10 @@ pub fn rows(app: &mut VectorcraftApp, ui: &mut Ui, _n: &vectorcraft_doc::Node, _
     super::physics::section(app, ui);
 }
 
-fn modifier_rows(app: &mut VectorcraftApp, ui: &mut Ui) {
+/// The selection's modifier rows, the notes under them, the copy count and Apply (nothing when no
+/// selected object has a stack): the Appearance panel's block, and the Properties panel's Modifiers
+/// section (`super::properties`).
+pub(crate) fn modifier_rows(app: &mut VectorcraftApp, ui: &mut Ui) {
     let Some((ids, v)) = kept_view(app, ui.ctx()) else { return };
     match &*v {
         View::Empty => {}
@@ -857,24 +860,8 @@ fn object_picker(ui: &mut Ui, choices: Vec<(NodeId, String)>, current: &str, fid
     (Some(*t) != current_id).then(|| json!(t.0.to_string()))
 }
 
-/// "Add New Effect"'s Modifiers submenu: the kinds `modifier.add` adds to the selection.
+/// "Add New Effect"'s Modifiers submenu: the grouped kinds `modifier.add` adds to the selection
+/// (`super::add_menu`, the same menu as the Properties panel's and the task bar's).
 pub fn add_menu(app: &mut VectorcraftApp, ui: &mut Ui) {
-    ui.menu_button(tl!("Modifiers"), |ui| {
-        for (kind, label) in KINDS {
-            // The geometry rows after the rows that copy.
-            if *kind == "resample" {
-                ui.separator();
-            }
-            if ui.button(tl!(label)).clicked() {
-                app.run("modifier.add", json!({"kind": kind})).ok();
-                ui.close();
-            }
-        }
-        for (kind, preset, label) in PRESETS {
-            if ui.button(tl!(label)).clicked() {
-                app.run("modifier.add", json!({"kind": kind, "preset": preset})).ok();
-                ui.close();
-            }
-        }
-    });
+    ui.menu_button(tl!("Modifiers"), |ui| super::add_menu::items(app, ui));
 }

@@ -243,6 +243,8 @@ pub fn specs() -> Vec<CommandSpec> {
     .into_iter()
     // Parameters and field bindings (PIC6).
     .chain(params::specs())
+    // One command per kind and screen preset, for the palette and shortcuts (PIC3.4).
+    .chain(add_kinds::specs())
     .collect()
 }
 
@@ -534,6 +536,7 @@ fn remove_all(s: &mut Session, p: &Value) -> Result<Value> {
     ok()
 }
 
+mod add_kinds;
 mod apply;
 mod export;
 mod laser;

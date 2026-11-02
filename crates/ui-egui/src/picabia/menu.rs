@@ -5,36 +5,27 @@ use serde_json::json;
 
 use crate::menus::Item;
 
-/// The Object ▸ Modifiers submenu: add each kind to the selection (and the screen's presets), then
-/// Apply, Remove All, and copying and pasting rows between objects.
+/// The Object ▸ Modifiers submenu: add each kind to the selection (and the screen's presets), in
+/// the groups of the panels' Add Modifier menu (`super::add_menu::GROUPS`), then Apply, Remove All,
+/// and copying and pasting rows between objects.
 pub fn object_items() -> Vec<Item> {
-    let add = |label: &'static str, kind: &str| Item::Cmd(label, "modifier.add", json!({ "kind": kind }));
-    vec![
-        add("Linear Array", "linearArray"),
-        add("Circular Array", "circularArray"),
-        add("Grid Array", "gridArray"),
-        add("Mirror", "mirror"),
-        add("Wallpaper", "wallpaper"),
-        add("Copy to Shape", "copyToShape"),
-        add("Transform Each", "transformEach"),
-        add("Randomize", "randomize"),
-        add("Stencil", "stencil"),
-        Item::Sep,
-        add("Resample", "resample"),
-        add("Trim", "trim"),
-        add("Tidy", "tidy"),
-        add("Deform", "deform"),
-        add("Displace", "displace"),
-        add("Screen", "screen"),
-        Item::Cmd("Ben-Day Dots", "modifier.add", json!({ "kind": "screen", "preset": "benDay" })),
-        Item::Cmd("Line Fill", "modifier.add", json!({ "kind": "screen", "preset": "lineFill" })),
+    let mut items = vec![];
+    // The menu bar's submenus have no headings: separators part the groups.
+    for (_, entries) in super::add_menu::GROUPS {
+        if !items.is_empty() {
+            items.push(Item::Sep);
+        }
+        items.extend(entries.iter().map(|e| Item::Cmd(e.label, "modifier.add", super::add_menu::params(e))));
+    }
+    items.extend([
         Item::Sep,
         Item::Cmd("Apply Modifiers", "modifier.apply", serde_json::Value::Null),
         Item::Cmd("Remove All Modifiers", "modifier.remove_all", serde_json::Value::Null),
         Item::Sep,
         Item::Cmd("Copy Modifiers", "modifier.copy", serde_json::Value::Null),
         Item::Cmd("Paste Modifiers", "modifier.paste", serde_json::Value::Null),
-    ]
+    ]);
+    items
 }
 
 /// The Object ▸ Physics submenu: Simulate (drop and settle, one undo step), settings for the

@@ -243,6 +243,7 @@ pub(super) fn task_bar(app: &mut VectorcraftApp, ui: &mut Ui, xf: &Xf) {
                     // The selected objects' Fill, Stroke, Recolor Artwork and Lock (a basic shape's
                     // properties instead), left out with the Artboard tool.
                     if !on_artboards {
+                        crate::picabia::task_bar::button(app, ui); // PICABIA: the Modifiers button (PIC3.4)
                         let (r, resp) = ui.allocate_exact_size(vec2(26.0, 30.0), Sense::click());
                         let chip = egui::Rect::from_center_size(r.center(), vec2(16.0, 16.0));
                         widgets::proxy_chip(ui, chip, &fill, fill_mixed, None);
