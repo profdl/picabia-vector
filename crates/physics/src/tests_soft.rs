@@ -15,7 +15,7 @@ fn soft_body_type_and_preset_round_trip() {
     let soft = s.soft_body().unwrap();
     assert_eq!(soft.preset, Preset::Cloth);
     assert_eq!(soft.stiffness, Some(0.6));
-    assert_eq!(soft.pins, vec![Pin { u: 0.0, v: 0.5, attach_to: None }, Pin { u: 1.0, v: 0.5, attach_to: Some(7) }]);
+    assert_eq!(soft.pins, vec![Pin::new(0.0, 0.5, None), Pin::new(1.0, 0.5, Some(7))]);
     // Only the overrides are stored, so a later preset tuning reaches the rest.
     let stored = s.to_value();
     assert_eq!(stored["soft"], json!({"preset": "cloth", "stiffness": 0.6, "pins": [{"u": 0.0, "v": 0.5}, {"u": 1.0, "v": 0.5, "attachTo": 7}]}));
@@ -46,7 +46,7 @@ fn junk_soft_settings_clamp_and_warn_and_keep_unknown_fields() {
     let soft = s.soft.clone().unwrap();
     assert_eq!(soft.preset, Preset::Other("clay".into()));
     assert_eq!((soft.stiffness, soft.bend, soft.damping, soft.resolution, soft.self_collide), (Some(1.0), None, Some(0.0), Some(2.0), None));
-    assert_eq!(soft.pins, vec![Pin { u: 4.0, v: 0.0, attach_to: None }, Pin { u: 0.0, v: 0.0, attach_to: None }]);
+    assert_eq!(soft.pins, vec![Pin::new(4.0, 0.0, None), Pin::new(0.0, 0.0, None)]);
     assert!(w.len() >= 8, "{w:?}");
     assert_eq!(soft.extra.get("later"), Some(&json!([1])));
     let (again, _) = crate::parse(&s.to_json()).unwrap();
@@ -101,4 +101,32 @@ fn params_map_into_rapier_ranges() {
     let mut f = Preset::Jelly.defaults();
     f.shape_keep = 0.0;
     assert_eq!(f.params().shape_hz, 0.0, "no shape memory: shape matching off");
+}
+
+#[test]
+fn the_most_pins_always_read_back_and_keep_unknown_fields() {
+    // Full-precision coordinates and big ids: the largest settings still fit the source cap.
+    let pins: Vec<_> =
+        (0..MAX_PINS + 5).map(|i| json!({"u": -1.0 / 3.0 - i as f64 * 1e-9, "v": 2.0 / 3.0, "attachTo": u64::MAX, "weight": 0.5})).collect();
+    let mut s = crate::Settings { body_type: BodyType::Soft, ..crate::Settings::default() };
+    s.apply(json!({"soft": {"preset": "cloth", "stiffness": 1.0 / 3.0, "bend": 1.0 / 7.0, "shapeKeep": 1.0 / 9.0, "damping": 1.0 / 11.0, "resolution": 99.999_999_999, "pins": pins}}).as_object().unwrap(), false);
+    let text = s.to_json();
+    assert!(text.len() < crate::MAX_SOURCE_BYTES, "{} bytes", text.len());
+    let (again, _) = crate::parse(&text).unwrap();
+    assert_eq!(again, s);
+    assert_eq!(again.soft.unwrap().pins[0].extra.get("weight"), Some(&json!(0.5)), "a later version's pin field is kept");
+}
+
+#[test]
+fn params_never_carry_nan() {
+    let f = crate::soft::SoftFields {
+        stiffness: f64::NAN,
+        bend: f64::INFINITY,
+        shape_keep: f64::NAN,
+        damping: f64::NAN,
+        resolution: f64::NAN,
+        self_collide: false,
+    };
+    let p = f.params();
+    assert!([p.edge_hz, p.bend_hz, p.shape_hz, p.volume_hz, p.damping_ratio].iter().all(|x| x.is_finite()) && p.spacing.is_finite(), "{p:?}");
 }

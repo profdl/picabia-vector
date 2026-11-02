@@ -17,8 +17,12 @@ pub const SNAPSHOT_EVERY: u32 = 60;
 pub const MAX_SNAPSHOTS: usize = 64;
 /// The longest session, steps (10 minutes of simulated time).
 pub const MAX_SESSION_STEPS: u32 = 36_000;
+/// The most events recorded (a drag records a pull a frame; consecutive pulls in one step keep the
+/// last). Past it, new events are refused.
+pub const MAX_EVENTS: usize = 20_000;
 
-/// Something done to the world at a step, replayed when the step is reached again.
+/// Something done to the world at a step, replayed when the step is reached again. Events at the
+/// same step apply in the order they were recorded.
 #[derive(Clone, Debug)]
 pub enum Event {
     /// Grab body `body` at `at`.

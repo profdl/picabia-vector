@@ -306,7 +306,8 @@ The jelly scene is at the edge of the native budget even then (worst steps 2.7 f
   (a soft body by its nearest particle, a rigid body by the grabbed point); letting go throws it.
 - **Settings while playing:** a change in the physics row is applied to the running world at the
   next step (material, gravity, bounce, friction, damping). A change that needs a new mesh
-  (resolution, preset kind) restarts that body from its rest pose, with a note.
+  (resolution, cloth to cell body or back, self-collide, pins) restarts that body from its rest
+  pose, with a note.
 
 ### Settings
 
@@ -329,23 +330,26 @@ reaches objects that didn't override it. Fields (starting points, tuned in PIC31
 
 | Key | Cloth | Jelly | Rubber | rapier mapping |
 |---|---|---|---|---|
-| `stiffness` | 0.85 | 0.35 | 0.85 | edge and area springs, 1–60 Hz (squared: fine at the low end) |
+| `stiffness` | 0.85 | 0.35 | 0.85 | edge and area springs, 1–60 Hz |
 | `bend` | 0.1 | — | — | bending edges, 0.2–20 Hz |
 | `shapeKeep` | — | 0.4 | 0.85 | shape matching, off at 0, else 0.5–20 Hz |
-| `damping` | 0.5 | 0.15 | 0.45 | damping ratio 0.05–1 of every spring |
+| `damping` | 0.5 | 0.15 | 0.45 | damping ratio 0.05–1 of every spring (not squared; the three above are squared first, so the low end is finely graded) |
 | `resolution` | 6 pt | 12 pt | 12 pt | particle spacing |
 | `selfCollide` | off | off | off | self-contact (PIC31.0: costly, so off by default for cloth too) |
 
 `null` for a field goes back to the preset's value; a change of `preset` keeps the overrides; an
 unknown preset (a later version's) is kept and simulated as jelly. Pins are stored as `u`, `v`:
 fractions of the object's geometric bounds (0,0 top left, 1,1 bottom right; ±4 at most), so they
-follow the object when it moves, scales or is edited, plus `attachTo` (an object id); at most 256.
+follow the object when it moves, scales or is edited, plus `attachTo` (an object id); at most 64
+(so the largest settings stay well within the 16 KB the settings may take); a pin's unknown fields
+are kept.
 Soft settings are kept when the body type changes to rigid and back. Phase 1's Simulate (instant
 drop and settle) leaves soft bodies in place; the live session (PIC31.4) moves them.
 
 The phase 1 fields still apply (gravity scale, bounce, friction, extra mass, sensor). Pins are stored
-as points in the object's own space plus an optional object id to attach to, not as anchor indices,
-so they survive editing the path; at build time each pin takes the nearest particle. Pinning: Direct
+as places on the object (fractions of its bounds, above) plus an optional object id to attach to,
+not as anchor indices, so they survive editing the path; at build time each pin takes the nearest
+particle. Pinning: Direct
 Selection on anchors, then Object ▸ Physics ▸ Pin Points; Attach Points To… picks the object (it
 must have physics settings; a rigid body carries the pinned points with it).
 

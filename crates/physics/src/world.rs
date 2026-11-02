@@ -41,8 +41,10 @@ pub struct World {
 }
 
 impl World {
-    /// A world of `bodies` (in order: [`World::poses`] answers in the same order), with notes on
-    /// what was left out or simplified.
+    /// A world of `bodies`, with notes on what was left out or simplified. There is one entry per
+    /// input body, in order, everywhere bodies are indexed ([`World::poses`], the `body` of
+    /// [`World::grab`] and [`World::retune`], [`WorldBody::pins`]); a body left out reads as
+    /// `Pose::Rigid(None)` and ignores grabs and retuning.
     pub fn new(bodies: &[WorldBody], params: &WorldParams) -> (World, Vec<String>) {
         let _ = (bodies, params);
         (World::default(), vec!["the live world is not built yet (PIC31.4)".into()])

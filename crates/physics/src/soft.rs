@@ -15,8 +15,9 @@
 
 use serde_json::{Map, Value, json};
 
-/// The most pins one object keeps (more are left out, with a warning).
-pub const MAX_PINS: usize = 256;
+/// The most pins one object keeps (more are left out, with a warning). At most about 90 bytes a
+/// pin, so the settings stay well within [`crate::MAX_SOURCE_BYTES`] and always read back.
+pub const MAX_PINS: usize = 64;
 /// Pin coordinates (fractions of the object's bounds) are clamped to ±this.
 pub const MAX_PIN_UV: f64 = 4.0;
 
@@ -112,15 +113,26 @@ pub struct Pin {
     pub v: f64,
     /// The id of the object the point is attached to.
     pub attach_to: Option<u64>,
+    /// Fields this version doesn't know, kept on a round trip.
+    pub extra: Map<String, Value>,
+}
+
+impl Pin {
+    /// A pin at `u`, `v`, attached to `attach_to` when given.
+    pub fn new(u: f64, v: f64, attach_to: Option<u64>) -> Pin {
+        Pin { u, v, attach_to, extra: Map::new() }
+    }
 }
 
 impl Pin {
     fn to_value(&self) -> Value {
-        let mut o = json!({"u": self.u, "v": self.v});
-        if let (Some(id), Some(m)) = (self.attach_to, o.as_object_mut()) {
-            m.insert("attachTo".into(), json!(id));
+        let mut o = self.extra.clone();
+        o.insert("u".into(), json!(self.u));
+        o.insert("v".into(), json!(self.v));
+        if let Some(id) = self.attach_to {
+            o.insert("attachTo".into(), json!(id));
         }
-        o
+        Value::Object(o)
     }
 
     fn from_value(v: &Value, w: &mut Vec<String>) -> Option<Pin> {
@@ -147,7 +159,8 @@ impl Pin {
                 }
             },
         };
-        Some(Pin { u, v: vv, attach_to })
+        let extra = o.iter().filter(|(k, _)| !matches!(k.as_str(), "u" | "v" | "attachTo")).map(|(k, v)| (k.clone(), v.clone())).collect();
+        Some(Pin { u, v: vv, attach_to, extra })
     }
 }
 
@@ -260,10 +273,11 @@ impl Soft {
                 "pins" => match v {
                     Value::Null => self.pins.clear(),
                     Value::Array(a) => {
-                        self.pins = a.iter().filter_map(|p| Pin::from_value(p, &mut w)).take(MAX_PINS).collect();
-                        if a.len() > MAX_PINS {
-                            w.push(format!("{} pins (at most {MAX_PINS}): the rest left out", a.len()));
+                        let read: Vec<Pin> = a.iter().filter_map(|p| Pin::from_value(p, &mut w)).collect();
+                        if read.len() > MAX_PINS {
+                            w.push(format!("{} pins (at most {MAX_PINS}): the last {} left out", read.len(), read.len() - MAX_PINS));
                         }
+                        self.pins = read.into_iter().take(MAX_PINS).collect();
                     }
                     _ => w.push(format!("`pins` must be a list, not {v}: ignored")),
                 },
@@ -332,19 +346,20 @@ pub struct SoftParams {
 }
 
 impl SoftFields {
-    /// The rapier numbers: stiffness 0–1 maps to 1–60 Hz (squared, so the low end is finely
-    /// graded), bend to 0.2–20 Hz, shape memory to 0 (off) or 0.5–20 Hz, damping to a damping
-    /// ratio of 0.05–1.
+    /// The rapier numbers: stiffness 0–1 maps to 1–60 Hz, bend to 0.2–20 Hz, shape memory to 0
+    /// (off) or 0.5–20 Hz (each squared first, so the low end is finely graded), damping to a
+    /// damping ratio of 0.05–1. A value that isn't finite counts as 0.
     pub fn params(&self) -> SoftParams {
-        let sq = |x: f64| x.clamp(0.0, 1.0) * x.clamp(0.0, 1.0);
+        let unit = |x: f64| if x.is_finite() { x.clamp(0.0, 1.0) } else { 0.0 };
+        let sq = |x: f64| unit(x) * unit(x);
         let edge = 1.0 + 59.0 * sq(self.stiffness);
         SoftParams {
             edge_hz: edge as f32,
             bend_hz: (0.2 + 19.8 * sq(self.bend)) as f32,
-            shape_hz: if self.shape_keep <= 0.0 { 0.0 } else { (0.5 + 19.5 * sq(self.shape_keep)) as f32 },
+            shape_hz: if unit(self.shape_keep) <= 0.0 { 0.0 } else { (0.5 + 19.5 * sq(self.shape_keep)) as f32 },
             volume_hz: edge as f32,
-            damping_ratio: (0.05 + 0.95 * self.damping.clamp(0.0, 1.0)) as f32,
-            spacing: self.resolution.clamp(RESOLUTION_RANGE.0, RESOLUTION_RANGE.1),
+            damping_ratio: (0.05 + 0.95 * unit(self.damping)) as f32,
+            spacing: if self.resolution.is_finite() { self.resolution.clamp(RESOLUTION_RANGE.0, RESOLUTION_RANGE.1) } else { RESOLUTION_RANGE.1 },
             self_collide: self.self_collide,
         }
     }

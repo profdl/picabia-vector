@@ -273,7 +273,7 @@ fn soft_settings_through_the_commands() {
     let out = ex(&mut s, "physics.set", json!({"ids": [r.0], "props": {"soft": {"bend": null, "stiffness": 2}}}));
     assert_eq!(out["settings"]["soft"], json!({"preset": "cloth", "stiffness": 1.0}));
     assert_eq!(out["warnings"].as_array().unwrap().len(), 1, "{out}");
-    // Saved and reopened with the document (the attribute), undone with it.
+    // Undone with the document (it is the object's attribute).
     ex(&mut s, "edit.undo", json!({}));
     assert_eq!(ex(&mut s, "physics.get", json!({"id": r.0}))["settings"]["soft"]["bend"], 0.3);
 }
