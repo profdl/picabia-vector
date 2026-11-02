@@ -13,7 +13,7 @@ use vectorcraft_testkit::invariants::check_session;
 use vectorcraft_testkit::strategies::junk_params;
 
 /// `fx` with a stack on each selected object: a resample (geometry, on the object), a grid array,
-/// a trim, a tidy, a deform, a displace and a coarse screen (geometry, on every copy), a mirror and a copy to shape onto the first
+/// a trim, a tidy, a deform, a displace and a coarse screen (geometry, on every copy), a mirror, a color row and a copy to shape onto the first
 /// selected object (refused on that object itself), and copied rows for `modifier.paste`. PIC6:
 /// two parameters, the grid's rows bound to one, the deform's angle to an expression, and a
 /// transform each whose rotation is a per-copy expression.
@@ -32,6 +32,11 @@ fn stacked(fx: Fixture) -> Session {
         s.execute("modifier.add", &json!({"ids": [id], "kind": "screen", "props": {"lpi": 4, "quality": 6, "spot": "ellipse"}})).unwrap();
         s.execute("modifier.add", &json!({"ids": [id], "kind": "mirror"})).unwrap();
         s.execute("modifier.add", &json!({"ids": [id], "kind": "transformEach"})).unwrap();
+        s.execute(
+            "modifier.add",
+            &json!({"ids": [id], "kind": "color", "props": {"stroke": "own", "jitterHue": 20, "order": "diagonal", "hueExpr": "i * 7"}}),
+        )
+        .unwrap();
         s.execute("modifier.bind", &json!({"ids": [id], "index": 1, "field": "rows", "binding": {"param": "copies"}})).unwrap();
         s.execute("modifier.bind", &json!({"ids": [id], "index": 4, "field": "angle", "binding": {"expr": "copies * 45 + value"}})).unwrap();
         s.execute("modifier.bind", &json!({"ids": [id], "index": 8, "field": "rotate", "binding": {"expr": "i * 360 / n"}})).unwrap();

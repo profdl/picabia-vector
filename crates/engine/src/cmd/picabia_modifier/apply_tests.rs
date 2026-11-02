@@ -389,3 +389,40 @@ fn apply_draws_exactly_what_the_live_copies_drew() {
     assert!(children(&s, g).iter().all(|c| node(&s, *c).opacity == 1.0), "the copies are opaque inside it");
     assert!(draw(&s) == live, "the baked group draws as the live copies did");
 }
+
+/// The first fill's paint of `n`.
+fn fill_of(n: &Node) -> vectorcraft_color::Paint {
+    n.appearance
+        .items
+        .iter()
+        .find_map(|i| match i {
+            vectorcraft_doc::AppearanceItem::Fill(f) => Some(f.paint.clone()),
+            _ => None,
+        })
+        .unwrap()
+}
+
+/// PIC32.2: colour rows bake the shifted colours the renderer draws; a colour row alone applies.
+#[test]
+fn apply_bakes_the_copies_colours() {
+    let mut s = session();
+    let r = rect(&mut s, 0.0);
+    add(&mut s, r, "linearArray", json!({"count": 3, "offsetX": 150}));
+    add(&mut s, r, "color", json!({"hue": 0, "chroma": 0, "lightness": -40}));
+    let drawn = vectorcraft_render::picabia::copies_art(doc(&s), &node(&s, r)).unwrap();
+    let want: Vec<_> = drawn.children().unwrap().iter().map(|c| fill_of(c)).collect();
+    assert_ne!(want[0], want[2], "the copies differ");
+    let out = ex(&mut s, "modifier.apply", json!({"ids": [r.0]}));
+    let g = id_of(&out["ids"][0]);
+    let got: Vec<_> = children(&s, g).iter().map(|c| fill_of(&node(&s, *c))).collect();
+    assert_eq!(got, want, "baked as drawn");
+    // A colour row alone makes a change: one recoloured copy.
+    let r2 = rect(&mut s, 600.0);
+    add(&mut s, r2, "color", json!({"hue": 0, "chroma": 0, "lightness": -40}));
+    let before = fill_of(&node(&s, r2));
+    let out = ex(&mut s, "modifier.apply", json!({"ids": [r2.0]}));
+    let g2 = id_of(&out["ids"][0]);
+    let kids = children(&s, g2);
+    assert_eq!(kids.len(), 1);
+    assert_ne!(fill_of(&node(&s, kids[0])), before);
+}

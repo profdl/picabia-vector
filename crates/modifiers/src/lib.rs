@@ -65,6 +65,9 @@ pub mod bind;
 #[cfg(test)]
 mod bind_tests;
 mod cache;
+pub mod colour;
+#[cfg(test)]
+mod colour_tests;
 pub mod contour;
 #[cfg(test)]
 mod contour_tests;
@@ -81,6 +84,7 @@ mod kinds;
 mod kinds_tests;
 mod lenient;
 pub mod model;
+mod model_colour;
 mod model_deform;
 mod model_displace;
 mod model_screen;
@@ -101,8 +105,10 @@ mod tests;
 mod tone_tests;
 
 pub use bind::{Binding, BoundField, MAX_BINDINGS};
+pub use colour::ColourShift;
 pub use eval::{ArrayStage, Guide, Instance, Output, Repeat, StencilRow, Warning, evaluate, evaluate_in, evaluate_with, splitmix64};
 pub use fields::{NumberField, number_field, number_fields, per_copy};
+pub use model::{COLOUR_PRESETS, Colour, ColourOrder, ColourStroke};
 pub use model::{
     CircularArray, CopyMode, CopyToShape, GridArray, KINDS, LinearArray, MAX_CUT_COLOURS, MaterialLimits, Mirror, MirrorAxis, Modifier, ModifierKind,
     Randomize, Stack, Stencil, StencilColourMode, StencilLimitMode, StencilMaterial, StencilOutput, StencilPatternType, StencilPatternWhere,

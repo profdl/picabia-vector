@@ -1,5 +1,5 @@
-//! PICABIA (PIC3.4): one command per modifier kind and screen preset (`modifier.add.linearArray`,
-//! `modifier.add.benDay`, …), each `modifier.add` with its kind (and preset) filled in.
+//! PICABIA (PIC3.4): one command per modifier kind and screen or color preset
+//! (`modifier.add.linearArray`, `modifier.add.benDay`, `modifier.add.rainbow`, …), each `modifier.add` with its kind (and preset) filled in.
 //!
 //! They exist so the command palette (which runs a command with no params) finds each kind by
 //! name ("Linear Array", "Ben-Day Dots") and so a keyboard shortcut can be given to one in the
@@ -68,6 +68,10 @@ pub(super) fn specs() -> Vec<CommandSpec> {
         spec("modifier.add.screen", "Screen", |s, p| add_as(s, p, "modifier.add.screen", "Add Screen", "screen", None)),
         spec("modifier.add.benDay", "Ben-Day Dots", |s, p| add_as(s, p, "modifier.add.benDay", "Add Ben-Day Dots", "screen", Some("benDay"))),
         spec("modifier.add.lineFill", "Line Fill", |s, p| add_as(s, p, "modifier.add.lineFill", "Add Line Fill", "screen", Some("lineFill"))),
+        spec("modifier.add.color", "Color", |s, p| add_as(s, p, "modifier.add.color", "Add Color", "color", None)),
+        spec("modifier.add.rainbow", "Rainbow", |s, p| add_as(s, p, "modifier.add.rainbow", "Add Rainbow", "color", Some("rainbow"))),
+        spec("modifier.add.fade", "Fade", |s, p| add_as(s, p, "modifier.add.fade", "Add Fade", "color", Some("fade"))),
+        spec("modifier.add.vary", "Vary", |s, p| add_as(s, p, "modifier.add.vary", "Add Vary", "color", Some("vary"))),
         spec("modifier.add.stencil", "Stencil", |s, p| add_as(s, p, "modifier.add.stencil", "Add Stencil", "stencil", None)),
     ]
 }
@@ -95,12 +99,27 @@ mod tests {
             let stack = vectorcraft_modifiers::node_stack(&node(&s)).unwrap().unwrap();
             let want = match c.id {
                 "modifier.add.benDay" | "modifier.add.lineFill" => "screen",
+                "modifier.add.rainbow" | "modifier.add.fade" | "modifier.add.vary" => "color",
                 id => id.trim_start_matches("modifier.add."),
             };
             assert_eq!(stack.modifiers.iter().map(|m| m.kind.id()).collect::<Vec<_>>(), [want], "{}", c.id);
             s.execute("edit.undo", &json!({})).unwrap();
             assert!(!vectorcraft_modifiers::has_modifiers(&node(&s)), "{}: one undo step", c.id);
         }
+        // A color preset fills in its shifts.
+        let mut s = Session::new();
+        s.execute("file.new", &json!({"width": 200, "height": 200})).unwrap();
+        let id = s.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap()["id"].as_u64().unwrap();
+        s.execute("modifier.add.rainbow", &json!({"ids": [id]})).unwrap();
+        let n = s.active().unwrap().doc.node(vectorcraft_doc::NodeId(id)).unwrap().clone();
+        let p = vectorcraft_modifiers::node_stack(&n).unwrap().unwrap().modifiers[0].kind.params();
+        assert_eq!((p["hue"].as_f64(), p["chroma"].as_f64(), p["lightness"].as_f64()), (Some(100.0), Some(0.0), Some(0.0)));
+        assert!(
+            s.execute("modifier.add", &json!({"ids": [id], "kind": "color", "preset": "sepia"}))
+                .unwrap_err()
+                .to_string()
+                .contains("rainbow|fade|vary")
+        );
         // A preset fills in the screen's preset.
         let mut s = Session::new();
         s.execute("file.new", &json!({"width": 200, "height": 200})).unwrap();

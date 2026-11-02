@@ -1,6 +1,7 @@
 # Colour
 
-**Status:** 2026-11-02, planned, not started (PIC32). This is step 3 of the porting plan (version 3,
+**Status:** 2026-11-02, built (PIC32.1 to PIC32.5); PIC32.6 and PIC32.7 later. The choices made
+while building are under Choices made while building. This is step 3 of the porting plan (version 3,
 "Colour: copies get their own colours"), moved ahead of the ramp chip and the Offset row at the
 owner's request: colour is the next modifier work. The plan is written so that a session without
 the owner's machine (no `plan/`, no tlprocedural checkout) can build it: every number tlprocedural
@@ -229,8 +230,55 @@ follows them without asking again:
 Anything else the spec doesn't settle: choose what the best expert would, write the choice and why
 into this page and the commit message, and carry on.
 
+## Choices made while building
+
+Points the spec left open, settled as the implementing session judged best (PIC32.1 onwards):
+
+- **Array rows** for `order: array` are the rows that repeated the copies (`Output::array_stages`:
+  linear, circular and grid arrays, and mirror, wallpaper and copy to shape), counted from the top
+  among the enabled ones; geometry, per-copy and colour rows don't count. Every one of them gives
+  each copy a number, so the ramp can run along any.
+- **Jitter in the position orders** (`leftRight`, `topBottom`, `diagonal`) uses the copy's rank in
+  that order, as the spec's `order` row says ("the order the ramp and jitter count copies in");
+  `copies` uses the flat index, and `array` the flat index too (Settings).
+- **Achromatic colours have hue 0.** White, greys and black have no hue: their OKLab `a` and `b`
+  are rounding noise, so below a chroma of 1e-6 the hue reads as 0 (red's side), and a hue shift on
+  a neutral starts from there, the same on every platform. tlprocedural's culori leaves the hue
+  undefined.
+- **Chroma injection** compares the chroma after the chroma shift (`C < 0.02`), so a row that
+  removes chroma and turns the hue still shows the turn.
+- **An expression that gives no number** falls back to `field × ramp` (what the row does without
+  it), counted and reported like every per-copy expression's failures.
+- **A Color row breaks the stencil's lattice** (`Output::repeat` is `None`, like Transform Each
+  and Randomize): copies in one tile no longer match the next.
+- **Spot colours** are the colours linked to one of the document's spot swatches; a Gray "gains
+  chroma" when its shifted RGB channels differ by more than 1e-4 (PIC32.2).
+- **Two passes per row** when the stroke's shift differs from the fill's (`recolor_node` with
+  `Reach { fill }`, then `Reach { stroke }`); one pass when they are the same. Shifted colours are
+  cached per art by the colour's exact bits, the shift and whether it is a spot colour: building
+  the art of 10 000 recoloured copies takes about 25 ms in the test profile.
+- **Patterns** keep their tiles; the note "pattern fills keep their colours" is one of the
+  object's art notes (shown under the rows, and in `modifier.apply`'s warnings).
+- **Stencils** gather the copies as the renderer draws them whenever Color rows recolour them (as
+  for geometry rows; `crates/engine/src/picabia_stencil.rs`, one condition), so the colour layers
+  follow the shifted colours (PIC32.3).
+- **The kind lands whole in PIC32.3**: the crate's addable `KINDS`, `modifier.add.color` and its
+  presets, the Add Modifier entries and the panel's field list are held together by tests, so they
+  arrived in one commit; PIC32.4 adds the panel's grouping, visibility rules and colour strip.
+- **Rainbow's last copy is the first's colour again**: the ramp gives the last copy the full
+  shift, and a full turn of the hue lands where it started (the spec's maths, kept as is).
+- **The panel** groups the fields under Fill, Stroke, Ramp and Jitter headings, shows the
+  stroke's own shifts and jitter only with `stroke: own`, the ramp's amount and reverse only with
+  the ramp on, and the array row only with `order: array`; the strip sits left of the row's `⋯`
+  and follows the colour rows up to and including that row, from the object's first fill (PIC32.4).
+- **Jitter draws** are SplitMix64 of `(seed << 32) ^ index × 0xD6E8FEB86659FD93`, mixed again with
+  `(channel + 1) × 0x9E3779B97F4A7C15` (channels: fill hue, chroma, lightness = 0, 1, 2; stroke
+  hue, chroma, lightness = 3, 4, 5).
+
 ## Revision history
 
 - 2026-11-02: planned (PIC32), from tlprocedural's Color and Color Each and the porting plan's step 3.
 - 2026-11-02: the owner's decisions on effect colours, gamut, patterns and nested arrays; `order:
   array` and `array` added.
+- 2026-11-02: built, PIC32.1 to PIC32.5 (the row, drawing and Apply, commands and presets, the
+  panel, docs); the choices made recorded above.

@@ -3,6 +3,7 @@
 use vectorcraft_geom::{Affine, Point, Rect, Vec2};
 
 use crate::bind::{BoundField, PerCopy};
+use crate::colour::ColourShift;
 use crate::kinds::{self, Ctx, Stage};
 use crate::model::{ModifierKind, Stack, Stencil, StencilOutput, StencilRepeat};
 use crate::params::Scope;
@@ -74,6 +75,10 @@ pub struct Output {
     pub array_stages: Vec<ArrayStage>,
     /// What each bound field of the evaluated rows resolved to, in stack order ([`crate::bind`]).
     pub bound: Vec<BoundField>,
+    /// The `color` rows' shifts ([`crate::colour`]): empty without an enabled `color` row;
+    /// otherwise one list per instance (as [`Output::instances`]), one shift per row in stack
+    /// order, applied one after the other.
+    pub colours: Vec<Vec<ColourShift>>,
 }
 
 /// A row that repeated the copies ([`Output::array_stages`]).
@@ -116,6 +121,17 @@ impl Output {
     /// not just placed (and a single unmoved copy still differs from the object).
     pub fn has_geometry(&self) -> bool {
         !self.geometry.is_empty()
+    }
+
+    /// Whether `color` rows recolour the copies: a single unmoved copy then still differs from the
+    /// object.
+    pub fn has_colour(&self) -> bool {
+        !self.colours.is_empty()
+    }
+
+    /// The colour shifts of instance `index`, in row order (empty without `color` rows).
+    pub fn colour(&self, index: usize) -> &[ColourShift] {
+        self.colours.get(index).map_or(&[], Vec::as_slice)
     }
 
     /// Where `inst` stands among the array copies (tlprocedural's progressive index): its copy
@@ -167,6 +183,28 @@ impl Output {
                 self.warn(Some(id), message);
             }
         }
+    }
+
+    /// Collect row `id` when it is a `color` row (`kind`): its clamped step, its warnings and its
+    /// per-copy expressions. True when it was one.
+    fn colour_row(
+        &mut self,
+        id: &str,
+        kind: &ModifierKind,
+        per_copy: &PerCopy,
+        steps: &mut Vec<crate::colour::Step>,
+        copy_exprs: &mut Vec<(String, PerCopy)>,
+    ) -> bool {
+        let ModifierKind::Colour(p) = kind else { return false };
+        let mut warnings = Vec::new();
+        steps.push(crate::colour::step(p, per_copy, &mut warnings));
+        for w in warnings {
+            self.warn(Some(id), w);
+        }
+        if !per_copy.0.is_empty() {
+            copy_exprs.push((id.to_string(), per_copy.clone()));
+        }
+        true
     }
 
     /// Keep what a row's bound fields resolved to; a failed one is also a warning.
@@ -247,6 +285,8 @@ pub fn evaluate_in(stack: &Stack, bounds: Rect, targets: &dyn TargetResolver, sc
     let mut copied = false;
     // The per-copy expressions, to report the copies they gave no number for once they have run.
     let mut copy_exprs: Vec<(String, PerCopy)> = Vec::new();
+    // The `color` rows, run on the final copies.
+    let mut colour_steps: Vec<crate::colour::Step> = Vec::new();
     for m in rows.by_ref() {
         // Bound fields take their values now: `n` is the copies the rows above made.
         let r = crate::bind::resolve(m, scope, set.len());
@@ -268,6 +308,11 @@ pub fn evaluate_in(stack: &Stack, bounds: Rect, targets: &dyn TargetResolver, sc
             find_tone(&mut op, targets);
             let at = if copied { RowAt::Copies } else { RowAt::Source };
             out.geometry.push(GeometryRow { modifier: m.id.clone(), op, at });
+            continue;
+        }
+        // Per-copy colour: no copies, no transform; it varies every copy (no stencil lattice).
+        if out.colour_row(&m.id, kind, &r.per_copy, &mut colour_steps, &mut copy_exprs) {
+            per_copy = true;
             continue;
         }
         copied = true;
@@ -354,13 +399,14 @@ pub fn evaluate_in(stack: &Stack, bounds: Rect, targets: &dyn TargetResolver, sc
             inst.transform *= around(pivot, l);
         }
     }
-    out.copy_failures(&copy_exprs, n);
     let before = set.len();
     set.retain(|i| i.transform.is_finite());
     if set.len() != before {
         out.warn(None, format!("{} copies with invalid transforms were dropped", before - set.len()));
     }
     reindex(&mut set);
+    out.colours = crate::colour::shifts(&colour_steps, &set, pivot, &out.array_stages);
+    out.copy_failures(&copy_exprs, n);
     out.instances = set;
     out
 }

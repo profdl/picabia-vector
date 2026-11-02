@@ -10,6 +10,8 @@ pub mod freeform;
 pub mod gradient;
 pub mod harmony;
 pub mod libraries;
+// PICABIA: the Color modifier row's OKLCH shift.
+pub mod oklch_shift;
 pub mod palette_io;
 pub mod recolor;
 pub mod swatch;

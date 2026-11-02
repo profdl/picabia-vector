@@ -95,11 +95,12 @@ differences:
 - **Array steps** (linear, circular, grid, mirror, wallpaper, copy to shape) repeat the **whole
   previous set as a block**. Grid, then Circular is a ring of grids. Copy 0 of an array is the
   identity: the original is one of the `count` copies (copy to shape doesn't keep the original).
-- **Per-instance steps** (transform each, randomize) change each instance around its own pivot and
-  do not add copies. They always act on the **final** copies, after every array step has run,
+- **Per-instance steps** (transform each, randomize, color) change each instance (around its own
+  pivot; color changes its colours instead) and do not add copies. They always act on the **final** copies, after every array step has run,
   wherever their row sits in the stack: each copy gets its own values, and `i`/`n` count all the
   copies. (Their position among the arrays doesn't change the result; their order among
-  themselves does.)
+  themselves does. Color moves nothing, so its order matters only among Color rows: a second one
+  shifts the colours the first made.)
 - **Geometry steps** (resample, trim, tidy, deform, displace, screen; PIC20) change paths instead of placing copies. A
   geometry step **above every copy step** (array or per-instance) changes the object itself before
   it is copied: every copy is a copy of the changed object. A geometry step **below a copy step**
@@ -315,6 +316,40 @@ moves along its turned axes).
 
 Randomize derives its numbers from `seed` and the copy index only (SplitMix64 inside the crate, no
 platform generator), so a copy never changes when other copies are added after it.
+
+### color
+
+Gives each copy its own colour (PIC32; tlprocedural's Color and Color Each in one row; the full
+spec, maths and choices are in [`colour.md`](colour.md)). It shifts the OKLCH hue, chroma and
+lightness of every fill and stroke of each copy (solid colours, gradient stops, mesh points, a
+colorized image's colour, type), by the same amount on every copy, ramped across the copies, at
+random per copy, or all three. It runs on the final copies like the other per-instance steps and
+adds no copies, so bounds, clicks, the stencil's islands and the laser's paths don't change; on an
+object without copy rows it recolours the object itself. Pattern tiles (with a note), images'
+pixels, effects' colours, None and Registration keep their colours; a shifted colour loses its
+swatch link; RGB, CMYK, Gray and Lab keep their model (a Gray that gains chroma, and a spot colour,
+become process colours of the document's mode). A stencil below reads the shifted colours.
+
+| Field | Unit | Range | Default | Meaning |
+|---|---|---|---|---|
+| `hue` | % | -100 to 100 | 10 | Fill hue shift; 100 = a full turn |
+| `chroma` | % | -100 to 100 | 10 | Fill chroma shift; 100 = +0.4 OKLCH chroma |
+| `lightness` | % | -100 to 100 | 10 | Fill lightness shift; 100 = +1 OKLCH lightness |
+| `stroke` | enum | `same`, `own`, `none` | `same` | Strokes take the fill's shifts, their own, or keep their colour |
+| `strokeHue`, `strokeChroma`, `strokeLightness` | % | -100 to 100 | 0 | Stroke shifts with `stroke: own` |
+| `progressive` | on/off | | on | The ramp: each copy gets `shift × t × amount` (`t` = 0 on copy 0, 1 on the last; a lone object gets `amount`). Off: the full shift on every copy |
+| `amount` | factor | 0 to 1 | 1 | Ramp intensity |
+| `reverse` | on/off | | off | The ramp runs the other way |
+| `order` | enum | `copies`, `array`, `leftRight`, `topBottom`, `diagonal` | `copies` | What the ramp and jitter count: all the copies, one array row's copy number, or the copies' centres left to right, top to bottom or by `x + y` (ties keep copy order) |
+| `array` | integer | 1 to the copy rows | 1 | With `order: array`: which copy row (1 = the first from the top) the ramp runs along |
+| `jitterHue`, `jitterChroma`, `jitterLightness` | % | 0 to 100 | 0 | Random extra fill shift per copy, plus or minus |
+| `strokeJitterHue`, `strokeJitterChroma`, `strokeJitterLightness` | % | 0 to 100 | 0 | Stroke jitter with `stroke: own` |
+| `seed` | integer | 0 to 4 294 967 295 | 42 | Jitter seed: per copy and channel (SplitMix64), stable as copies are added and the same in the browser |
+| `hueExpr`, `chromaExpr`, `lightnessExpr` | text | | none | Per-copy expressions for the fill shifts, replacing `field × ramp` (see Expressions) |
+
+Presets (`modifier.add` `preset`, and Add Modifier ▸ Color): **Rainbow** (hue 100: one full turn
+across the copies), **Fade** (lightness 60: towards white), **Vary** (ramp off; jitter hue 8,
+chroma 10, lightness 10).
 
 
 ### stencil
@@ -815,7 +850,8 @@ landed in PIC20.5a; the `screen` geometry row (PIC20.5c, [screen](#screen) above
 ## Expressions
 
 The amounts of `transformEach` (`offsetX`, `offsetY`, `rotate`, `scaleX`, `scaleY`) and
-`randomize` (`position`, `rotation`, `scale`) can each be driven by a per-copy expression, stored as
+`randomize` (`position`, `rotation`, `scale`) and the fill shifts of `color` (`hue`, `chroma`,
+`lightness`) can each be driven by a per-copy expression, stored as
 `<field>Expr` next to the field (`"rotateExpr": "i * 15"`) and set with
 `modifier.set {modifier, props: {"rotateExpr": "i * 15"}}` (an empty text or `null` clears it).
 `modifier.set` refuses texts that don't parse (the error says where).

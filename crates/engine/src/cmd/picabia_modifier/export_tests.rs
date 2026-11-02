@@ -126,3 +126,20 @@ fn a_pdf_standard_without_editing_data_warns() {
     let out = ex(&mut s, "document.serialize", json!({"format": "pdf"}));
     assert!(!text(&out), "{out}");
 }
+
+/// PIC32.2: SVG writes each copy's shifted colour as a plain paint, and Preserve Editing keeps the
+/// live Color row.
+#[test]
+fn svg_writes_the_shifted_colours_and_keeps_the_live_row() {
+    let (mut s, r) = arrayed();
+    ex(&mut s, "modifier.add", json!({"ids": [r.0], "kind": "color", "props": {"hue": 0, "chroma": 0, "lightness": -50}}));
+    let svg = ex(&mut s, "document.serialize", json!({"format": "svg", "preserveEditing": false}))["text"].as_str().unwrap().to_string();
+    let fills: std::collections::BTreeSet<&str> = svg.match_indices("fill=\"#").map(|(i, _)| &svg[i + 6..i + 13]).collect();
+    assert!(fills.len() >= 5, "five shades: {fills:?}");
+    assert!(fills.contains("#ffffff"), "copy 0 keeps its white: {fills:?}");
+    let svg = ex(&mut s, "document.serialize", json!({"format": "svg", "preserveEditing": true}))["text"].as_str().unwrap().to_string();
+    let mut t = Session::new();
+    ex(&mut t, "document.open", json!({"name": "live.svg", "dataBase64": vectorcraft_format::base64_encode(svg.as_bytes())}));
+    let l = ex(&mut t, "modifier.list", json!({"id": r.0}));
+    assert!(l["modifiers"].as_array().unwrap().iter().any(|m| m["kind"] == "color"), "{l}");
+}

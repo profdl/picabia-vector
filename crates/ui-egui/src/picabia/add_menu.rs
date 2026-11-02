@@ -6,7 +6,8 @@
 //! show (a stack of copies), so no image asset is added.
 //!
 //! The groups say what a row does: Repeat makes copies, Shape reshapes the paths (and screens
-//! them), Make turns the object into something else (a stencil sheet, a physics body).
+//! them), Color recolours the copies, Make turns the object into something else (a stencil sheet,
+//! a physics body).
 
 use egui::{Color32, Painter, Rect, Stroke, Ui, pos2, vec2};
 use serde_json::json;
@@ -14,7 +15,7 @@ use serde_json::json;
 use crate::VectorcraftApp;
 use crate::theme::Tokens;
 
-/// One entry: its label, the kind `modifier.add` adds and the screen preset it fills in.
+/// One entry: its label, the kind `modifier.add` adds and the screen or color preset it fills in.
 #[derive(Clone, Copy, Debug)]
 pub struct AddItem {
     pub label: &'static str,
@@ -28,6 +29,10 @@ const fn kind(label: &'static str, kind: &'static str) -> AddItem {
 
 const fn preset(label: &'static str, preset: &'static str) -> AddItem {
     AddItem { label, kind: "screen", preset: Some(preset) }
+}
+
+const fn colour_preset(label: &'static str, preset: &'static str) -> AddItem {
+    AddItem { label, kind: "color", preset: Some(preset) }
 }
 
 /// The groups, in menu order, with their entries. Make also offers Physics ▸ Add Physics in the
@@ -59,6 +64,7 @@ pub const GROUPS: &[(&str, &[AddItem])] = &[
             preset("Line Fill", "lineFill"),
         ],
     ),
+    ("Color", &[kind("Color", "color"), colour_preset("Rainbow", "rainbow"), colour_preset("Fade", "fade"), colour_preset("Vary", "vary")]),
     ("Make", &[kind("Stencil", "stencil")]),
 ];
 

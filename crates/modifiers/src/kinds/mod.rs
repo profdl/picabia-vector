@@ -75,6 +75,8 @@ pub(crate) fn stage(kind: &ModifierKind, ctx: &Ctx, targets: &dyn TargetResolver
         ModifierKind::Resample(_) | ModifierKind::Trim(_) | ModifierKind::Tidy(_) => StageResult::unchanged(),
         ModifierKind::Deform(_) => StageResult::unchanged(),
         ModifierKind::Displace(_) | ModifierKind::Screen(_) => StageResult::unchanged(),
+        // Per-copy colour: the evaluator collects it (`crate::colour`).
+        ModifierKind::Colour(_) => StageResult::unchanged(),
         ModifierKind::Other { .. } => StageResult::unchanged(),
     }
 }
@@ -165,6 +167,11 @@ pub(crate) fn wallpaper_lattice(g: crate::model::WallpaperGroup, w: f64, h: f64,
 /// The crate's deterministic stream for `(seed, index)` (the geometry rows' random sort).
 pub(crate) fn rng_stream(seed: u32, index: usize) -> rng::Stream {
     rng::Stream::new(seed, index)
+}
+
+/// The crate's per-channel draw for `(seed, index, channel)` (the `color` row's jitter).
+pub(crate) fn rng_unit(seed: u32, index: usize, channel: u64) -> f64 {
+    rng::unit(seed, index, channel)
 }
 
 #[cfg(test)]

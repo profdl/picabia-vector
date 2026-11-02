@@ -27,6 +27,11 @@
 //! ([`vectorcraft_stencil::store::drawn`] / `fills`); before that, as its copies (or itself). Its
 //! bounds and clicks are the sheet's from the start ([`vectorcraft_stencil::store::frame`]).
 //!
+//! `color` rows recolour each copy after its transform and the geometry rows ([`colour`]): fills
+//! and strokes shift in OKLCH by the copy's shifts, in one place, so the canvas, every export,
+//! `modifier.apply` and Package agree. A stack whose only rows are `color` rows draws as one
+//! recoloured copy (it makes a change).
+//!
 //! An object whose stack makes no copies (no active row, one unmoved copy, a copy-to-shape target
 //! that is missing, or more cloned objects than [`MAX_ART_NODES`]) has no art: it draws exactly as
 //! upstream draws it, as [`plain`] (itself without the stack).
@@ -43,6 +48,10 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 use vectorcraft_doc::{Document, Node, Scaling, SymbolBoxes};
 use vectorcraft_geom::{Affine, Rect};
 use vectorcraft_modifiers::Output;
+
+/// The Color row's recolouring of a copy.
+#[path = "picabia_colour.rs"]
+pub mod colour;
 
 /// The most nodes the kept arts hold together, their objects included (the least recently used go
 /// first): what a closed document's art can keep alive is bounded by it.
@@ -214,8 +223,8 @@ fn copies(doc: &Document, n: &Node) -> Option<Arc<Output>> {
         return None;
     }
     let out = vectorcraft_modifiers::evaluate_node_in_doc(doc, n)?;
-    // One unmoved copy is the object itself, unless geometry rows change it.
-    let unmoved = matches!(out.instances.as_slice(), [one] if one.transform == Affine::IDENTITY) && !out.has_geometry();
+    // One unmoved copy is the object itself, unless geometry or colour rows change it.
+    let unmoved = matches!(out.instances.as_slice(), [one] if one.transform == Affine::IDENTITY) && !out.has_geometry() && !out.has_colour();
     (!out.instances.is_empty() && !unmoved).then_some(out)
 }
 
@@ -488,6 +497,10 @@ fn make(doc: &Document, n: &Node, out: &Output) -> (Node, Vec<String>) {
     let mut shaper = vectorcraft_modifiers::Shaper::new(out);
     shaper.notes.extend(stripped);
     shaper.source(&mut object);
+    let recolourer = out.has_colour().then(|| colour::Recolourer::new(doc));
+    if recolourer.is_some() && colour::has_pattern(&object) {
+        shaper.notes.push(colour::PATTERN_NOTE.to_string());
+    }
     let copies = out
         .instances
         .iter()
@@ -500,6 +513,10 @@ fn make(doc: &Document, n: &Node, out: &Output) -> (Node, Vec<String>) {
             }
             // Which copy: a deform and a displace ramp across them (a deform bends each in its own frame).
             shaper.copy_at(&mut c, k);
+            // Then its own colours (`color` rows), after its transform and the geometry rows.
+            if let Some(r) = &recolourer {
+                colour::recolour(r, &mut c, out.colour(k));
+            }
             Arc::new(c)
         })
         .collect();

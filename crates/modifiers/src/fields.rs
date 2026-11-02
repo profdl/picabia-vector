@@ -111,6 +111,24 @@ const STENCIL: &[NumberField] = &[
     f("hoshiDiameterMm", 0.2, 20.0),
 ];
 
+const COLOUR: &[NumberField] = &[
+    f("hue", -100.0, 100.0),
+    f("chroma", -100.0, 100.0),
+    f("lightness", -100.0, 100.0),
+    f("strokeHue", -100.0, 100.0),
+    f("strokeChroma", -100.0, 100.0),
+    f("strokeLightness", -100.0, 100.0),
+    f("amount", 0.0, 1.0),
+    w("array", 1.0, crate::MAX_STACK_LEN as f64),
+    f("jitterHue", 0.0, 100.0),
+    f("jitterChroma", 0.0, 100.0),
+    f("jitterLightness", 0.0, 100.0),
+    f("strokeJitterHue", 0.0, 100.0),
+    f("strokeJitterChroma", 0.0, 100.0),
+    f("strokeJitterLightness", 0.0, 100.0),
+    w("seed", 0.0, SEED_MAX),
+];
+
 /// The number fields of kind id `kind`, in panel order (empty for kinds without any).
 pub fn number_fields(kind: &str) -> &'static [NumberField] {
     match kind {
@@ -129,6 +147,7 @@ pub fn number_fields(kind: &str) -> &'static [NumberField] {
         "displace" => DISPLACE,
         "screen" => SCREEN,
         "stencil" => STENCIL,
+        "color" => COLOUR,
         _ => &[],
     }
 }
@@ -139,8 +158,9 @@ pub fn number_field(kind: &str, key: &str) -> Option<NumberField> {
 }
 
 /// Whether field `key` of kind id `kind` is read per copy: an expression binding it that reads
-/// `i` or `n` gives each copy its own value. Only `transformEach`'s and `randomize`'s amounts are
-/// (they run on every final copy); every other field takes one value per evaluation.
+/// `i` or `n` gives each copy its own value. Only `transformEach`'s and `randomize`'s amounts and
+/// `color`'s fill shifts are (they run on every final copy); every other field takes one value per
+/// evaluation.
 pub fn per_copy(kind: &str, key: &str) -> bool {
     crate::expr_fields(kind).contains(&key)
 }

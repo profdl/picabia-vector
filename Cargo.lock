@@ -6690,6 +6690,7 @@ version = "0.20.0"
 dependencies = [
  "serde",
  "serde_json",
+ "vectorcraft-color",
  "vectorcraft-doc",
  "vectorcraft-geom",
  "vectorcraft-pathops",
