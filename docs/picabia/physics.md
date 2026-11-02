@@ -372,6 +372,32 @@ particle. Pinning: Direct
 Selection on anchors, then Object ▸ Physics ▸ Pin Points; Attach Points To… picks the object (it
 must have physics settings; a rigid body carries the pinned points with it).
 
+### Commands
+
+**As built (PIC31.4)** (`picabia_physics_session.rs`; the world and clock in `vectorcraft_physics`
+`world.rs` and `session.rs`):
+
+| Command | Params | What |
+|---|---|---|
+| `physics.session.open` | `gravityX?`, `gravityY?`, `walls?`, `artboard?` (as Simulate) | Opens a live session in the active document at step 0, paused (replaces one already open) → bodies, soft, skipped, warnings, notes, artboard |
+| `physics.session.close`, `physics.cancel` | — | Closes it; the art is untouched |
+| `physics.session.info` | — | `{open, step, seconds, playing, settled, bodies: [{id, kind}], events, notes, skipped, warnings, artboard}` (query) |
+| `physics.play`, `physics.pause` | — | Play opens a session when none is; the app steps it each frame (at most 4 steps a frame) |
+| `physics.reset` | — | Step 0, paused; recorded pokes kept |
+| `physics.seek` | `step` (0–36,000) | Back from the nearest snapshot, forward by stepping |
+| `physics.toRest` | `steps?` (default 3,000) | Simulate to Rest: runs until every body sleeps (or the cap), opening a session when none is; the result shows until Apply or Cancel |
+| `physics.poke` | `id` + `point` (grab), `to?` (pull), `release?` | Records a poke at the current step |
+| `physics.apply` | `patterns?` | Bakes every body's shown pose, one undo step ("Apply Physics"), and closes the session |
+
+The session is engine state, not the document: nothing changes until Apply, and it belongs to the
+document it was opened in (another document's commands don't see it). When that document changes
+(an edit, an undo) the session starts again from the new rest pose, with a note. `physics.simulate`
+keeps its params and output: a scene with soft bodies runs through the live world to rest and bakes
+in one step; a rigid-only scene runs phase 1's drop unchanged. Snapshots: every 60 steps, at most
+64 (then every other one is dropped and the interval doubles); events at most 20,000 (consecutive
+pulls in one step keep the last); a snapshot is the world before its step's events, so replaying
+applies each once.
+
 ### Commands (planned)
 
 `physics.session.open/close`, `physics.play`, `physics.pause`, `physics.reset`, `physics.seek`
@@ -388,7 +414,7 @@ do goes through these commands.
 | PIC31.1 | Soft settings: `bodyType: "soft"`, presets and overrides, pins; lenient parse, round trip. **Done** (2026-11-02): `soft.rs`; interfaces stubbed for PIC31.2–31.4 (`mesh.rs`, `pose.rs`, `world.rs`, `session.rs`) |
 | PIC31.2 | Bodies from objects: cloth strip and jelly/rubber cells, caps, junk; tune the presets. **Meshing done** (2026-11-02); the presets are tuned once the world runs (PIC31.2b) |
 | PIC31.3 | Pose to art: rigid, cloth and jelly warps; Apply as one undo step. **Done** (2026-11-02): warps and the bake; the `physics.apply` command comes with the session (PIC31.4) |
-| PIC31.4 | Session and clock: world, steps, snapshots, event log, `physics.session/play/pause/reset/seek/apply/cancel`, rest detection |
+| PIC31.4 | Session and clock: world, steps, snapshots, event log, `physics.session/play/pause/reset/seek/apply/cancel`, rest detection. **Done** (2026-11-02): commands above |
 | PIC31.5 | Transport bar and clones on the canvas; Simulate to Rest; rigid bodies on the same flow |
 | PIC31.6 | Poke (Selection tool drag while the session is open) and `physics.poke` |
 | PIC31.7 | Settings while playing (applied next step; re-mesh restarts the body) |
@@ -406,6 +432,14 @@ least half that.
 - Does Apply bake every body in the session, or can it bake only selected ones and keep the rest
   running? Proposed: every body first; Apply Selected later.
 
+- Decided alone during PIC31.4 (2026-11-02): (1) **Saving while a session is open** saves the art
+  at rest without asking: the session never changes the document, so there is nothing to lose
+  (the open question's proposed prompt isn't needed; the session stays open). (2) **Apply** bakes
+  every body (the proposed answer; Apply Selected later). (3) The session belongs to one document;
+  editing that document restarts it from the new rest pose rather than closing it. (4) One session
+  at a time: opening one replaces the last. (5) `physics.simulate` keeps phase 1's drop for
+  rigid-only scenes (its results unchanged, bit for bit) and uses the live world when soft bodies
+  take part.
 - Decided alone during PIC31.0 (2026-11-02), for the owner to review: (1) the gate failed, so the
   work stopped there as the plan says; nothing from PIC31.1 on was started. (2) The spike's scenes and
   tests stay in the repo (`spike_scene.rs`, `tests_soft_spike.rs`; the timing tests are

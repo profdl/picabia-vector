@@ -74,3 +74,5 @@ mod tests_pose;
 mod tests_soft;
 #[cfg(test)]
 mod tests_soft_spike;
+#[cfg(test)]
+mod tests_world;

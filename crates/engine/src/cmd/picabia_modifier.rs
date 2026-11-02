@@ -32,6 +32,8 @@ pub(crate) struct PicabiaState {
     pub(crate) laser_machine: LaserMachine,
     /// The canvas handles: the panel's open rows, the hovered handle and a drag in progress.
     pub(crate) handles: handles::HandleState,
+    /// The live physics session, when one is open (`picabia_physics::session`).
+    pub(crate) physics: Option<Box<super::picabia_physics::session::Live>>,
 }
 
 /// What a connected laser machine reports ([`PicabiaState::laser_machine`]). The G-code commands

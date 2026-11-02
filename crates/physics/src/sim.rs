@@ -221,7 +221,7 @@ pub fn simulate(bodies: &[BodyInput], params: &SimParams) -> SimResult {
 /// The document-space motion of a body that started at `start` (its origin, unrotated) and ended
 /// at translation `t` (metres from `origin`) and angle `angle`: `None` when it is (nearly) still
 /// where it was or isn't finite.
-fn motion(start: Point, origin: Point, t: Vector, angle: f32) -> Option<Affine> {
+pub(crate) fn motion(start: Point, origin: Point, t: Vector, angle: f32) -> Option<Affine> {
     let end = Point::new(origin.x + f64::from(t.x) * PT_PER_M, origin.y + f64::from(t.y) * PT_PER_M);
     let a = f64::from(angle);
     if !(end.x.is_finite() && end.y.is_finite() && a.is_finite()) {
@@ -233,7 +233,7 @@ fn motion(start: Point, origin: Point, t: Vector, angle: f32) -> Option<Affine> 
     Some(Affine::translate(end.to_vec2()) * Affine::rotate(a) * Affine::translate(-start.to_vec2()))
 }
 
-fn add_walls(rbs: &mut RigidBodySet, cols: &mut ColliderSet, r: Rect, origin: Point) {
+pub(crate) fn add_walls(rbs: &mut RigidBodySet, cols: &mut ColliderSet, r: Rect, origin: Point) {
     if ![r.x0, r.y0, r.x1, r.y1].iter().all(|x| x.is_finite()) || r.width() <= 0.0 || r.height() <= 0.0 {
         return;
     }
@@ -264,7 +264,7 @@ fn piece_count(sh: &SharedShape) -> usize {
     sh.as_compound().map(|c| c.shapes().len()).or_else(|| sh.as_polyline().map(|p| p.num_segments())).unwrap_or(1).max(1)
 }
 
-fn add_body(
+pub(crate) fn add_body(
     rbs: &mut RigidBodySet,
     cols: &mut ColliderSet,
     b: &BodyInput,
