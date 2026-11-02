@@ -336,21 +336,25 @@ fn displace_patterns_with_junk_props() {
     ];
     let mut failures = vec![];
     let mut calls = 0usize;
-    for mode in ["wave", "jitter", "fractal"] {
+    // Every pattern in every direction.
+    let cases = ["wave", "jitter", "fractal"].into_iter().flat_map(|m| ["own", "normal", "x", "y", "angle"].map(move |d| (m, d)));
+    for (mode, direction) in cases {
         for key in keys {
             for v in &junk {
                 calls += 1;
                 let mut s = stacked(Fixture::Single);
                 let r = catch_quiet(|| {
-                    let _ =
-                        s.execute("modifier.add", &json!({"kind": "displace", "index": 0, "props": {"mode": mode, "direction": "normal", key: v}}));
+                    let _ = s.execute(
+                        "modifier.add",
+                        &json!({"kind": "displace", "index": 0, "props": {"mode": mode, "direction": direction, "angle": 30, key: v}}),
+                    );
                     let _ = s.execute("modifier.list", &json!({}));
                     s.execute("modifier.apply", &json!({}))
                 });
                 let fail = match r {
-                    Err(msg) => Some(format!("PANIC {mode}.{key} = {v}: {msg}")),
-                    Ok(Err(vectorcraft_engine::EngineError::Internal { msg, .. })) => Some(format!("PANIC {mode}.{key} = {v}: {msg}")),
-                    Ok(_) => check_session(&s).err().map(|e| format!("{mode}.{key} = {v}: {e}")),
+                    Err(msg) => Some(format!("PANIC {mode}/{direction}.{key} = {v}: {msg}")),
+                    Ok(Err(vectorcraft_engine::EngineError::Internal { msg, .. })) => Some(format!("PANIC {mode}/{direction}.{key} = {v}: {msg}")),
+                    Ok(_) => check_session(&s).err().map(|e| format!("{mode}/{direction}.{key} = {v}: {e}")),
                 };
                 failures.extend(fail);
             }

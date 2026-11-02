@@ -131,11 +131,12 @@ fn a_wave_moves_across_the_objects_width() {
     // Pinned off the quarter cycles (phase 30°), so the bits are the sine's own.
     let a = moved(&Displace { phase: 30.0, ..p.clone() }, &sp).subpaths[0].anchors[3].p;
     assert_eq!((a.x.to_bits(), a.y.to_bits()), WAVE_BITS, "wave {a:?}");
-    // Direction x: down the height, moving in x (tlprocedural's vertical axis).
+    // Direction x: along the height, moving in x (tlprocedural's vertical axis, run up the height so
+    // that angle 0° is x).
     let column = SubPath::polyline(&sp.anchors.iter().map(|a| Point::new(0.0, a.p.x)).collect::<Vec<_>>(), false);
     let dx = moved(&Displace { direction: DisplaceDirection::X, ..p.clone() }, &column);
     for (a, b) in column.anchors.iter().zip(&dx.subpaths[0].anchors) {
-        let want = 20.0 * ((a.p.y / 100.0 * 2.0 + 0.25) * std::f64::consts::TAU).sin();
+        let want = 20.0 * (((1.0 - a.p.y / 100.0) * 2.0 + 0.25) * std::f64::consts::TAU).sin();
         assert!(b.p.y == a.p.y && (b.p.x - want).abs() < 1e-9);
     }
     // Angle 90° is y.
@@ -433,5 +434,95 @@ fn copies_ramp_and_mirrors_stay_symmetric() {
         let pairs = mirror_pairs(&out, &pts);
         assert_eq!(pairs.len(), 1, "{mode}");
         assert!(pairs[0].2 < 1e-9, "{mode}: a mirror image, {pairs:?}");
+        // Every direction, and the fractal's seeded split places, stay mirror images too.
+        for direction in ["own", "normal", "x", "y", "angle"] {
+            let (out, pts) = copies_of(json!([{"id": "m", "kind": "mirror"}, {"id": "d", "kind": "displace", "mode": mode, "amplitude": 20,
+                "steps": 2, "direction": direction, "angle": 30, "edgeVariance": 0.7}]));
+            let pairs = mirror_pairs(&out, &pts);
+            assert_eq!(pairs.len(), 1, "{mode} {direction}");
+            assert!(pairs[0].2 < 1e-9, "{mode} {direction}: a mirror image, {pairs:?}");
+        }
     }
+}
+
+/// PIC20.4d: a wave round a closed outline takes a whole number of cycles (at least one), so it
+/// meets itself where the outline starts; an open one keeps its cycles.
+#[test]
+fn a_wave_round_a_closed_outline_takes_whole_cycles() {
+    use super::displace::whole_cycles;
+    assert_eq!((whole_cycles(2.5), whole_cycles(2.4), whole_cycles(0.1), whole_cycles(10.0)), (3.0, 2.0, 1.0, 10.0));
+    assert!(whole_cycles(f64::NAN).is_nan());
+    let pts: Vec<Point> =
+        (0..48).map(|i| f64::from(i) / 48.0 * std::f64::consts::TAU).map(|t| Point::new(100.0 * t.cos(), 100.0 * t.sin())).collect();
+    let ring = SubPath::polyline(&pts, true);
+    let at = |f: f64, sp: &SubPath| {
+        let p = Displace { amplitude: 10.0, frequency: f, phase: 90.0, direction: DisplaceDirection::Normal, ..wave() };
+        moved(&p, sp)
+    };
+    assert_eq!(bits(&at(2.5, &ring).subpaths[0]), bits(&at(3.0, &ring).subpaths[0]), "2.5 cycles round: 3");
+    // No seam: the step from the last anchor back to the first is like any other step.
+    let d = at(2.5, &ring);
+    let off: Vec<f64> = ring.anchors.iter().zip(&d.subpaths[0].anchors).map(|(a, b)| (b.p - a.p).dot(a.p.to_vec2() / 100.0)).collect();
+    let steps: Vec<f64> = (0..48).map(|i| (off[(i + 1) % 48] - off[i]).abs()).collect();
+    let most = steps[..47].iter().copied().fold(0.0, f64::max);
+    assert!(steps[47] <= most + 1e-9, "seam {} vs {most}", steps[47]);
+    // Open: 2.5 cycles stay 2.5.
+    let open = SubPath::polyline(&pts, false);
+    assert_ne!(bits(&at(2.5, &open).subpaths[0]), bits(&at(3.0, &open).subpaths[0]));
+}
+
+/// PIC20.4d: x, y and angle are one turning family: angle 0° is x, 90° is y.
+#[test]
+fn angle_zero_is_x_and_ninety_is_y() {
+    let sq = lopsided();
+    for mode in [DisplaceMode::Wave, DisplaceMode::Jitter, DisplaceMode::Spatial, DisplaceMode::Fractal] {
+        let base = Displace { mode, amplitude: 12.0, progressive: false, ..Displace::default() };
+        let x = moved(&Displace { direction: DisplaceDirection::X, ..base.clone() }, &sq);
+        let a0 = moved(&Displace { direction: DisplaceDirection::Angle, angle: 0.0, ..base.clone() }, &sq);
+        assert_eq!(bits(&x.subpaths[0]), bits(&a0.subpaths[0]), "{mode:?}: 0° is x");
+        let y = moved(&Displace { direction: DisplaceDirection::Y, ..base.clone() }, &sq);
+        let a90 = moved(&Displace { direction: DisplaceDirection::Angle, angle: 90.0, ..base.clone() }, &sq);
+        assert!(apart_paths(&y, &a90) < 1e-9, "{mode:?}: 90° is y");
+        let a360 = moved(&Displace { direction: DisplaceDirection::Angle, angle: 360.0, ..base.clone() }, &sq);
+        assert!(apart_paths(&x, &a360) < 1e-9, "{mode:?}: 360° is x");
+    }
+}
+
+/// PIC20.4d: the normal's outward side comes from the curve's own winding, so a two-anchor lens
+/// (its anchors enclose nothing) gets outward normals whichever way it runs, and a fractal along
+/// the normal grows it out.
+#[test]
+fn a_two_anchor_lens_has_outward_normals_both_ways() {
+    let lens = SubPath::new(
+        vec![
+            Anchor::with_handles(Point::new(0.0, 0.0), Point::new(30.0, 40.0), Point::new(30.0, -40.0)),
+            Anchor::with_handles(Point::new(100.0, 0.0), Point::new(70.0, -40.0), Point::new(70.0, 40.0)),
+        ],
+        true,
+    );
+    let mut back = lens.clone();
+    back.reverse();
+    let centre = Point::new(50.0, 0.0);
+    for sp in [&lens, &back] {
+        for (a, n) in sp.anchors.iter().zip(normals(sp)) {
+            assert!(n.dot(a.p - centre) > 0.99, "{n:?} at {:?}", a.p);
+        }
+        let p = Displace { amplitude: 10.0, jitter_min: 1.0, direction: DisplaceDirection::Normal, ..jitter() };
+        let d = moved(&p, sp);
+        for (a, b) in sp.anchors.iter().zip(&d.subpaths[0].anchors) {
+            assert!((b.p - a.p).dot(a.p - centre) > 0.0, "out");
+        }
+    }
+    // A three-anchor curved shape whose anchors lie on one line: the fractal still grows it (the
+    // curve has area), out along the normal.
+    let flat_curvy = SubPath::new(
+        vec![
+            Anchor::with_handles(Point::new(0.0, 0.0), Point::new(0.0, 40.0), Point::new(0.0, -40.0)),
+            Anchor::with_handles(Point::new(50.0, 0.0), Point::new(20.0, -40.0), Point::new(80.0, -40.0)),
+            Anchor::with_handles(Point::new(100.0, 0.0), Point::new(100.0, -40.0), Point::new(100.0, 40.0)),
+        ],
+        true,
+    );
+    let grown = moved(&Displace { amplitude: 10.0, steps: 1, wander: 0.0, direction: DisplaceDirection::Normal, ..fractal() }, &flat_curvy);
+    assert_eq!(grown.subpaths[0].anchors.len(), 6);
 }

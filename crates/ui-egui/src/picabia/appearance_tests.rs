@@ -341,3 +341,16 @@ fn the_screen_row_shows_the_fields_its_tone_uses() {
     assert_eq!((p["spot"].as_str(), p["tone"].as_str(), p["amount"].as_f64()), (Some("line"), Some("fixed"), Some(30.0)));
     assert!(super::menu::object_items().iter().any(|i| matches!(i, crate::menus::Item::Cmd("Ben-Day Dots", "modifier.add", _))));
 }
+
+/// PIC20.4d: the displace amplitude field reaches 200 for the fractal only (the row's clamp),
+/// 100 for the other patterns.
+#[test]
+fn the_displace_amplitude_range_follows_the_pattern() {
+    let mut m = vectorcraft_modifiers::Modifier::new("m", "displace").unwrap();
+    for (mode, hi) in [("spatial", 100.0), ("radial", 100.0), ("wave", 100.0), ("jitter", 100.0), ("fractal", 200.0)] {
+        if let vectorcraft_modifiers::ModifierKind::Displace(d) = &mut m.kind {
+            d.mode = serde_json::from_value(json!(mode)).unwrap();
+        }
+        assert_eq!(super::appearance::length_range(&m, "amplitude"), Some((0.0, hi)), "{mode}");
+    }
+}

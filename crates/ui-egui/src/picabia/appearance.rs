@@ -234,12 +234,12 @@ fn fields(kind: &str) -> &'static [(&'static str, &'static str, F)] {
         ],
         // tlprocedural's Noise, Wave, Randomize Points and Subdivision Growth panels: their
         // ranges, fields shown by pattern, direction and the ramp (labelled as Deform's).
-        // Amplitude reaches 200 for the fractal (the others are clamped at 100, with a warning).
+        // Amplitude reaches 200 for the fractal only (`field_range`).
         "displace" => &[
             ("mode", "Pattern", F::Choice(DISPLACE_MODES)),
             ("direction", "Direction", F::Choice(DISPLACE_DIRECTIONS)),
             ("angle", "Angle", F::Deg(-360.0, 360.0)),
-            ("amplitude", "Amplitude", F::Len(0.0, 200.0)),
+            ("amplitude", "Amplitude", F::Len(0.0, 100.0)),
             ("scale", "Scale", F::Num(0.01, 1.0)),
             ("octaves", "Octaves", F::Int(1.0, 6.0)),
             ("rippleCount", "Ripple count", F::Int(2.0, 12.0)),
@@ -300,11 +300,32 @@ fn displace_applies(d: &vectorcraft_modifiers::Displace, key: &str) -> bool {
         "rippleCount" => d.mode == Radial,
         "waveform" | "frequency" | "phase" => d.mode == Wave,
         "jitterMin" => d.mode == Jitter,
-        "steps" | "decay" | "wander" | "edgeVariance" | "normalBias" | "inward" => d.mode == Fractal,
+        "steps" | "decay" | "wander" | "edgeVariance" | "inward" => d.mode == Fractal,
+        // The blend steers the own direction (and its share along an axis), not the normal.
+        "normalBias" => d.mode == Fractal && d.direction != vectorcraft_modifiers::DisplaceDirection::Normal,
         // A wave has no seed (its phase is its own).
         "seed" => d.mode != Wave,
         "progressiveAmount" | "progressiveReverse" => d.progressive,
         _ => true,
+    }
+}
+
+/// Field `key`'s range on row `m` where it depends on the row: a fractal displace's amplitude
+/// reaches 200 (tlprocedural's Subdivision Growth displacement), the other patterns' 100.
+fn field_range(m: &Modifier, key: &str, how: F) -> F {
+    match (&m.kind, key) {
+        (ModifierKind::Displace(d), "amplitude") if d.mode == vectorcraft_modifiers::DisplaceMode::Fractal => F::Len(0.0, 200.0),
+        _ => how,
+    }
+}
+
+/// The length range field `key` edits on row `m` (tests).
+#[cfg(test)]
+pub(super) fn length_range(m: &Modifier, key: &str) -> Option<(f64, f64)> {
+    let how = fields(m.kind.id()).iter().find(|(k, ..)| *k == key)?.2;
+    match field_range(m, key, how) {
+        F::Len(lo, hi) => Some((lo, hi)),
+        _ => None,
     }
 }
 
@@ -680,6 +701,7 @@ fn editor(app: &mut VectorcraftApp, ui: &mut Ui, doc: &Document, ids: &[NodeId],
         }
         for (key, label, how) in list {
             let Some(v) = params.get(*key).filter(|_| applies(&r.first, key)) else { continue };
+            let how = &field_range(&r.first, key, *how);
             ui.horizontal(|ui| {
                 let name = ui.add_sized(vec2(84.0, 22.0), egui::Label::new(egui::RichText::new(tl!(label)).size(11.5).color(t.text)).truncate());
                 ui.label_inputs_by(name.id, |ui| {

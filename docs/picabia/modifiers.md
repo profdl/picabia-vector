@@ -506,7 +506,7 @@ same bits (a test pins them).
 | Field | Unit | Range | Default | Used by | Meaning |
 |---|---|---|---|---|---|
 | `mode` | choice | `spatial`, `radial`, `wave`, `jitter`, `fractal` | `spatial` | | The pattern (the panel's **Pattern**: Smooth noise, Radial ripple, Wave, Jitter, Fractal), below |
-| `direction` | choice | `own`, `normal`, `x`, `y`, `angle` | `own` | all | Which way anchors move. `own`: the pattern's (tlprocedural's) own: smooth noise in both axes, radial and jitter away from the centre, wave in y across the width, fractal between the radial direction and the segment's normal. `normal`: along the path's outward normal at the anchor (square to the handles' line, or to the neighbours' chord at a corner; outward by the winding). `x`, `y`, `angle`: along that axis of the copy (read in the copy's frame, so a turned copy moves turned) |
+| `direction` | choice | `own`, `normal`, `x`, `y`, `angle` | `own` | all | Which way anchors move. `own`: the pattern's (tlprocedural's) own: smooth noise in both axes, radial and jitter away from the centre, wave in y across the width, fractal between the radial direction and the segment's normal. `normal`: along the path's outward normal at the anchor (square to the handles' line, or to the neighbours' chord at a corner; outward by the winding of the curve itself, handles included, so a two-anchor lens knows its outside). `x`, `y`, `angle`: along that axis of the copy (read in the copy's frame, so a turned copy moves turned) |
 | `angle` | degrees | -360 to 360 | 0 | direction `angle` | From the copy's x axis, clockwise on screen |
 | `amplitude` | points | 0 to 100 (fractal 0 to 200) | 10 | all | The most an anchor moves. Radial: percent of its distance from the centre (times a quarter). Fractal: the first step's push (tlprocedural's `displacement`, which reached 200). 0 leaves the path alone |
 | `scale` | per point | 0.01 to 1 | 0.05 | smooth noise | The noise frequency (smaller: broader waves) |
@@ -520,7 +520,7 @@ same bits (a test pins them).
 | `decay` | | 0 to 0.5 | 0.45 | fractal | Each step's push is this share of the one before |
 | `wander` | | 0 to 1 | 0.15 | fractal | Turns each push by a seeded angle, up to an eighth of a turn either way (tlprocedural's `jitter`, renamed so it doesn't read as the Jitter pattern) |
 | `edgeVariance` | | 0 to 1 | 0 | fractal | How far from a segment's middle the new anchor may sit (seeded; 0.1 to 0.9 of the way along) |
-| `normalBias` | | 0 to 1 | 0.5 | fractal, direction `own` | 0 pushes away from the centre, 1 square to the segment |
+| `normalBias` | | 0 to 1 | 0.5 | fractal, not direction `normal` | 0 pushes away from the centre, 1 square to the segment (an axis direction takes this blend's share along it) |
 | `inward` | on/off | | off | fractal | Push in instead of out |
 | `seed` | | 0 to 999999 | 42 | not wave | Smooth noise: shuffles the noise's permutation table. Radial: the ripple's phase. Jitter: the random stream. Fractal: the split places and wander. Each drawn with the copy's place among the array copies (see *What the ramp counts* below) |
 | `progressive` | on/off | | on | all | Ramp the amplitude across the array copies made above the row: none on the first, `progressiveAmount` of it on the last, evenly between |
@@ -538,10 +538,10 @@ same bits (a test pins them).
 - **Wave** (`wave`): tlprocedural's `wavePolygon`. Each anchor's place `t` (0..1) across the
   object's extent (all its anchors) moves it by `amplitude × wave(t × frequency + phase/360)`.
   The wave runs across the direction it moves in: own and `y` across the width, moving in y
-  (tlprocedural's horizontal axis, its default); `x` down the height, moving in x (its vertical);
-  `angle` across that angle (90° is `y`). With `normal` the wave runs along each subpath's outline
+  (tlprocedural's horizontal axis, its default); `x` along the height from the bottom up, moving in x;
+  `angle` across that angle, a quarter turn back from the way it moves (0° is `x`, 90° is `y`: one turning family). With `normal` the wave runs along each subpath's outline
   (`t` its share of the anchors' chord length from the first anchor) and moves out along the
-  normal. An extent under 0.001 pt (a column, for a wave across the width) is left alone, as
+  normal; round a **closed** outline the cycles are rounded to the nearest whole number (at least 1), so the wave meets itself where the outline starts (no seam; a square or sawtooth wave jumps there only as it does at every cycle). An extent under 0.001 pt (a column, for a wave across the width) is left alone, as
   there. Square, triangle and sawtooth are `computeWave`'s.
 - **Jitter** (`jitter`): tlprocedural's Randomize Points. Each anchor moves by
   `amplitude × (jitterMin + u × (1 − jitterMin))`, `u` the next of tlprocedural's seeded LCG
@@ -621,11 +621,11 @@ Differences from tlprocedural, on purpose:
   reproducible.
 - **Wave**: the square wave reads the cycle's half (tlprocedural took the sign of a sine, which
   differs only exactly on a half cycle); each copy waves across its own extent, in its own frame,
-  as tlprocedural waved each instance unrotated.
+  as tlprocedural waved each instance unrotated. `x` runs up the height (tlprocedural's vertical axis ran down it: the same wave mirrored top to bottom) so that `x`, `y` and `angle` are one turning family; a wave round a closed outline takes whole cycles (tlprocedural had no outline wave). (PIC20.4d)
 - **Fractal**: segments split as curves (de Casteljau), so a circle grows as curves; a straight
   segment's new anchor is a corner. Each subpath grows round its own centre (tlprocedural used the
   whole shape's), an open path grows its segments only (tlprocedural grew the outline of its
-  stroke), and a closed subpath with no area is left alone, as there. The anchors are never
+  stroke), and a closed subpath with no area is left alone, as there (no area counting its curves: the outside is read from the curve's own winding, handles included, so curves round anchors in a line still grow; a segment too short to have a direction pushes along the radial direction, not tlprocedural's fixed (0, 1)). The anchors are never
   thinned (tlprocedural thinned the source to 4096 / 2^steps points and capped each step at 4096):
   a row past the geometry cap is refused with a note instead. **Not ported:** repulsion (an
   iterative point-repulsion pass), intersection clean-up (a polygon-clipping self-union),

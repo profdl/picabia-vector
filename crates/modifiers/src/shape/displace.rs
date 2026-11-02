@@ -171,15 +171,18 @@ fn local_axis(p: &Displace) -> Option<(f64, f64)> {
 /// The direction a wave runs across, in document space (it moves anchors across it); `None` when
 /// it runs along the outline (direction normal) or `p` isn't a wave. tlprocedural's `axis`:
 /// horizontal (its default, our own and `y`) runs across the width and moves in y, vertical (`x`)
-/// down the height moving in x; an angle runs across it, 90° being `y`.
+/// along the height moving in x; an angle runs across it, 0° being `x` and 90° `y`.
 pub(super) fn wave_along(p: &Displace, frame: Frame) -> Option<Vec2> {
     if p.mode != DisplaceMode::Wave {
         return None;
     }
     let (x, y) = match p.direction {
         DisplaceDirection::Normal => return None,
+        // One turning family: the wave runs a quarter turn back from the way it moves, so angle 0
+        // is `x` and 90° is `y` exactly. `y` is tlprocedural's horizontal axis; `x` runs up the
+        // height (tlprocedural's vertical axis ran down it: the same wave, mirrored top to bottom).
         DisplaceDirection::Own | DisplaceDirection::Y => (1.0, 0.0),
-        DisplaceDirection::X => (0.0, 1.0),
+        DisplaceDirection::X => (0.0, -1.0),
         DisplaceDirection::Angle => {
             let (s, c) = sin_cos_deg(p.angle);
             (s, -c)
@@ -273,7 +276,7 @@ impl Field {
                     Aim::Normal => Some(normals.get(i).copied().unwrap_or(Vec2::ZERO)),
                     Aim::Along(v) => Some(v),
                 };
-                let t = along.as_ref().and_then(|t| t.get(i).copied());
+                let t = along.as_ref().and_then(|t| t.get(i).copied()).map(|t| (t, sp.closed));
                 let d = self.offset(a.p, dir, t);
                 Anchor { p: a.p + d, h_in: a.h_in + d, h_out: a.h_out + d, kind: a.kind }
             })
@@ -282,8 +285,9 @@ impl Field {
     }
 
     /// How far the anchor at `p` moves: along `dir` when given (else the pattern's own way);
-    /// `outline`: its fraction of its subpath's outline (a wave along it).
-    fn offset(&self, p: Point, dir: Option<Vec2>, outline: Option<f64>) -> Vec2 {
+    /// `outline`: its fraction of its subpath's outline (a wave along it), and whether the subpath
+    /// is closed.
+    fn offset(&self, p: Point, dir: Option<Vec2>, outline: Option<(f64, bool)>) -> Vec2 {
         match &self.how {
             How::Spatial { scale, octaves, perm } => {
                 let (x, y) = (p.x * scale, p.y * scale);
@@ -320,9 +324,12 @@ impl Field {
                 }
             }
             How::Wave { form, cycles, turns, across } => {
-                let t = match (across, outline) {
-                    (Across::Outline, Some(t)) => t,
-                    (Across::Span { along, span: Some((lo, len)) }, _) => (along.dot(p.to_vec2()) - lo) / len,
+                let (t, cycles) = match (across, outline) {
+                    // Round a closed outline: a whole number of cycles, so the wave meets itself
+                    // where the outline starts (no seam).
+                    (Across::Outline, Some((t, true))) => (t, whole_cycles(*cycles)),
+                    (Across::Outline, Some((t, false))) => (t, *cycles),
+                    (Across::Span { along, span: Some((lo, len)) }, _) => ((along.dot(p.to_vec2()) - lo) / len, *cycles),
                     _ => return Vec2::ZERO,
                 };
                 let w = waveform(*form, t * cycles + turns);
@@ -352,6 +359,11 @@ impl Field {
             How::Fractal(_) => Vec2::ZERO,
         }
     }
+}
+
+/// `cycles` rounded to the nearest whole number, at least 1 (a wave round a closed outline).
+pub(super) fn whole_cycles(cycles: f64) -> f64 {
+    if cycles.is_finite() { cycles.round().max(1.0) } else { cycles }
 }
 
 /// A wave's value at `x` cycles, -1..=1 (tlprocedural's `computeWave`). The square wave reads the
@@ -411,7 +423,9 @@ fn lcg_unit(state: &Cell<u64>) -> f64 {
 pub(super) fn normals(sp: &SubPath) -> Vec<Vec2> {
     let a = &sp.anchors;
     let n = a.len();
-    let sign = if signed_area(sp) >= 0.0 { 1.0 } else { -1.0 };
+    // The winding of the curve itself (its exact area, handles included): a curved shape with few
+    // anchors (a two-anchor lens) has no anchor-polygon area to read it from.
+    let sign = if bezier_area(a, sp.closed) >= 0.0 { 1.0 } else { -1.0 };
     (0..n)
         .map(|i| {
             let Some(here) = a.get(i) else { return Vec2::ZERO };
@@ -445,10 +459,21 @@ pub(super) fn normals(sp: &SubPath) -> Vec<Vec2> {
         .collect()
 }
 
-/// Twice the signed area of `sp`'s anchor polygon (closed by its first anchor).
-pub(super) fn signed_area(sp: &SubPath) -> f64 {
-    let a = &sp.anchors;
-    a.iter().zip(a.iter().cycle().skip(1)).map(|(p, q)| p.p.x * q.p.y - q.p.x * p.p.y).sum()
+/// The signed area of the curve through `a` (closed back to its first anchor, by its own segment
+/// when `closed`, else by a line), positive for the anchor polygon's positive winding: kurbo's
+/// exact cubic area, plain arithmetic.
+pub(super) fn bezier_area(a: &[Anchor], closed: bool) -> f64 {
+    use vectorcraft_geom::kurbo::{CubicBez, Line, ParamCurveArea};
+    let n = a.len();
+    let segments = if closed { n } else { n.saturating_sub(1) };
+    let mut area: f64 = (0..segments)
+        .filter_map(|i| Some((a.get(i)?, a.get((i + 1) % n)?)))
+        .map(|(p, q)| CubicBez::new(p.p, p.h_out, q.h_in, q.p).signed_area())
+        .sum();
+    if !closed && let (Some(f), Some(l)) = (a.first(), a.last()) {
+        area += Line::new(l.p, f.p).signed_area();
+    }
+    area
 }
 
 /// Each anchor's place along `sp`'s outline (the anchors' chords, a closed one's closing chord

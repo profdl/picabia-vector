@@ -120,12 +120,17 @@ fn generation(a: &[Anchor], closed: bool, strength: f64, (g, aim): (&Grow, Aim),
         cy += (p.p.y + q.p.y) * cross;
         area += cross;
     }
-    let outward_sign = if area >= 0.0 { 1.0 } else { -1.0 };
+    // The winding is the curve's own (handles included), so a curved shape whose anchors alone
+    // enclose nothing still knows its outside; the anchor polygon's when the curve has no area.
+    let curve = super::displace::bezier_area(a, closed);
+    let winding = if curve.abs() >= 0.0001 { curve } else { area };
+    let outward_sign = if winding >= 0.0 { 1.0 } else { -1.0 };
     let centre = if area.abs() < 0.0001 {
-        if closed {
+        // A closed subpath with no area at all is left alone (tlprocedural's null).
+        if closed && curve.abs() < 0.0001 {
             return None;
         }
-        // An open path with no area: the mean of its anchors.
+        // An open path, or curves round anchors in a line: the mean of its anchors.
         let s = a.iter().fold(Vec2::ZERO, |s, x| s + x.p.to_vec2());
         (s / len as f64).to_point()
     } else {
@@ -204,7 +209,9 @@ fn direction(s: &Split, g: &Grow, aim: Aim) -> Vec2 {
     let radial = unit(s.m - s.centre, 0.001).unwrap_or(Vec2::new(0.0, 1.0));
     // tlprocedural's winding normal: the left normal of a positively wound polygon, which points
     // in; its own blend first turns it into the radial half-plane.
-    let wound = if s.elen > 0.001 { Vec2::new(-s.e.y / s.elen, s.e.x / s.elen) * s.outward_sign } else { Vec2::new(0.0, 1.0) };
+    // A segment too short to have a direction: the radial direction, inward (tlprocedural took a
+    // fixed (0, 1), which no reflection or turn of the copy followed).
+    let wound = if s.elen > 0.001 { Vec2::new(-s.e.y / s.elen, s.e.x / s.elen) * s.outward_sign } else { -radial };
     let own = || {
         let n = if s.elen > 0.001 && wound.dot(radial) < 0.0 { -wound } else { wound };
         let d = radial * (1.0 - g.normal_bias) + n * g.normal_bias;
