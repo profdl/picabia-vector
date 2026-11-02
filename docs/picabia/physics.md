@@ -1,7 +1,8 @@
 # Physics
 
 **Status:** 2026-11-02, phase 1 (PIC30.1, PIC30.2): drop-and-settle; phase 2 (PIC31, soft bodies
-and live simulation) planned, not started (see [Phase 2](#phase-2-soft-bodies-and-live-simulation-planned)). Ported from the owner's
+and live simulation) planned; its gate (PIC31.0) failed on cross-platform determinism, see
+[PIC31.0 result](#pic310-result-no-go-2026-11-02), so nothing past it is built (see [Phase 2](#phase-2-soft-bodies-and-live-simulation-planned)). Ported from the owner's
 tlprocedural (its Physics modifier: `PhysicsSettings` in `src/types/modifiers.ts`, defaults in
 `modifierConfig.ts`, ranges in `modifierSchemas.ts`, the world in
 `src/store/modifiers/core/PhysicsEngine.ts` and `PhysicsGeometryConverter.ts`).
@@ -169,6 +170,64 @@ natively and in wasm32 with `enhanced-determinism`, no panic on junk input (dege
 self-crossing outlines), and a step cost that allows live playback. If any fails, the plan is
 revisited before more is built.
 
+### PIC31.0 result: no-go (2026-11-02)
+
+The spike failed condition 1, so nothing past PIC31.0 was built. The spike's code is in
+`crates/physics/src/spike_scene.rs` (plain rapier, no Picabia types) and `tests_soft_spike.rs`.
+
+| Condition | Result | Numbers |
+|---|---|---|
+| 1. Same bits natively and in wasm32 | **Fails** | A 20-body scene (8 boxes; 3 cloth strips: draped, pinned at both ends, attached to a box; 3 jelly cell bodies; 2 polygon rings) hashed with phase 1's FNV over every rigid pose and particle position: the same at steps 0, 1, 2, 5, 10 and 30, then different (240 steps: native `4c5b3c80604096f9`, wasm32 under Node `4c67464e3567face`). Same run twice natively: same bits |
+| 2. No panic on junk outlines | Passes with our validation | Raw rapier panics on `polygon` with fewer than 3 points (index out of bounds) and on a NaN point (`polyline` and `polygon`: "loosening margin must be non-negative"), and `volumetric` has no cap on the cell count (a 1 µm cell in a 1 m outline allocates until the process is killed). Validated first (finite, inside ±10 km, repeats dropped, ≥ 2 or ≥ 3 points, extent ≥ 1 µm, closed: some area and no crossing edges; cell size clamped to 0.5–50% of the extent): 13 junk outlines × `polyline`, `polygon`, `volumetric` at 6 cell sizes, built, inserted and stepped 30 times: no panic |
+| 3. Step cost: 20 soft bodies of ≤ 400 particles and 200 rigid at 60 steps a second natively | Fails with rapier's defaults; jelly passes natively when tuned, cloth only without self-contact | Measured on the 4-core Linux container, idle, release build; 20 jelly bodies of 406 particles each (`volumetric`, shape matching, volume preservation) and 200 boxes, 300 steps. Defaults: 28.1 ms a step (35.6 steps a second), worst 77 ms. Extra PGS iterations 0 (rapier's default 3): 19.0 ms. Also extra substeps 0: 17.3 ms (57.7 steps a second), worst 46 ms. Rigid bodies alone: 0.16 ms. wasm32 under Node (same scene, 240 steps): 40.9 ms a step with defaults, 24.6 ms with PGS 0 (40.6 steps a second; the target is at least 30) |
+| 4. Snapshots for scrubbing | Passes | Every set (bodies, colliders, islands, broad and narrow phase, joints, soft bodies, CCD) is `Clone`. One snapshot of the budget scene (a clone of every set) takes 5.3 ms, about one step's cost: a snapshot a second adds under 1% to playback. Restoring a clone and stepping on gives the same bits as never stopping, with the same pipeline or a fresh one |
+
+**How the wasm check runs.** A scratch crate outside the workspace, pinned to the workspace's
+versions of rapier2d, parry2d, nalgebra, simba, glam/glamx, libm and wide, `include!`s
+`spike_scene.rs`, exports `fingerprint(steps)` from a `cdylib`, and is built with `cargo build
+--release --target wasm32-unknown-unknown`. Node instantiates the `.wasm` with no imports and prints
+the hash. The same crate built natively gives the workspace test's hash.
+
+**Why condition 1 fails.** rapier2d 0.36.1 computes each soft body's cluster frame (and shape
+matching, and corotational cells) with `extract_rotation`
+(`src/dynamics/soft_body/soft_body_shape_matching.rs`, line 23), which calls `f32::atan2` from std.
+`enhanced-determinism` routes simba's and glam's maths through libm, but this call is on the
+primitive: natively it is the platform's C library (glibc here; macOS and Windows have their own),
+in wasm32 the Rust libm port. They differ in the last bit now and then, and the simulation
+amplifies it. Every soft body takes this path every step, so no setting avoids it, and validating
+input can't either. Checked: a scratch copy of rapier with only that call changed to simba's libm
+`atan2` gives the same bits natively and in wasm32 at every checkpoint (`4c67464e3567face` at 240
+steps). That copy was a diagnostic only and is not in the repo. rapier2d 0.36.1 is the newest
+release (crates.io, 2026-11-02). Rigid bodies alone still match (phase 1's check).
+
+The same cause also breaks native-to-native equality between platforms (glibc, Apple's libm and
+Microsoft's CRT differ), which phase 1 promises.
+
+**Options (the owner's call):**
+
+1. **Fix upstream.** Report it to dimforge/rapier (a one-line change: `extract_rotation` through
+   simba's `RealField::atan2`, as the rest of the crate does under `enhanced-determinism`; check the
+   other std calls too: `acos` in 3D bending, `powf` in plasticity and the corotational cell size,
+   `exp` in deformation damping and tear smoothing). Wait for the release, then run PIC31.0 again.
+   Cleanest; the timing is out of our hands.
+2. **Patch rapier in Picabia.** `[patch.crates-io]` pointing at a copy of rapier2d 0.36.1 with the
+   fix (a vendored crate of about 80,000 lines of Rust, plus a seam in the workspace `Cargo.toml`). Works now;
+   every rapier upgrade has to carry the patch until upstream takes it.
+3. **Give up cross-platform bits for soft bodies.** Same bits on one machine and build (scrubbing and
+   replay still work, they replay on the same machine), but a document may simulate differently on
+   another platform or on the web. Rigid-only scenes keep phase 1's guarantee. Cheapest; weakens a
+   promise the plan made.
+
+Recommendation: 1 and 2 together. Patch now (option 2, recorded in `SEAMS.md` as a temporary
+seam), file the upstream fix, and drop the patch when a release carries it.
+
+**Cost findings for the next attempt:** cloth is cheap without self-contact (20 strips of 400
+particles and 200 boxes: 6.9 ms a step; of 100 particles: 1.9 ms) and very expensive with it (one
+400-particle strip alone: 62 ms a step; 20 strips of 100: 68 ms). Self-collide should default to off
+for Cloth, or be limited to short strips, and the budget scene should set the soft bodies' extra
+PGS iterations and extra substeps to 0 (or tune them per preset) before PIC31.2 tunes the presets.
+The jelly scene is at the edge of the native budget even then (worst steps 2.7 frames).
+
 ### Bodies from objects
 
 - **Cloth.** The object's long axis (of its bounds, turned with it) is the strip, its short side the
@@ -266,6 +325,13 @@ least half that.
   save with an open session asks.
 - Does Apply bake every body in the session, or can it bake only selected ones and keep the rest
   running? Proposed: every body first; Apply Selected later.
+
+- Decided alone during PIC31.0 (2026-11-02), for the owner to review: (1) the gate failed, so the
+  work stopped there as the plan says; nothing from PIC31.1 on was started. (2) The spike's scenes and
+  tests stay in the repo (`spike_scene.rs`, `tests_soft_spike.rs`; the timing tests are
+  `#[ignore]`d), so the next attempt reruns them unchanged. (3) The diagnostic patched copy of rapier
+  was never committed. (4) This container's disk (about 30 GB writable) holds one workspace build,
+  not three, so builds ran one at a time with `CARGO_INCREMENTAL=0`.
 
 ### Later
 
