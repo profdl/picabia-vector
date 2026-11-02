@@ -25,8 +25,8 @@ mod home;
 mod input;
 mod outline;
 mod overlays;
-mod picabia; // PICABIA: outlines on modifier copies
 mod panes;
+mod picabia; // PICABIA: outlines on modifier copies
 mod raster;
 mod task_bar;
 mod tool_overlays;
