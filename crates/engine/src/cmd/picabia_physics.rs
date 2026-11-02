@@ -23,7 +23,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Physics Settings",
             [],
             None,
-            "{ids?|id?: the objects (default: the selection), props?: {enabled?, bodyType? (dynamic|static|kinematic), colliderType? (auto|precise|fast|box), gravityScale? (0-2), restitution? (0-1), friction? (0-1), mass? (kg added to the body's own, 0-10000), angularDamping? (0-20), linearDamping? (0-20), sensor?}} give the objects physics settings (missing ones: the defaults, dynamic) or change them, as one undo step; out-of-range values are clamped and wrong ones ignored, with warnings → {ids, settings: the first object's, warnings}",
+            "{ids?|id?: the objects (default: the selection), props?: {enabled?, bodyType? (dynamic|static|kinematic|soft), colliderType? (auto|precise|fast|box), gravityScale? (0-2), restitution? (0-1), friction? (0-1), mass? (kg added to the body's own, 0-10000), angularDamping? (0-20), linearDamping? (0-20), sensor?, soft?: {preset? (cloth|jelly|rubber), stiffness? (0-1), bend? (0-1), shapeKeep? (0-1), damping? (0-1), resolution? (particle spacing, 2-100 pt), selfCollide?, pins?: [{u, v: where on the object, fractions of its bounds, attachTo?: id}]; a field set to null follows the preset again}}} give the objects physics settings (missing ones: the defaults, dynamic) or change them, as one undo step; out-of-range values are clamped and wrong ones ignored, with warnings → {ids, settings: the first object's, warnings}",
             has_selection,
             set
         ),

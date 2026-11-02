@@ -94,7 +94,7 @@ fn a_static_body_stays_and_holds_what_falls_on_it() {
 fn kinematic_and_unknown_bodies_stay_put() {
     let r = Rect::new(150.0, 20.0, 210.0, 60.0);
     let n = node(1, shapes::rectangle(r));
-    for t in [BodyType::Kinematic, BodyType::Other("soft".into())] {
+    for t in [BodyType::Kinematic, BodyType::Other("inflatable".into())] {
         let out = simulate(&[body(&n, Settings { body_type: t, ..Settings::default() })], &walls());
         assert_eq!(out.outcomes[0].moved, None);
     }
@@ -206,10 +206,10 @@ fn an_open_path_and_a_group_fall_as_one_body() {
 #[test]
 fn junk_settings_clamp_with_warnings_and_keep_unknown_fields() {
     let (s, w) = crate::parse(
-        r#"{"bodyType":"soft","colliderType":"weird","gravityScale":9,"restitution":-1,"friction":"x","mass":1e9,"angularDamping":null,"linearDamping":25,"sensor":3,"future":{"a":1}}"#,
+        r#"{"bodyType":"inflatable","colliderType":"weird","gravityScale":9,"restitution":-1,"friction":"x","mass":1e9,"angularDamping":null,"linearDamping":25,"sensor":3,"future":{"a":1}}"#,
     )
     .unwrap();
-    assert_eq!(s.body_type, BodyType::Other("soft".into()));
+    assert_eq!(s.body_type, BodyType::Other("inflatable".into()));
     assert_eq!(s.collider, ColliderType::Auto);
     assert_eq!((s.gravity_scale, s.restitution, s.friction, s.mass, s.linear_damping), (2.0, 0.0, 0.4, 10_000.0, 20.0));
     assert!(!s.sensor);

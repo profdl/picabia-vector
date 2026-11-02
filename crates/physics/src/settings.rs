@@ -7,6 +7,7 @@
 use serde_json::{Map, Value, json};
 use vectorcraft_doc::{ForeignAttribute, Node};
 
+use crate::soft::Soft;
 use crate::{MAX_SOURCE_BYTES, PHYSICS_KEY, PHYSICS_NS, PHYSICS_PREFIX, SETTINGS_VERSION};
 
 /// How a body moves.
@@ -18,8 +19,10 @@ pub enum BodyType {
     Static,
     /// Moved only by its owner (phase 1 has no clock, so it stays put like a static body).
     Kinematic,
-    /// A kind this version doesn't know (a newer Picabia's, e.g. a future `"soft"`): kept on a
-    /// round trip and simulated as a static body.
+    /// A soft body (phase 2): cloth, jelly or rubber, set by [`Settings::soft`].
+    Soft,
+    /// A kind this version doesn't know (a newer Picabia's): kept on a round trip and simulated as
+    /// a static body.
     Other(String),
 }
 
@@ -29,6 +32,7 @@ impl BodyType {
             BodyType::Dynamic => "dynamic",
             BodyType::Static => "static",
             BodyType::Kinematic => "kinematic",
+            BodyType::Soft => "soft",
             BodyType::Other(s) => s,
         }
     }
@@ -81,6 +85,9 @@ pub struct Settings {
     pub linear_damping: f64,
     /// Detects overlaps but takes no contact forces: passes through everything.
     pub sensor: bool,
+    /// The soft-body settings (read when `body_type` is [`BodyType::Soft`]; kept otherwise, so
+    /// switching to rigid and back keeps the tuning).
+    pub soft: Option<Soft>,
     /// Fields this version doesn't know, kept on a round trip.
     pub extra: Map<String, Value>,
 }
@@ -99,6 +106,7 @@ impl Default for Settings {
             angular_damping: 0.02,
             linear_damping: 0.0,
             sensor: false,
+            soft: None,
             extra: Map::new(),
         }
     }
@@ -115,8 +123,20 @@ pub const RANGES: [(&str, f64, f64); 6] = [
 ];
 
 /// The settings' keys, as JSON and the commands name them.
-pub const KEYS: [&str; 11] =
-    ["enabled", "bodyType", "colliderType", "gravityScale", "restitution", "friction", "mass", "angularDamping", "linearDamping", "sensor", "v"];
+pub const KEYS: [&str; 12] = [
+    "enabled",
+    "bodyType",
+    "colliderType",
+    "gravityScale",
+    "restitution",
+    "friction",
+    "mass",
+    "angularDamping",
+    "linearDamping",
+    "sensor",
+    "soft",
+    "v",
+];
 
 impl Settings {
     /// The settings as stored (camelCase, every field, unknown ones kept).
@@ -137,6 +157,9 @@ impl Settings {
         });
         if let Value::Object(k) = known {
             o.extend(k);
+        }
+        if let Some(soft) = &self.soft {
+            o.insert("soft".into(), soft.to_value());
         }
         Value::Object(o)
     }
@@ -181,11 +204,17 @@ impl Settings {
                     Some("dynamic") => self.body_type = BodyType::Dynamic,
                     Some("static") => self.body_type = BodyType::Static,
                     Some("kinematic") => self.body_type = BodyType::Kinematic,
+                    Some("soft") => self.body_type = BodyType::Soft,
                     Some(other) if !other.is_empty() && other.len() <= 64 => {
                         w.push(format!("body type `{other}` is not simulated by this version: the object stays put (a static body)"));
                         self.body_type = BodyType::Other(other.to_string());
                     }
-                    _ => w.push(format!("`bodyType` must be dynamic, static or kinematic, not {v}: ignored")),
+                    _ => w.push(format!("`bodyType` must be dynamic, static, kinematic or soft, not {v}: ignored")),
+                },
+                "soft" => match v {
+                    Value::Null => self.soft = None,
+                    Value::Object(o) => w.extend(self.soft.get_or_insert_with(Soft::default).apply(o, keep_unknown)),
+                    _ => w.push(format!("`soft` must be an object, not {v}: ignored")),
                 },
                 "colliderType" => match v.as_str() {
                     Some("auto") => self.collider = ColliderType::Auto,
@@ -218,6 +247,11 @@ impl Settings {
             }
         }
         w
+    }
+
+    /// The soft settings in effect: `Some` for a soft body (the jelly preset when it has none).
+    pub fn soft_body(&self) -> Option<Soft> {
+        (self.body_type == BodyType::Soft).then(|| self.soft.clone().unwrap_or_default())
     }
 
     fn number_mut(&mut self, key: &str) -> &mut f64 {

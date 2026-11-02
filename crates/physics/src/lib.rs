@@ -1,4 +1,4 @@
-//! Picabia physics, phase 1: drop-and-settle.
+//! Picabia physics: phase 1, drop-and-settle; phase 2 (PIC31), soft bodies and live simulation.
 //!
 //! An object's physics settings live in its Attributes as a foreign attribute ([`PHYSICS_NS`],
 //! local name [`PHYSICS_KEY`], `"picabia.physics"`) holding JSON, as modifier stacks do, so save
@@ -18,6 +18,9 @@
 //! - [`sim`]: [`simulate`] a list of bodies; each dynamic body's rigid motion comes back as a
 //!   document-space [`vectorcraft_geom::Affine`] for the engine to apply as the transform
 //!   commands do.
+//! - Phase 2: [`soft`] (the `soft` settings, presets, pins), [`mesh`] (an object to a soft body's
+//!   rest mesh), [`pose`] (a body's state back onto its art), [`world`] (rigid and soft bodies in
+//!   one live world) and [`session`] (the clock, snapshots and event log).
 //!
 //! # Units
 //! Documents are in points; the world is in metres at [`PT_PER_M`] points per metre (an object
@@ -26,13 +29,19 @@
 
 #![forbid(unsafe_code)]
 
+pub mod mesh;
+pub mod pose;
+pub mod session;
 pub mod settings;
 pub mod shape;
 pub mod sim;
+pub mod soft;
+pub mod world;
 
 pub use settings::{BodyType, ColliderType, Settings, has_physics, node_settings, node_source, parse, set_node_settings};
 pub use shape::{BodyShape, Piece, body_shape};
 pub use sim::{BodyInput, BodyOutcome, SimParams, SimResult, simulate};
+pub use soft::{Pin, Preset, Soft, SoftFields};
 
 /// The attribute's local name.
 pub const PHYSICS_KEY: &str = "picabia.physics";
@@ -57,5 +66,7 @@ pub const WALL_FRICTION: f32 = 0.5;
 mod tests;
 #[cfg(test)]
 mod tests_hardening;
+#[cfg(test)]
+mod tests_soft;
 #[cfg(test)]
 mod tests_soft_spike;

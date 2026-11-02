@@ -278,7 +278,8 @@ fn add_body(
     let builder = match &s.body_type {
         BodyType::Dynamic => RigidBodyBuilder::dynamic(),
         BodyType::Kinematic => RigidBodyBuilder::kinematic_position_based(),
-        BodyType::Static | BodyType::Other(_) => RigidBodyBuilder::fixed(),
+        // Phase 1's drop-and-settle has no soft bodies: they stay put (the live world moves them).
+        BodyType::Static | BodyType::Soft | BodyType::Other(_) => RigidBodyBuilder::fixed(),
     };
     let mut builder = builder.translation(v(center, origin)).gravity_scale(fin(s.gravity_scale)).can_sleep(true);
     if dynamic {

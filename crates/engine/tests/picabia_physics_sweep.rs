@@ -39,6 +39,8 @@ fn physics_commands_with_junk_params_on_objects_with_settings() {
             cases.push(json!({}));
             cases.push(json!({"steps": 20000, "walls": false, "gravityX": -100000, "gravityY": 100000}));
             cases.push(json!({"props": {"bodyType": "soft", "colliderType": 7, "mass": -1, "sensor": true}}));
+            cases.push(json!({"props": {"bodyType": "soft", "soft": {"preset": "cloth", "stiffness": "x", "resolution": 1e300, "pins": [{"u": 1e300, "v": -1, "attachTo": 1}, 3]}}}));
+            cases.push(json!({"props": {"soft": [1], "bodyType": "soft"}}));
             for p in &cases {
                 calls += 1;
                 let mut s = with_physics(fx);

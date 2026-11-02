@@ -313,6 +313,25 @@ reaches objects that didn't override it. Fields (starting points, tuned in PIC31
 | `selfCollide` | Self-collide | on | off | off | Folds rest on themselves |
 | `pins` | — | none | none | none | Pinned points (below) |
 
+**As built (PIC31.1):** the fields are 0–1 amounts except `resolution` (2–100 pt) and
+`selfCollide`; values per preset:
+
+| Key | Cloth | Jelly | Rubber | rapier mapping |
+|---|---|---|---|---|
+| `stiffness` | 0.85 | 0.35 | 0.85 | edge and area springs, 1–60 Hz (squared: fine at the low end) |
+| `bend` | 0.1 | — | — | bending edges, 0.2–20 Hz |
+| `shapeKeep` | — | 0.4 | 0.85 | shape matching, off at 0, else 0.5–20 Hz |
+| `damping` | 0.5 | 0.15 | 0.45 | damping ratio 0.05–1 of every spring |
+| `resolution` | 6 pt | 12 pt | 12 pt | particle spacing |
+| `selfCollide` | off | off | off | self-contact (PIC31.0: costly, so off by default for cloth too) |
+
+`null` for a field goes back to the preset's value; a change of `preset` keeps the overrides; an
+unknown preset (a later version's) is kept and simulated as jelly. Pins are stored as `u`, `v`:
+fractions of the object's geometric bounds (0,0 top left, 1,1 bottom right; ±4 at most), so they
+follow the object when it moves, scales or is edited, plus `attachTo` (an object id); at most 256.
+Soft settings are kept when the body type changes to rigid and back. Phase 1's Simulate (instant
+drop and settle) leaves soft bodies in place; the live session (PIC31.4) moves them.
+
 The phase 1 fields still apply (gravity scale, bounce, friction, extra mass, sensor). Pins are stored
 as points in the object's own space plus an optional object id to attach to, not as anchor indices,
 so they survive editing the path; at build time each pin takes the nearest particle. Pinning: Direct
@@ -332,7 +351,7 @@ do goes through these commands.
 | Id | What |
 |---|---|
 | PIC31.0 | Spike: soft bodies in the phase 1 world. Determinism hash native vs wasm32, junk sweep of the builders, step cost for 20 soft and 200 rigid bodies, snapshot cost. Go/no-go |
-| PIC31.1 | Soft settings: `bodyType: "soft"`, presets and overrides, pins; lenient parse, round trip |
+| PIC31.1 | Soft settings: `bodyType: "soft"`, presets and overrides, pins; lenient parse, round trip. **Done** (2026-11-02): `soft.rs`; interfaces stubbed for PIC31.2–31.4 (`mesh.rs`, `pose.rs`, `world.rs`, `session.rs`) |
 | PIC31.2 | Bodies from objects: cloth strip and jelly/rubber cells, caps, junk; tune the presets |
 | PIC31.3 | Pose to art: rigid, cloth and jelly warps; Apply as one undo step |
 | PIC31.4 | Session and clock: world, steps, snapshots, event log, `physics.session/play/pause/reset/seek/apply/cancel`, rest detection |
