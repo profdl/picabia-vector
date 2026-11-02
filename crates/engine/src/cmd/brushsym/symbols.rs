@@ -274,6 +274,14 @@ pub(super) fn symbol_options(s: &mut Session, p: &Value) -> Result<Value> {
             if d.unknown.get(CURRENT_SYMBOL).and_then(Value::as_str) == Some(name.as_str()) {
                 d.unknown.insert(CURRENT_SYMBOL.into(), json!(n));
             }
+            // Symbol editing mode follows the new name, and so does its layer.
+            if let Some(e) = d.symbol_edit.as_mut().filter(|e| e.symbol == name) {
+                e.symbol = n.clone();
+                let layer = e.layer;
+                if let Some(l) = d.node_mut(layer) {
+                    l.name = Some(n.clone());
+                }
+            }
         }
         if let Some(r) = reg {
             d.set_symbol_registration(&final_name, r);
@@ -398,34 +406,35 @@ pub(super) fn symbol_break_link(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "ids": ids_json(&out) }))
 }
 
-pub(super) fn symbol_edit(s: &mut Session, p: &Value) -> Result<Value> {
-    let ids = selected_instances(s, p)?;
-    let first = *ids.first().ok_or_else(|| EngineError::Other("select a symbol instance".into()))?;
-    let name = match &s.doc()?.doc.node(first).map(|n| n.kind.clone()) {
-        Some(NodeKind::SymbolInstance { symbol, .. }) => symbol.clone(),
-        _ => return Err(EngineError::Other("select a symbol instance".into())),
-    };
-    // The symbol's own art: one instance's appearance changes would become every instance's.
-    let out = s.edit("Edit Symbol", |d, sel| {
-        let out = break_links(d, &[first], false)?;
-        sel.set(out.iter().copied());
-        Ok(out)
-    })?;
-    Ok(json!({ "name": name, "ids": ids_json(&out) }))
-}
-
 pub(super) fn symbol_update(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "symbol.update";
     let name = name_param(p, C)?.to_string();
     if !s.doc()?.doc.symbols.iter().any(|x| x.name == name) {
         return Err(bad(C, format!("no symbol named `{name}`")));
     }
+    // Redefining the symbol being edited leaves symbol editing mode in the same step.
+    let session = s.doc()?.doc.symbol_edit.clone().filter(|e| e.symbol == name);
+    if session.is_some() {
+        crate::cmd::settle_interaction(s)?;
+        s.end_text_edit();
+    }
     let ids = roots(s, p)?;
+    // The art on the editing layer can't redefine it: the symbol would hold an instance of itself.
+    if let Some(se) = &session {
+        let d = &s.doc()?.doc;
+        if ids.iter().any(|i| d.ancestry(*i).is_some_and(|a| a.contains(&se.layer))) {
+            return Err(EngineError::Other("a symbol can't hold an instance of itself".into()));
+        }
+    }
     let mut art = selection_art(s, p)?.ok_or_else(|| EngineError::Other("nothing selected".into()))?;
     crate::cmd::threads::keep_shown_text(&s.doc()?.doc, &mut art);
     let (art, size, c) = normalize(art)?;
     let old = natural_size(&s.doc()?.doc, &name);
+    let editing = session.is_some();
     let id = s.edit("Redefine Symbol", |d, sel| {
+        if editing {
+            crate::cmd::symboledit::finish(d, sel);
+        }
         let art = d.reid(&art);
         if let Some(sym) = d.symbols.iter_mut().find(|x| x.name == name) {
             sym.art = Arc::new(art);
@@ -445,6 +454,9 @@ pub(super) fn symbol_update(s: &mut Session, p: &Value) -> Result<Value> {
         sel.set([id]);
         Ok(id)
     })?;
+    if let Some(se) = &session {
+        crate::cmd::symboledit::leave_editing(s, se)?;
+    }
     Ok(json!({ "name": name, "id": id.0 }))
 }
 
@@ -476,8 +488,18 @@ pub(super) fn symbol_delete(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, format!("no symbol named `{name}`")));
     }
     let expand = switch_or(p, "expandInstances", true, C)?;
+    // Deleting the symbol being edited leaves symbol editing mode in the same step.
+    let session = s.doc()?.doc.symbol_edit.clone().filter(|e| names.contains(&e.symbol));
+    let editing = session.is_some();
+    if editing {
+        crate::cmd::settle_interaction(s)?;
+        s.end_text_edit();
+    }
     let label = if names.len() == 1 { "Delete Symbol" } else { "Delete Symbols" };
-    s.edit(label, |d, _| {
+    s.edit(label, |d, sel| {
+        if editing {
+            crate::cmd::symboledit::finish(d, sel);
+        }
         // Every instance goes before any definition, whatever the order of `names`: expanding an
         // instance of one symbol can bring out instances of another being deleted (nested in its
         // art), which expand in turn while their definitions are still there. Each round expands
@@ -519,6 +541,9 @@ pub(super) fn symbol_delete(s: &mut Session, p: &Value) -> Result<Value> {
         }
         Ok(())
     })?;
+    if let Some(se) = &session {
+        crate::cmd::symboledit::leave_editing(s, se)?;
+    }
     ok()
 }
 
@@ -558,13 +583,18 @@ pub(super) fn symbol_replace(s: &mut Session, p: &Value) -> Result<Value> {
     s.edit("Replace Symbol", |d, _| {
         let new = natural_size(d, &name);
         for id in &ids {
-            let old = match d.node(*id).map(|n| &n.kind) {
-                Some(NodeKind::SymbolInstance { symbol, .. }) => natural_size(d, symbol),
+            let (old, other) = match d.node(*id).map(|n| &n.kind) {
+                Some(NodeKind::SymbolInstance { symbol, .. }) => (natural_size(d, symbol), *symbol != name),
                 _ => continue,
             };
-            if let Some(NodeKind::SymbolInstance { symbol, xf }) = d.node_mut(*id).map(|n| &mut n.kind) {
+            let Some(n) = d.node_mut(*id) else { continue };
+            if let NodeKind::SymbolInstance { symbol, xf } = &mut n.kind {
                 *symbol = name.clone();
                 *xf *= Affine::scale_non_uniform(new.0 / old.0, new.1 / old.1);
+            }
+            // An override's path names an object of the old symbol's art.
+            if other && !n.extras().symbol_overrides.is_empty() {
+                n.extras_mut().symbol_overrides.clear();
             }
         }
         fit_overrides(d, &ids);
