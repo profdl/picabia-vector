@@ -156,6 +156,12 @@ impl Clamp<'_> {
     }
 }
 
+/// A wallpaper group's lattice basis `(a, b)` for a `w × h` cell and oblique angle `angle`
+/// (degrees): what the canvas handles place the cell's corners by ([`crate::handles`]).
+pub(crate) fn wallpaper_lattice(g: crate::model::WallpaperGroup, w: f64, h: f64, angle: f64) -> ([f64; 2], [f64; 2]) {
+    wallpaper::lattice(g, w, h, angle)
+}
+
 /// The crate's deterministic stream for `(seed, index)` (the geometry rows' random sort).
 pub(crate) fn rng_stream(seed: u32, index: usize) -> rng::Stream {
     rng::Stream::new(seed, index)

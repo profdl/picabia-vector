@@ -31,6 +31,7 @@ mod displace_tests;
 mod halftone;
 #[cfg(test)]
 mod halftone_tests;
+pub(crate) mod handle_geom;
 mod pieces;
 mod resample;
 #[cfg(test)]
