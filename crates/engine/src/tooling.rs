@@ -360,6 +360,9 @@ impl Session {
         if let Some(r) = self.plane_widget_pointer(ev, view) {
             return r;
         }
+        if let Some(r) = self.picabia_handles_pointer(ev, view) {
+            return r; // PICABIA: modifier handles take their presses before the tool
+        }
         self.leave_draw_inside(ev, view)?;
         let ev = &self.lend_selection_tool(ev);
         let acts = self.with_tool_cx(view, |t, cx| t.pointer(cx, ev));
@@ -465,6 +468,9 @@ impl Session {
             }
             return Ok(vec![]);
         }
+        if let Some(r) = self.picabia_handles_key(key) {
+            return r; // PICABIA: Escape cancels a modifier handle drag
+        }
         let acts = self.with_tool_cx(view, |t, cx| t.key(cx, key, mods));
         self.take_tool_panic()?;
         self.apply_actions(acts)
@@ -557,7 +563,7 @@ impl Session {
     }
 
     pub fn tool_busy(&self) -> bool {
-        self.tool.busy()
+        self.tool.busy() || self.picabia_handles_busy() // PICABIA: a modifier handle drag
     }
 
     /// Is the pointer button held: was the last pointer event a press or a drag, not a release or a
@@ -574,7 +580,8 @@ impl Session {
 
     /// Does the active tool take `key` ahead of the shortcuts bound to it (see `Tool::claims_key`)?
     pub fn tool_claims_key(&mut self, key: ToolKey, view: ViewInfo) -> bool {
-        self.plane_key(key).is_some() || self.with_tool_cx(view, |t, cx| t.claims_key(cx, key))
+        // PICABIA: Escape during a modifier handle drag is the handles'.
+        self.plane_key(key).is_some() || self.picabia_handles_claim(key) || self.with_tool_cx(view, |t, cx| t.claims_key(cx, key))
     }
 
     pub fn overlays(&mut self, view: ViewInfo) -> Vec<Overlay> {
@@ -609,6 +616,9 @@ impl Session {
     /// it is on, makes the drawing tools' a crosshair, [`Cursor::precise`]). With Cmd held, the pointer of the selection tool a
     /// press would borrow ([`Self::lend_selection_tool`]).
     pub fn cursor(&mut self, p: Point, mods: Mods, view: ViewInfo) -> Cursor {
+        if let Some(c) = self.picabia_handles_cursor(p, mods, view) {
+            return c; // PICABIA: the cursor over a modifier handle
+        }
         let lent = if mods.cmd && self.lender.is_none() { self.lent_tool(self.tool.id(), &mods) } else { None };
         let c = match lent {
             Some(id) => {
