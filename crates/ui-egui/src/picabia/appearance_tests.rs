@@ -354,3 +354,93 @@ fn the_displace_amplitude_range_follows_the_pattern() {
         assert_eq!(super::appearance::length_range(&m, "amplitude"), Some((0.0, hi)), "{mode}");
     }
 }
+
+/// The fill colours of the small squares a frame painted (the color row's strip among them).
+fn swatches(app: &mut VectorcraftApp, ctx: &egui::Context) -> Vec<egui::Color32> {
+    fn walk(s: &egui::Shape, out: &mut Vec<egui::Color32>) {
+        match s {
+            egui::Shape::Rect(r) if (r.rect.width() - 10.0).abs() < 0.5 && (r.rect.height() - 10.0).abs() < 0.5 => out.push(r.fill),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            _ => {}
+        }
+    }
+    let time = ctx.input(|i| i.time) + 0.1;
+    let mut out = ctx.run_ui(egui::RawInput { time: Some(time), ..Default::default() }, |ui| show(app, ui));
+    out.textures_delta.clear();
+    let mut v = vec![];
+    out.shapes.iter().for_each(|c| walk(&c.shape, &mut v));
+    v
+}
+
+/// PIC32.4: the Color row's fields in their groups, shown by stroke mode, ramp and order, and its
+/// strip of the first, middle and last copy's colour.
+#[test]
+fn the_colour_row_groups_its_fields_and_shows_a_strip() {
+    let (mut app, ctx, a) = arrayed();
+    app.run("paint.setFill", json!({"ids": [a], "color": "#ff0000"})).unwrap();
+    app.run("modifier.add", json!({"ids": [a], "kind": "color", "props": {"hue": 50, "chroma": 0, "lightness": 0}})).unwrap();
+    set_pstate(&ctx, &format!("pc-open-{a}-m2"), true);
+    let shown = texts(&mut app, &ctx);
+    for want in [
+        "Color",
+        "Fill",
+        "Hue",
+        "Chroma",
+        "Lightness",
+        "Stroke",
+        "Strokes",
+        "As the fill",
+        "Ramp",
+        "Ramp copies",
+        "Ramp amount",
+        "Ramp order",
+        "Copies",
+        "Jitter",
+        "Jitter hue",
+        "Seed",
+    ] {
+        assert!(shown.iter().any(|s| s == want), "{want} in {shown:?}");
+    }
+    for hidden in ["Stroke hue", "Stroke jitter hue", "Array row"] {
+        assert!(!shown.iter().any(|s| s == hidden), "{hidden} hidden in {shown:?}");
+    }
+    app.run("modifier.set", json!({"ids": [a], "index": 1, "props": {"stroke": "own", "order": "array", "progressive": false}})).unwrap();
+    let shown = texts(&mut app, &ctx);
+    for want in ["Stroke hue", "Stroke lightness", "Stroke jitter chroma", "Array row", "One array row"] {
+        assert!(shown.iter().any(|s| s == want), "{want} in {shown:?}");
+    }
+    assert!(!shown.iter().any(|s| s == "Ramp amount"), "{shown:?}");
+    // The strip: red, then half the turn, then the full 50% turn, as the canvas draws them.
+    app.run("modifier.set", json!({"ids": [a], "index": 1, "props": {"progressive": true}})).unwrap();
+    let st = app.session.active().unwrap();
+    let n = st.doc.node(vectorcraft_doc::NodeId(a)).unwrap().clone();
+    let art = vectorcraft_render::picabia::copies_art(&st.doc, &n).unwrap();
+    let drawn: Vec<egui::Color32> = [0, 2, 4]
+        .iter()
+        .map(|k| {
+            let c = &art.children().unwrap()[*k];
+            let Some(vectorcraft_doc::AppearanceItem::Fill(f)) = c.appearance.items.first() else { panic!() };
+            let vectorcraft_color::Paint::Solid { color, .. } = &f.paint else { panic!() };
+            let [r, g, b, _] = color.to_rgba8(1.0);
+            egui::Color32::from_rgb(r, g, b)
+        })
+        .collect();
+    let sw = swatches(&mut app, &ctx);
+    assert_eq!(drawn[0], egui::Color32::from_rgb(255, 0, 0));
+    for c in &drawn {
+        assert!(sw.contains(c), "{c:?} in the strip {sw:?}");
+    }
+    // Off: no strip.
+    app.run("modifier.toggle", json!({"ids": [a], "index": 1, "enabled": false})).unwrap();
+    assert!(!swatches(&mut app, &ctx).contains(&drawn[2]));
+}
+
+/// PIC32.4: the Add Modifier menu's Color group sits between Shape and Make.
+#[test]
+fn the_add_menu_has_a_colour_group_above_make() {
+    let names: Vec<&str> = super::add_menu::GROUPS.iter().map(|(g, _)| *g).collect();
+    let at = |g: &str| names.iter().position(|n| *n == g).unwrap();
+    assert!(at("Shape") < at("Color") && at("Color") < at("Make"), "{names:?}");
+    let colour = super::add_menu::GROUPS[at("Color")].1;
+    assert_eq!(colour.iter().map(|e| e.label).collect::<Vec<_>>(), ["Color", "Rainbow", "Fade", "Vary"]);
+}

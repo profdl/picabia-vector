@@ -289,7 +289,7 @@ pub(super) fn fields(kind: &str) -> &'static [(&'static str, &'static str, F)] {
             ("hue", "Hue", SHIFT),
             ("chroma", "Chroma", SHIFT),
             ("lightness", "Lightness", SHIFT),
-            ("stroke", "Stroke", F::Choice(COLOUR_STROKES)),
+            ("stroke", "Strokes", F::Choice(COLOUR_STROKES)),
             ("strokeHue", "Stroke hue", SHIFT),
             ("strokeChroma", "Stroke chroma", SHIFT),
             ("strokeLightness", "Stroke lightness", SHIFT),
@@ -396,8 +396,67 @@ fn applies(m: &Modifier, key: &str) -> bool {
             _ => true,
         },
         ModifierKind::Displace(d) => displace_applies(d, key),
+        ModifierKind::Colour(c) => colour_applies(c, key),
         _ => true,
     }
+}
+
+/// Whether a color row `c` uses field `key`: the stroke's shifts and jitter only with its own
+/// stroke, the ramp's amount and direction only with the ramp on, the array row only when the
+/// ramp runs along one.
+fn colour_applies(c: &vectorcraft_modifiers::Colour, key: &str) -> bool {
+    use vectorcraft_modifiers::{ColourOrder, ColourStroke};
+    match key {
+        "strokeHue" | "strokeChroma" | "strokeLightness" | "strokeJitterHue" | "strokeJitterChroma" | "strokeJitterLightness" => {
+            c.stroke == ColourStroke::Own
+        }
+        "amount" | "reverse" => c.progressive,
+        "array" => c.order == ColourOrder::Array,
+        _ => true,
+    }
+}
+
+/// The heading shown above field `key` of kind `kind`, where a new group of fields starts (the
+/// color row's Fill, Stroke, Ramp and Jitter).
+pub(super) fn heading(kind: &str, key: &str) -> Option<&'static str> {
+    match (kind, key) {
+        ("color", "hue") => Some("Fill"),
+        ("color", "stroke") => Some("Stroke"),
+        ("color", "progressive") => Some("Ramp"),
+        ("color", "jitterHue") => Some("Jitter"),
+        _ => None,
+    }
+}
+
+/// The colour of the first fill in `n` (a gradient's first stop), looking into groups.
+fn base_fill(n: &vectorcraft_doc::Node) -> Option<vectorcraft_color::Color> {
+    let mut found = None;
+    n.walk(&mut |m: &vectorcraft_doc::Node| {
+        if found.is_some() {
+            return;
+        }
+        found = m.appearance.items.iter().find_map(|it| match it {
+            vectorcraft_doc::AppearanceItem::Fill(f) => match &f.paint {
+                vectorcraft_color::Paint::Solid { color, .. } => Some(*color),
+                vectorcraft_color::Paint::Gradient(g) => g.gradient.stops.first().map(|s| s.color),
+                _ => None,
+            },
+            vectorcraft_doc::AppearanceItem::Stroke(_) => None,
+        });
+    });
+    found
+}
+
+/// The color row strip: the first, middle and last copy's fill colour after the colour rows up to
+/// and including the `upto`-th (counting the evaluated colour rows from 0), from `base`.
+pub(super) fn colour_strip(out: &vectorcraft_modifiers::Output, base: vectorcraft_color::Color, upto: usize) -> Option<[egui::Color32; 3]> {
+    let last = out.colours.len().checked_sub(1)?;
+    let at = |k: usize| {
+        let c = out.colour(k).iter().take(upto + 1).fold(base, |c, s| vectorcraft_color::oklch_shift::shift_color(c, s.fill));
+        let [r, g, b, _] = c.to_rgba8(1.0);
+        egui::Color32::from_rgb(r, g, b)
+    };
+    Some([at(0), at(last / 2), at(last)])
 }
 
 /// The label of kind `kind`, translated.
@@ -429,6 +488,8 @@ struct RowView {
     target_problem: Option<String>,
     /// What the first object's bound fields of this row resolved to.
     bound: Vec<vectorcraft_modifiers::BoundField>,
+    /// A color row's strip: the first, middle and last copy's fill colour.
+    strip: Option<[egui::Color32; 3]>,
 }
 
 /// What the rows show for the selection.
@@ -481,6 +542,7 @@ fn view(doc: &Document, ids: &[NodeId]) -> View {
                 _ => None,
             },
             bound: Vec::new(),
+            strip: None,
         })
         .collect();
     // Why the first object draws once (as the canvas does), then what its evaluation says.
@@ -498,6 +560,15 @@ fn view(doc: &Document, ids: &[NodeId]) -> View {
             );
             copies = out.instances.len();
             notes.extend(out.warnings.iter().map(|w| w.message.clone()));
+            // The color rows' strips, each after the colour rows above it and itself.
+            if let Some(base) = out.has_colour().then(|| base_fill(n)).flatten() {
+                let evaluated = stack.modifiers.iter().filter(|m| m.enabled).take_while(|m| !matches!(m.kind, ModifierKind::Stencil(_)));
+                for (j, m) in evaluated.filter(|m| matches!(m.kind, ModifierKind::Colour(_))).enumerate() {
+                    if let Some(r) = rows.iter_mut().find(|r| r.first.id == m.id) {
+                        r.strip = colour_strip(&out, base, j);
+                    }
+                }
+            }
             for b in out.bound {
                 if let Some(r) = rows.iter_mut().find(|r| r.first.id == b.modifier) {
                     r.bound.push(b);
@@ -670,6 +741,16 @@ fn modifier_row(app: &mut VectorcraftApp, ui: &mut Ui, doc: &Document, ids: &[No
         a => format!("{}  {a}", kind_label(&r.kind)),
     };
     text(ui, pos2(rect.left() + EYE_W + 24.0, rect.center().y), &label, true, !r.enabled);
+    // A color row's strip, left of the `⋯` (drawn in code, no asset).
+    if let Some(strip) = r.strip.filter(|_| r.enabled) {
+        let t = Tokens::get(ui.ctx());
+        for (k, c) in strip.iter().enumerate() {
+            let at = pos2(rect.right() - 34.0 - 12.0 * (3 - k) as f32, rect.center().y - 5.0);
+            let sw = Rect::from_min_size(at, vec2(10.0, 10.0));
+            ui.painter().rect_filled(sw, 1.5, *c);
+            ui.painter().rect_stroke(sw, 1.5, Stroke::new(1.0, t.input_border), egui::StrokeKind::Inside);
+        }
+    }
     let mr = Rect::from_center_size(rect.right_center() - vec2(14.0, 0.0), vec2(16.0, 16.0));
     let more = icon_hit(ui, mr, ("pc-more", i), "ellipsis", tl!("Modifier options"));
     if resp.clicked() {
@@ -762,6 +843,9 @@ fn editor(app: &mut VectorcraftApp, ui: &mut Ui, doc: &Document, ids: &[NodeId],
         }
         for (key, label, how) in list {
             let Some(v) = params.get(*key).filter(|_| applies(&r.first, key)) else { continue };
+            if let Some(h) = heading(&r.kind, key) {
+                ui.label(egui::RichText::new(tl!(h)).size(11.0).color(t.text_dim));
+            }
             let how = &field_range(&r.first, key, *how);
             ui.horizontal(|ui| {
                 let name = ui.add_sized(vec2(84.0, 22.0), egui::Label::new(egui::RichText::new(tl!(label)).size(11.5).color(t.text)).truncate());

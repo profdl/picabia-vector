@@ -264,6 +264,12 @@ Points the spec left open, settled as the implementing session judged best (PIC3
 - **The kind lands whole in PIC32.3**: the crate's addable `KINDS`, `modifier.add.color` and its
   presets, the Add Modifier entries and the panel's field list are held together by tests, so they
   arrived in one commit; PIC32.4 adds the panel's grouping, visibility rules and colour strip.
+- **Rainbow's last copy is the first's colour again**: the ramp gives the last copy the full
+  shift, and a full turn of the hue lands where it started (the spec's maths, kept as is).
+- **The panel** groups the fields under Fill, Stroke, Ramp and Jitter headings, shows the
+  stroke's own shifts and jitter only with `stroke: own`, the ramp's amount and reverse only with
+  the ramp on, and the array row only with `order: array`; the strip sits left of the row's `⋯`
+  and follows the colour rows up to and including that row, from the object's first fill (PIC32.4).
 - **Jitter draws** are SplitMix64 of `(seed << 32) ^ index × 0xD6E8FEB86659FD93`, mixed again with
   `(channel + 1) × 0x9E3779B97F4A7C15` (channels: fill hue, chroma, lightness = 0, 1, 2; stroke
   hue, chroma, lightness = 3, 4, 5).
