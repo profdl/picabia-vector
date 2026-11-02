@@ -16,36 +16,67 @@ use crate::theme::Tokens;
 use crate::widgets::{self, divider};
 use crate::{VectorcraftApp, icons};
 
-/// What the section shows for the selection: `None` when it is not shown (nothing selected, or
-/// only layers), else the first selected object's number of modifier rows.
-pub fn eligible(app: &VectorcraftApp) -> Option<usize> {
+/// The selection as a cache key: the document, its revision and the selected objects (their
+/// number and a hash of their ids), without copying the selection.
+pub(crate) fn selection_key(app: &VectorcraftApp) -> Option<(u64, u64, usize, u64)> {
+    use std::hash::{Hash, Hasher};
+    let st = app.session.active()?;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    st.selection.objects.iter().for_each(|id| id.0.hash(&mut h));
+    Some((st.uid, st.revision, st.selection.objects.len(), h.finish()))
+}
+
+/// What the selection offers: `None` when the section and the task bar button don't show (nothing
+/// selected, or only layers), else the first selected object's number of modifier rows and whether
+/// any selected object has modifier data.
+pub type Offer = Option<(usize, bool)>;
+
+/// The selection's [`Offer`], worked out once per document revision and selection (the Properties
+/// section and the task bar both ask every frame).
+pub fn offer(app: &VectorcraftApp, ctx: &egui::Context) -> Offer {
+    type Kept = ((u64, u64, usize, u64), Offer);
+    let key = selection_key(app)?;
+    let id = egui::Id::unique("picabia-modifier-offer");
+    if let Some((k, o)) = ctx.data(|d| d.get_temp::<Kept>(id))
+        && k == key
+    {
+        return o;
+    }
+    let o = compute(app);
+    ctx.data_mut(|d| d.insert_temp::<Kept>(id, (key, o)));
+    o
+}
+
+fn compute(app: &VectorcraftApp) -> Offer {
     let st = app.session.active()?;
     let mut objects = st.selection.objects.iter().filter_map(|id| st.doc.node(*id)).filter(|n| !n.is_layer());
     let first = objects.next()?;
-    Some(match vectorcraft_modifiers::node_stack(first) {
+    let rows = match vectorcraft_modifiers::node_stack(first) {
         Some(Ok(s)) => s.modifiers.len(),
         _ => 0,
-    })
+    };
+    let stacked = vectorcraft_modifiers::has_modifiers(first) || objects.any(vectorcraft_modifiers::has_modifiers);
+    Some((rows, stacked))
 }
 
-/// Whether any selected object has modifier data.
-pub fn has_stack(app: &VectorcraftApp) -> bool {
-    app.session.active().is_some_and(|st| st.selection.objects.iter().filter_map(|id| st.doc.node(*id)).any(vectorcraft_modifiers::has_modifiers))
-}
-
-/// Open the Properties panel with the Modifiers section open and scrolled into view (the canvas
-/// badge, the task bar's Show Modifiers).
+/// Show the Properties panel, leaving it be when it already shows (docked, as a flyout or
+/// floating: `panel_docking::reveal_panel` never puts it away, as `window.panel` would), with the
+/// Modifiers section open and scrolled into view on its next frame (the canvas badge, the task
+/// bar's Show Modifiers).
 pub fn reveal(app: &mut VectorcraftApp) {
     app.picabia.modifiers_collapsed = false;
-    app.picabia.reveal_modifiers = true;
-    if let Err(e) = app.run("window.panel", serde_json::json!({"panel": "properties"})) {
-        app.ui.status = e;
+    match crate::panel_docking::reveal_panel(app, "properties") {
+        Ok(_) => app.picabia.reveal_modifiers = true,
+        Err(e) => {
+            app.picabia.reveal_modifiers = false;
+            app.ui.status = e;
+        }
     }
 }
 
 /// The Modifiers section and the divider under it, for a selection that can take modifiers.
 pub fn section(app: &mut VectorcraftApp, ui: &mut Ui) {
-    let Some(count) = eligible(app) else { return };
+    let Some((count, _)) = offer(app, ui.ctx()) else { return };
     let header = header(ui, count, !app.picabia.modifiers_collapsed);
     if header.clicked() {
         app.picabia.modifiers_collapsed = !app.picabia.modifiers_collapsed;

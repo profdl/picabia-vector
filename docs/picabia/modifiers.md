@@ -37,13 +37,18 @@ places that are (PIC3.4):
 - **The canvas badge.** When one to eight selected objects have a stack, each shows a small tag
   just outside its bounding box's top-right corner (8 points out on the diagonal, clear of the
   handles): the glyph and the number of rows, tooltip "3 modifiers — click to show". It is drawn
-  in screen points (it doesn't scale with the zoom), with the selection tools only, not while
-  something is dragged. A click does what Show Modifiers does.
+  in screen points (it doesn't scale with the zoom), with the selection tools only, and only when
+  the task bar may show (not on the home screen, in Presentation Mode, while a 3D revolve is
+  edited, while the Simplify or Smooth slider shows, nor while something is dragged); it gives way
+  to a floating panel or menu over it. A click does what Show Modifiers does: it opens the
+  Properties panel (leaving it open wherever it already shows) with the section open and scrolled
+  into view.
 - **The command palette** finds each kind and preset by name ("Linear Array", "Add Circular
   Array", "Ben-Day Dots", "Screen", "Stencil", "Simulate Physics"): each kind and preset
   has a command of its own, `modifier.add.<kind>` / `modifier.add.benDay` / `modifier.add.lineFill`
   (Object › Modifiers in the palette and the shortcut editor, so a key can be given to one), which is
-  `modifier.add` with that kind filled in. "Simulate Physics" and "Make Stencil" were already
+  `modifier.add` with that kind filled in (a different `kind` or `preset` is refused; the undo step
+  is named for it, "Add Linear Array"). "Simulate Physics" and "Make Stencil" were already
   commands of their own.
 
 ## How Picabia differs on VectorCraft

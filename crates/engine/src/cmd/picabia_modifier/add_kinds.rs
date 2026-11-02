@@ -8,28 +8,36 @@
 
 use serde_json::{Map, Value, json};
 
-use super::add;
-use crate::cmd::{CommandSpec, has_selection};
+use super::add_with;
+use crate::cmd::{CommandSpec, bad, has_selection};
 use crate::{Result, Session};
 
 /// What each of them takes and returns.
-const PARAMS: &str = "{ids?|id?: the objects (default: the selection), props?: the kind's params as modifier.add takes them, index?: where in the stack (default: the end)} modifier.add with this command's kind (and screen preset), as one undo step → {modifier, added}";
+const PARAMS: &str = "{ids?|id?: the objects (default: the selection), props?: the kind's params as modifier.add takes them, index?: where in the stack (default: the end), kind?, preset?: refused unless the command's own} modifier.add with this command's kind (and screen preset), as one undo step → {modifier, added}";
 
 /// The menu path they are listed under (the palette's and the shortcut editor's group).
 const MENU: &[&str] = &["Object", "Modifiers"];
 
-/// `modifier.add` with `kind` (and `preset`) over `p`'s other params.
-fn add_as(s: &mut Session, p: &Value, kind: &str, preset: Option<&str>) -> Result<Value> {
+/// `modifier.add` with `kind` (and `preset`) over `p`'s other params, as command `cmd`, recorded
+/// as undo step `label` ("Add Linear Array"). A `kind` or `preset` in `p` other than the command's
+/// own is refused rather than overwritten.
+fn add_as(s: &mut Session, p: &Value, cmd: &str, label: &str, kind: &str, preset: Option<&str>) -> Result<Value> {
     let mut q = match p {
         Value::Object(o) => o.clone(),
         _ => Map::new(),
     };
+    for (key, want) in [("kind", Some(kind)), ("preset", preset)] {
+        match q.get(key) {
+            None | Some(Value::Null) => {}
+            Some(v) if v.as_str().is_some() && v.as_str() == want => {}
+            Some(v) => return Err(bad(cmd, format!("`{key}` is this command's own ({}); not {v}", want.unwrap_or("none")))),
+        }
+    }
     q.insert("kind".into(), json!(kind));
-    match preset {
-        Some(preset) => q.insert("preset".into(), json!(preset)),
-        None => q.remove("preset"),
-    };
-    add(s, &Value::Object(q))
+    if let Some(preset) = preset {
+        q.insert("preset".into(), json!(preset));
+    }
+    add_with(s, &Value::Object(q), cmd, label)
 }
 
 /// One spec: `id`, `label` and what it runs.
@@ -40,23 +48,27 @@ fn spec(id: &'static str, label: &'static str, run: crate::cmd::Run) -> CommandS
 /// The commands, one per kind (`modifier.add.<kind>`) and screen preset (`modifier.add.<preset>`).
 pub(super) fn specs() -> Vec<CommandSpec> {
     vec![
-        spec("modifier.add.linearArray", "Linear Array", |s, p| add_as(s, p, "linearArray", None)),
-        spec("modifier.add.circularArray", "Circular Array", |s, p| add_as(s, p, "circularArray", None)),
-        spec("modifier.add.gridArray", "Grid Array", |s, p| add_as(s, p, "gridArray", None)),
-        spec("modifier.add.mirror", "Mirror", |s, p| add_as(s, p, "mirror", None)),
-        spec("modifier.add.wallpaper", "Wallpaper", |s, p| add_as(s, p, "wallpaper", None)),
-        spec("modifier.add.copyToShape", "Copy to Shape", |s, p| add_as(s, p, "copyToShape", None)),
-        spec("modifier.add.transformEach", "Transform Each", |s, p| add_as(s, p, "transformEach", None)),
-        spec("modifier.add.randomize", "Randomize", |s, p| add_as(s, p, "randomize", None)),
-        spec("modifier.add.resample", "Resample", |s, p| add_as(s, p, "resample", None)),
-        spec("modifier.add.trim", "Trim", |s, p| add_as(s, p, "trim", None)),
-        spec("modifier.add.tidy", "Tidy", |s, p| add_as(s, p, "tidy", None)),
-        spec("modifier.add.deform", "Deform", |s, p| add_as(s, p, "deform", None)),
-        spec("modifier.add.displace", "Displace", |s, p| add_as(s, p, "displace", None)),
-        spec("modifier.add.screen", "Screen", |s, p| add_as(s, p, "screen", None)),
-        spec("modifier.add.benDay", "Ben-Day Dots", |s, p| add_as(s, p, "screen", Some("benDay"))),
-        spec("modifier.add.lineFill", "Line Fill", |s, p| add_as(s, p, "screen", Some("lineFill"))),
-        spec("modifier.add.stencil", "Stencil", |s, p| add_as(s, p, "stencil", None)),
+        spec("modifier.add.linearArray", "Linear Array", |s, p| add_as(s, p, "modifier.add.linearArray", "Add Linear Array", "linearArray", None)),
+        spec("modifier.add.circularArray", "Circular Array", |s, p| {
+            add_as(s, p, "modifier.add.circularArray", "Add Circular Array", "circularArray", None)
+        }),
+        spec("modifier.add.gridArray", "Grid Array", |s, p| add_as(s, p, "modifier.add.gridArray", "Add Grid Array", "gridArray", None)),
+        spec("modifier.add.mirror", "Mirror", |s, p| add_as(s, p, "modifier.add.mirror", "Add Mirror", "mirror", None)),
+        spec("modifier.add.wallpaper", "Wallpaper", |s, p| add_as(s, p, "modifier.add.wallpaper", "Add Wallpaper", "wallpaper", None)),
+        spec("modifier.add.copyToShape", "Copy to Shape", |s, p| add_as(s, p, "modifier.add.copyToShape", "Add Copy to Shape", "copyToShape", None)),
+        spec("modifier.add.transformEach", "Transform Each", |s, p| {
+            add_as(s, p, "modifier.add.transformEach", "Add Transform Each", "transformEach", None)
+        }),
+        spec("modifier.add.randomize", "Randomize", |s, p| add_as(s, p, "modifier.add.randomize", "Add Randomize", "randomize", None)),
+        spec("modifier.add.resample", "Resample", |s, p| add_as(s, p, "modifier.add.resample", "Add Resample", "resample", None)),
+        spec("modifier.add.trim", "Trim", |s, p| add_as(s, p, "modifier.add.trim", "Add Trim", "trim", None)),
+        spec("modifier.add.tidy", "Tidy", |s, p| add_as(s, p, "modifier.add.tidy", "Add Tidy", "tidy", None)),
+        spec("modifier.add.deform", "Deform", |s, p| add_as(s, p, "modifier.add.deform", "Add Deform", "deform", None)),
+        spec("modifier.add.displace", "Displace", |s, p| add_as(s, p, "modifier.add.displace", "Add Displace", "displace", None)),
+        spec("modifier.add.screen", "Screen", |s, p| add_as(s, p, "modifier.add.screen", "Add Screen", "screen", None)),
+        spec("modifier.add.benDay", "Ben-Day Dots", |s, p| add_as(s, p, "modifier.add.benDay", "Add Ben-Day Dots", "screen", Some("benDay"))),
+        spec("modifier.add.lineFill", "Line Fill", |s, p| add_as(s, p, "modifier.add.lineFill", "Add Line Fill", "screen", Some("lineFill"))),
+        spec("modifier.add.stencil", "Stencil", |s, p| add_as(s, p, "modifier.add.stencil", "Add Stencil", "stencil", None)),
     ]
 }
 
@@ -97,5 +109,11 @@ mod tests {
         let n = s.active().unwrap().doc.node(vectorcraft_doc::NodeId(id)).unwrap().clone();
         let p = vectorcraft_modifiers::node_stack(&n).unwrap().unwrap().modifiers[0].kind.params();
         assert_eq!(p["spot"].as_str(), Some("line"));
+        // Its own label names the undo step; another kind or preset is refused, not overwritten.
+        assert_eq!(s.doc().unwrap().history.undo.last().map(|e| e.label.as_str()), Some("Add Line Fill"));
+        assert!(s.execute("modifier.add.lineFill", &json!({"ids": [id], "kind": "mirror"})).is_err());
+        assert!(s.execute("modifier.add.lineFill", &json!({"ids": [id], "preset": "benDay"})).is_err());
+        assert!(s.execute("modifier.add.mirror", &json!({"ids": [id], "preset": "benDay"})).is_err());
+        assert!(s.execute("modifier.add.mirror", &json!({"ids": [id], "kind": "mirror"})).is_ok());
     }
 }
