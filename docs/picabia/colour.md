@@ -1,6 +1,7 @@
 # Colour
 
-**Status:** 2026-11-02, planned, not started (PIC32). This is step 3 of the porting plan (version 3,
+**Status:** 2026-11-02, built (PIC32.1 to PIC32.5); PIC32.6 and PIC32.7 later. The choices made
+while building are under Choices made while building. This is step 3 of the porting plan (version 3,
 "Colour: copies get their own colours"), moved ahead of the ramp chip and the Offset row at the
 owner's request: colour is the next modifier work. The plan is written so that a session without
 the owner's machine (no `plan/`, no tlprocedural checkout) can build it: every number tlprocedural
@@ -279,3 +280,5 @@ Points the spec left open, settled as the implementing session judged best (PIC3
 - 2026-11-02: planned (PIC32), from tlprocedural's Color and Color Each and the porting plan's step 3.
 - 2026-11-02: the owner's decisions on effect colours, gamut, patterns and nested arrays; `order:
   array` and `array` added.
+- 2026-11-02: built, PIC32.1 to PIC32.5 (the row, drawing and Apply, commands and presets, the
+  panel, docs); the choices made recorded above.
