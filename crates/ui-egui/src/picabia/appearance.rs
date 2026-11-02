@@ -59,11 +59,18 @@ pub const KINDS: &[(&str, &str)] = &[
     ("deform", "Deform"),
     ("displace", "Displace"),
     ("screen", "Screen"),
+    ("color", "Color"),
 ];
 
 /// The presets the menus add after the kinds, as `(kind, preset, label)`: `modifier.add` with
 /// `preset`.
-pub const PRESETS: &[(&str, &str, &str)] = &[("screen", "benDay", "Ben-Day Dots"), ("screen", "lineFill", "Line Fill")];
+pub const PRESETS: &[(&str, &str, &str)] = &[
+    ("screen", "benDay", "Ben-Day Dots"),
+    ("screen", "lineFill", "Line Fill"),
+    ("color", "rainbow", "Rainbow"),
+    ("color", "fade", "Fade"),
+    ("color", "vary", "Vary"),
+];
 
 /// How a field is edited.
 #[derive(Clone, Copy)]
@@ -134,6 +141,13 @@ const WAVEFORMS: &[(&str, &str)] = &[("sine", "Sine"), ("square", "Square"), ("t
 const SPOTS: &[(&str, &str)] =
     &[("round", "Round"), ("ellipse", "Ellipse"), ("line", "Line"), ("square", "Square"), ("diamond", "Diamond"), ("cross", "Cross")];
 const TONES: &[(&str, &str)] = &[("fill", "Fill colour"), ("fixed", "Fixed"), ("image", "Image")];
+const COLOUR_STROKES: &[(&str, &str)] = &[("same", "As the fill"), ("own", "Its own"), ("none", "Keep its colour")];
+const COLOUR_ORDERS: &[(&str, &str)] =
+    &[("copies", "Copies"), ("array", "One array row"), ("leftRight", "Left to right"), ("topBottom", "Top to bottom"), ("diagonal", "Diagonal")];
+/// A colour shift in percent (hue 100 = a full turn).
+const SHIFT: F = F::Percent(-100.0, 100.0);
+/// Random extra shift per copy, plus or minus, in percent.
+const JITTER: F = F::Percent(0.0, 100.0);
 /// A fraction of a path's length, shown as a percentage.
 const FRACTION: F = F::Pct(0.0, 1.0);
 
@@ -269,6 +283,28 @@ pub(super) fn fields(kind: &str) -> &'static [(&'static str, &'static str, F)] {
             ("amount", "Amount", F::Percent(0.0, 100.0)),
             ("image", "Image", F::Image),
             ("invert", "Invert", F::Bool),
+        ],
+        // tlprocedural's Color and Color Each (`docs/picabia/colour.md`): shifts in percent.
+        "color" => &[
+            ("hue", "Hue", SHIFT),
+            ("chroma", "Chroma", SHIFT),
+            ("lightness", "Lightness", SHIFT),
+            ("stroke", "Stroke", F::Choice(COLOUR_STROKES)),
+            ("strokeHue", "Stroke hue", SHIFT),
+            ("strokeChroma", "Stroke chroma", SHIFT),
+            ("strokeLightness", "Stroke lightness", SHIFT),
+            ("progressive", "Ramp copies", F::Bool),
+            ("amount", "Ramp amount", FRACTION),
+            ("reverse", "Ramp reversed", F::Bool),
+            ("order", "Ramp order", F::Choice(COLOUR_ORDERS)),
+            ("array", "Array row", F::Int(1.0, 64.0)),
+            ("jitterHue", "Jitter hue", JITTER),
+            ("jitterChroma", "Jitter chroma", JITTER),
+            ("jitterLightness", "Jitter lightness", JITTER),
+            ("strokeJitterHue", "Stroke jitter hue", JITTER),
+            ("strokeJitterChroma", "Stroke jitter chroma", JITTER),
+            ("strokeJitterLightness", "Stroke jitter lightness", JITTER),
+            ("seed", "Seed", SEED),
         ],
         _ => &[],
     }

@@ -37,6 +37,7 @@ pub const KINDS: &[(&str, &str)] = &[
     ("deform", "Deform"),
     ("displace", "Displace"),
     ("screen", "Screen"),
+    ("color", "Color"),
 ];
 
 /// The label of kind id `kind` ("Linear array"), or `None` for a kind this build doesn't know.

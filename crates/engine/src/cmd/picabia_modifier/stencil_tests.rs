@@ -511,3 +511,27 @@ fn info_json_reads_non_finite_bounds_as_zero() {
     );
     assert!(serde_json::to_string(&v).is_ok());
 }
+
+/// PIC32.3: the stencil reads colours as drawn: a Color row above it changes which colour layer a
+/// copy falls in; without one the sheet is as before.
+#[test]
+fn a_colour_row_above_a_stencil_changes_the_colour_layers() {
+    let mut s = session();
+    let a = rect(&mut s, 0.0, 0.0, 100.0, 100.0, BLACK);
+    ex(&mut s, "modifier.add", json!({"ids": [a.0], "kind": "linearArray", "props": {"count": 2, "offsetX": 150}}));
+    ex(&mut s, "modifier.add", json!({"ids": [a.0], "kind": "stencil"}));
+    let before = ex(&mut s, "modifier.stencilInfo", json!({"id": a.0}));
+    let hexes = |i: &Value| i["colours"].as_array().unwrap().iter().map(|c| c["hex"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    assert_eq!(hexes(&before), [BLACK], "{before}");
+    // The second copy turns white.
+    ex(&mut s, "modifier.add", json!({"ids": [a.0], "kind": "color", "index": 1, "props": {"hue": 0, "chroma": 0, "lightness": 100}}));
+    let after = ex(&mut s, "modifier.stencilInfo", json!({"id": a.0}));
+    let mut got = hexes(&after);
+    got.sort();
+    assert_eq!(got, [BLACK, WHITE], "{after}");
+    // Removed again: the same sheet as before.
+    ex(&mut s, "modifier.remove", json!({"ids": [a.0], "index": 1}));
+    let again = ex(&mut s, "modifier.stencilInfo", json!({"id": a.0}));
+    assert_eq!(again["colours"], before["colours"]);
+    assert_eq!(again["stats"], before["stats"]);
+}

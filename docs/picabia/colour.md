@@ -258,6 +258,12 @@ Points the spec left open, settled as the implementing session judged best (PIC3
   the art of 10 000 recoloured copies takes about 25 ms in the test profile.
 - **Patterns** keep their tiles; the note "pattern fills keep their colours" is one of the
   object's art notes (shown under the rows, and in `modifier.apply`'s warnings).
+- **Stencils** gather the copies as the renderer draws them whenever Color rows recolour them (as
+  for geometry rows; `crates/engine/src/picabia_stencil.rs`, one condition), so the colour layers
+  follow the shifted colours (PIC32.3).
+- **The kind lands whole in PIC32.3**: the crate's addable `KINDS`, `modifier.add.color` and its
+  presets, the Add Modifier entries and the panel's field list are held together by tests, so they
+  arrived in one commit; PIC32.4 adds the panel's grouping, visibility rules and colour strip.
 - **Jitter draws** are SplitMix64 of `(seed << 32) ^ index × 0xD6E8FEB86659FD93`, mixed again with
   `(channel + 1) × 0x9E3779B97F4A7C15` (channels: fill hue, chroma, lightness = 0, 1, 2; stroke
   hue, chroma, lightness = 3, 4, 5).
