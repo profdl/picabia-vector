@@ -37,9 +37,9 @@ pub enum Pose {
 /// or `None` when the particles don't match the mesh or aren't finite.
 pub fn pose_node(node: &Node, mesh: &SoftMesh, particles: &[Point]) -> Option<Node> {
     let w = Warp::new(mesh, particles)?;
-    let piece = (mesh.spacing / 2.0).clamp(0.5, 50.0);
+    let budget = Budget { piece: (mesh.spacing / 2.0).clamp(0.5, 50.0), total: segments(node, 0) };
     let mut out = node.clone();
-    warp_node(&mut out, &w, piece, 0);
+    warp_node(&mut out, &w, &budget, 0);
     Some(out)
 }
 
@@ -189,58 +189,98 @@ impl Grid {
                 }
             }
         }
-        // Outside: the nearest cell by centroid, near first.
-        let consider = |i: u32, best: &mut Option<(u32, f64)>| {
-            if let Some((_, t)) = tri(i) {
-                let cen = Point::new((t[0].x + t[1].x + t[2].x) / 3.0, (t[0].y + t[1].y + t[2].y) / 3.0);
-                let d = (cen - p).hypot2();
-                if best.is_none_or(|(_, b)| d < b) {
-                    *best = Some((i, d));
+        // Outside: the cell whose centroid is nearest, from the rings of bins around `p` outwards
+        // (one ring past the first that finds any); a degenerate cell is passed over.
+        let mut cands: Vec<(f64, u32)> = Vec::new();
+        let most = self.cols.max(self.rows);
+        let mut found_at = None;
+        for ring in 1..=most {
+            let (c0, c1) = (c.saturating_sub(ring), (c + ring).min(self.cols - 1));
+            let (r0, r1) = (r.saturating_sub(ring), (r + ring).min(self.rows - 1));
+            for row in r0..=r1 {
+                for col in c0..=c1 {
+                    // Only the ring's edge (the inside was searched already).
+                    if ring > 1 && row > r0 && row < r1 && col > c0 && col < c1 {
+                        continue;
+                    }
+                    for &i in self.bins.get(row * self.cols + col).map_or(&[][..], |v| v.as_slice()) {
+                        if let Some((_, t)) = tri(i) {
+                            let cen = Point::new((t[0].x + t[1].x + t[2].x) / 3.0, (t[0].y + t[1].y + t[2].y) / 3.0);
+                            cands.push(((cen - p).hypot2(), i));
+                        }
+                    }
                 }
             }
-        };
-        let mut best: Option<(u32, f64)> = None;
-        for row in r.saturating_sub(1)..=(r + 1).min(self.rows - 1) {
-            for col in c.saturating_sub(1)..=(c + 1).min(self.cols - 1) {
-                for &i in self.bins.get(row * self.cols + col).map_or(&[][..], |v| v.as_slice()) {
-                    consider(i, &mut best);
-                }
+            match found_at {
+                None if !cands.is_empty() => found_at = Some(ring),
+                Some(at) if ring > at => break,
+                _ => {}
             }
         }
-        if best.is_none() {
-            for i in 0..mesh.cells.len() as u32 {
-                consider(i, &mut best);
-            }
-        }
-        let (i, _) = best?;
-        let (c, t) = tri(i)?;
-        Some((c, bary(t, p)?))
+        cands.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        cands.dedup_by_key(|c| c.1);
+        cands.into_iter().find_map(|(_, i)| {
+            let (c, t) = tri(i)?;
+            Some((c, bary(t, p)?))
+        })
     }
 }
 
-/// Bend `n`'s paths through `w` (pieces of at most `piece` points); kinds that can't bend take the
-/// warp's best-fit affine at their centre.
-fn warp_node(n: &mut Node, w: &Warp, piece: f64, depth: usize) {
+/// Segments in `n`'s paths (guides aside), for sharing the anchor budget.
+fn segments(n: &Node, depth: usize) -> usize {
+    if depth > vectorcraft_doc::MAX_DEPTH {
+        return 0;
+    }
+    match &n.kind {
+        NodeKind::Path { guide: true, .. } => 0,
+        NodeKind::Path { path, .. } => path.subpaths.iter().map(|s| s.segment_count()).fold(0, usize::saturating_add),
+        NodeKind::Group { children, .. } | NodeKind::Layer { children, .. } | NodeKind::Compound { children, .. } => {
+            children.iter().map(|c| segments(c, depth + 1)).fold(0, usize::saturating_add)
+        }
+        _ => 0,
+    }
+}
+
+/// How the pieces are sized: at most `piece` points long, the object's paths sharing
+/// [`MAX_WARPED_ANCHORS`] new anchors by their segment counts.
+struct Budget {
+    piece: f64,
+    total: usize,
+}
+
+/// Bend `n`'s paths through `w`; kinds that can't bend take the warp's best-fit affine at their
+/// centre. Placed gradients follow the warp where they sit, and opacity masks bend with the art
+/// (as an envelope's `map_node` does).
+fn warp_node(n: &mut Node, w: &Warp, budget: &Budget, depth: usize) {
     if depth > vectorcraft_doc::MAX_DEPTH {
         return;
     }
     let f = |p: Point| w.at(p);
-    if let Some(b) = n.geometric_bounds() {
-        let eps = (b.width().max(b.height()) * 1e-3).max(1e-3);
-        n.appearance.warp_linear_gradients(b, &|p| affine_near(&f, p, eps));
+    let near = |p: Point| affine_near(&f, p, 1e-2);
+    if let Some(m) = n.extras_if_any().and_then(|e| e.mask.as_mut()) {
+        let mut art = (*m.art).clone();
+        warp_node(&mut art, w, budget, depth + 1);
+        m.art = Arc::new(art);
     }
     match &mut n.kind {
         NodeKind::Path { guide: true, .. } => {}
         NodeKind::Path { path, live, .. } => {
-            *path = map_nonlinear_within(path, piece, MAX_WARPED_ANCHORS, f);
+            let own = path.subpaths.iter().map(|s| s.segment_count()).fold(0, usize::saturating_add);
+            let share = (MAX_WARPED_ANCHORS as f64 * own as f64 / budget.total.max(1) as f64) as usize;
+            *path = map_nonlinear_within(path, budget.piece, path.anchor_count().saturating_add(share), f);
             // A plain path now: a live shape would redraw its old outline.
             *live = None;
+            n.appearance.warp_gradients(&near);
         }
         NodeKind::Group { children, .. } | NodeKind::Layer { children, .. } | NodeKind::Compound { children, .. } => {
             for c in children.iter_mut() {
-                warp_node(Arc::make_mut(c), w, piece, depth + 1);
+                warp_node(Arc::make_mut(c), w, budget, depth + 1);
             }
+            n.appearance.warp_gradients(&near);
         }
+        NodeKind::Mesh(m) => m.map(&f),
+        // Type, images, symbol instances and the rest move whole (their gradients and masks with
+        // them).
         _ => {
             if let Some(b) = n.geometric_bounds() {
                 let eps = (b.width().max(b.height()) * 0.05).max(1e-3);

@@ -298,8 +298,13 @@ The jelly scene is at the edge of the native budget even then (worst steps 2.7 f
   kept along the line's normal, which turns smoothly between particles. Jelly: a uniform grid of the
   rest cells finds the cell under a point (barycentric); a point outside every cell (the art's
   edge between resampled points) follows the nearest cell's affine. Paths are split into pieces of
-  half the particle spacing (at most 50,000 anchors a path); linear gradients follow the warp; type,
-  images, symbol instances and other kinds take the warp's best-fit affine at their centre. Apply
+  half the particle spacing (an object's paths share 50,000 new anchors by their segment counts);
+  placed gradients follow the warp where they sit, opacity masks bend with the art, gradient meshes
+  bend point by point; type, images, symbol instances and other kinds take the warp's best-fit
+  affine at their centre (their gradients and masks with them). A point outside the mesh follows
+  the cell whose centre is nearest, searched ring by ring outwards (a degenerate cell passed over).
+  Apply bakes each object once (the first pose given for it), never a layer, and not an object
+  inside another one being baked (it moves with that one). Apply
   (engine `picabia_physics_apply.rs`) bakes rigid motions with `transform_node` and replaces soft
   bodies' objects with their warped art in one edit; phase 1's Simulate now bakes through it too.
 - **Apply** bakes the shown pose into every body in the session and closes it (one undo step,

@@ -22,9 +22,23 @@ pub(crate) struct Baking<'a> {
 }
 
 /// Bake `items` into the active document as one undo step labelled `label` (none when nothing
-/// moved). Returns the objects changed. `p` may hold `patterns` (Transform Pattern Tiles).
+/// moved). Returns the objects changed. `p` may hold `patterns` (Transform Pattern Tiles). An
+/// object listed twice is baked once (its first item), layers are left alone, and an object inside
+/// another listed one is left to move with it.
 pub(crate) fn bake(s: &mut Session, label: &str, p: &Value, items: &[Baking]) -> Result<Vec<NodeId>> {
     let doc = &s.doc()?.doc;
+    // Each object once, never a layer, and never inside another one baked (it moves with that
+    // one): the first item for an object wins.
+    let mut seen = std::collections::HashSet::new();
+    let items: Vec<&Baking> = items.iter().filter(|b| seen.insert(b.id)).filter(|b| doc.node(b.id).is_some_and(|n| !n.is_layer())).collect();
+    let paths = doc.index_paths(items.iter().map(|b| b.id));
+    let items: Vec<&Baking> = items
+        .into_iter()
+        .filter(|b| {
+            let Some(mine) = paths.get(&b.id) else { return false };
+            !paths.iter().any(|(other, path)| *other != b.id && path.len() < mine.len() && mine.starts_with(path))
+        })
+        .collect();
     let mut rigid = Vec::new();
     let mut soft = Vec::new();
     for b in items {

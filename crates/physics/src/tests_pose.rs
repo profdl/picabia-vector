@@ -110,3 +110,58 @@ fn groups_bend_member_by_member_and_bad_particles_are_refused() {
     nan[0].x = f64::NAN;
     assert!(pose_node(&g, &m, &nan).is_none(), "not finite");
 }
+
+// PIC31.3a (review): a pose that isn't one affine, masks, budgets.
+
+#[test]
+fn cells_carry_points_through_a_pose_that_is_not_one_affine() {
+    let n = node(1, shapes::rectangle(Rect::new(0.0, 0.0, 100.0, 100.0)));
+    let m = mesh(&n, Preset::Jelly, 8.0);
+    // The right half shears up: x past 50 rises by x − 50; the left half stays.
+    let f = |p: Point| Point::new(p.x, p.y - (p.x - 50.0).max(0.0));
+    let to: Vec<Point> = m.rest.iter().map(|p| f(*p)).collect();
+    let w = crate::pose::Warp::new(&m, &to).unwrap();
+    for i in 0..=20 {
+        for j in 0..=20 {
+            let p = Point::new(i as f64 * 5.0, j as f64 * 5.0);
+            let (got, want) = (w.at(p), f(p));
+            // Exact away from the kink, within a cell's size across it.
+            let tol = if (p.x - 50.0).abs() < 12.0 { 8.0 } else { 1e-6 };
+            assert!((got - want).hypot() <= tol, "{p:?}: {got:?} vs {want:?}");
+        }
+    }
+    // Points outside the mesh follow the nearest cell, finitely.
+    for p in [Point::new(-500.0, 50.0), Point::new(1e5, -1e5)] {
+        let q = w.at(p);
+        assert!(q.x.is_finite() && q.y.is_finite());
+    }
+}
+
+#[test]
+fn an_opacity_mask_bends_with_the_art() {
+    let mut n = node(1, shapes::rectangle(Rect::new(0.0, 0.0, 100.0, 50.0)));
+    let mask = node(2, shapes::rectangle(Rect::new(10.0, 10.0, 90.0, 40.0)));
+    n.extras_mut().mask = Some(Box::new(vectorcraft_doc::OpacityMask::new(mask, true)));
+    let m = mesh(&n, Preset::Jelly, 10.0);
+    let down: Vec<Point> = m.rest.iter().map(|p| *p + vectorcraft_geom::Vec2::new(0.0, 200.0)).collect();
+    let out = pose_node(&n, &m, &down).unwrap();
+    let art = out.extras().mask.as_ref().unwrap().art.geometric_bounds().unwrap();
+    assert!(near(art, Rect::new(10.0, 210.0, 90.0, 240.0), 0.5), "{art:?}");
+}
+
+#[test]
+fn a_group_of_many_paths_shares_one_anchor_budget() {
+    let kids: Vec<Arc<Node>> =
+        (0..64).map(|i| Arc::new(node(i, shapes::ellipse(Rect::new(i as f64 * 10.0, 0.0, i as f64 * 10.0 + 8.0, 8.0))))).collect();
+    let g = Node::group(NodeId(100), kids);
+    let m = mesh(&g, Preset::Rubber, 4.0);
+    let twisted: Vec<Point> = m.rest.iter().map(|p| Point::new(p.x, p.y + (p.x * 0.05).sin() * 20.0)).collect();
+    let out = pose_node(&g, &m, &twisted).unwrap();
+    let mut count = 0;
+    out.walk(&mut |c| {
+        if let NodeKind::Path { path, .. } = &c.kind {
+            count += path.anchor_count();
+        }
+    });
+    assert!(count <= crate::pose::MAX_WARPED_ANCHORS + 64 * 4, "{count}");
+}

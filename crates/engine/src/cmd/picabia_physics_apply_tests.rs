@@ -72,3 +72,23 @@ fn nothing_moved_makes_no_undo_step() {
     assert!(bake(&mut s, "Apply Physics", &Value::Null, &items).unwrap().is_empty());
     assert_eq!(s.doc().unwrap().history.undo.len(), undo);
 }
+
+#[test]
+fn duplicates_layers_and_nested_objects_are_baked_once() {
+    let mut s = session();
+    let a = shape(&mut s, "shape.rectangle", 10.0, 10.0, 40.0, 40.0);
+    let b = shape(&mut s, "shape.rectangle", 60.0, 10.0, 40.0, 40.0);
+    s.execute("select.set", &json!({"ids": [a.0, b.0]})).unwrap();
+    let group = NodeId(s.execute("object.group", &json!({})).unwrap()["id"].as_u64().unwrap());
+    let layer = s.doc().unwrap().doc.layers[0].id;
+    let down = Pose::Rigid(Some(Affine::translate((0.0, 100.0))));
+    let items = [
+        Baking { id: group, pose: &down, mesh: None },
+        Baking { id: group, pose: &down, mesh: None },
+        Baking { id: a, pose: &down, mesh: None },
+        Baking { id: layer, pose: &down, mesh: None },
+    ];
+    let changed = bake(&mut s, "Apply Physics", &Value::Null, &items).unwrap();
+    assert_eq!(changed, vec![group]);
+    assert!((bounds(&s, a).y0 - 110.0).abs() < 1e-6, "moved once, with its group: {:?}", bounds(&s, a));
+}
