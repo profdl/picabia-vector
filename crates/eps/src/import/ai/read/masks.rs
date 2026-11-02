@@ -89,7 +89,7 @@ impl Reader<'_> {
 
     /// `MB`: the masked objects end.
     fn end_multi_mask(&mut self) -> Result<(), String> {
-        if !self.multi_mask.as_ref().is_some_and(|m| m.mask.is_some()) {
+        if self.multi_mask.as_ref().is_none_or(|m| m.mask.is_none()) {
             return Err("a multi-layer mask's operators are out of order".into());
         }
         self.wrap_masked()?;

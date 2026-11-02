@@ -193,9 +193,9 @@ pub fn has_multi(s: &Session) -> std::result::Result<(), String> {
 /// isolated inside them counts.
 pub(crate) fn ordinary_isolation(st: &crate::DocState) -> Option<vectorcraft_doc::NodeId> {
     st.isolation.filter(|l| {
-        !st.doc.pattern_edit.as_ref().is_some_and(|e| e.layer == *l)
-            && !st.doc.mask_edit.as_ref().is_some_and(|e| e.layer == *l)
-            && !st.doc.symbol_edit.as_ref().is_some_and(|e| e.layer == *l)
+        st.doc.pattern_edit.as_ref().is_none_or(|e| e.layer != *l)
+            && st.doc.mask_edit.as_ref().is_none_or(|e| e.layer != *l)
+            && st.doc.symbol_edit.as_ref().is_none_or(|e| e.layer != *l)
     })
 }
 /// Objects are selected ([`has_selection`]), and in isolation mode ([`ordinary_isolation`]) at
