@@ -49,6 +49,35 @@ fn the_canvas_draws_the_sheet_in_place_of_the_design() {
 }
 
 #[test]
+fn apply_bakes_the_sheet_into_paths_that_draw_the_same() {
+    let mut s = session();
+    let g = two_tone(&mut s, json!({}));
+    let world = Rect::new(-10.0, -10.0, 210.0, 110.0);
+    // Applied before any sheet was computed: Apply computes it.
+    let out = ex(&mut s, "modifier.apply", json!({"ids": [g.0]}));
+    let p = id_of(&out["ids"][0]);
+    let d = s.doc().unwrap().doc.clone();
+    let n = d.node(p).unwrap();
+    assert!(d.node(g).is_none(), "the stencil object is replaced");
+    assert!(!vectorcraft_modifiers::has_modifiers(n), "no stack: real paths");
+    assert!(matches!(n.kind, vectorcraft_doc::NodeKind::Path { rule: vectorcraft_geom::FillRule::EvenOdd, .. }), "the paper: one even-odd path");
+    assert_eq!(n.geometric_bounds().unwrap(), world, "the sheet rectangle");
+    assert_eq!(px(&d, world, -5.0, 50.0), [0xc8, 0xa1, 0x65, 0xff], "paper");
+    assert_eq!(px(&d, world, 50.0, 50.0), [0xc8, 0xa1, 0x65, 0xff], "paper where the black square was");
+    assert_eq!(px(&d, world, 150.0, 50.0)[3], 0, "cut out");
+    ex(&mut s, "edit.undo", json!({}));
+    assert!(s.doc().unwrap().doc.node(g).is_some(), "one undo step");
+    // The cloth preview bakes the cloth and the paste.
+    ex(&mut s, "modifier.set", json!({"ids": [g.0], "index": 0, "props": {"preview": "cloth"}}));
+    let out = ex(&mut s, "modifier.apply", json!({"ids": [g.0]}));
+    let d = s.doc().unwrap().doc.clone();
+    let n = d.node(id_of(&out["ids"][0])).unwrap();
+    assert_eq!(n.children().unwrap().len(), 2, "cloth and paste");
+    assert_eq!(px(&d, world, -5.0, 50.0), [0xf4, 0xef, 0xe6, 0xff], "cloth");
+    assert_eq!(px(&d, world, 150.0, 50.0), [0x1f, 0x3a, 0x8a, 0xff], "paste");
+}
+
+#[test]
 fn the_sheet_counts_for_bounds_and_hit_testing() {
     let mut s = session();
     let g = two_tone(&mut s, json!({}));

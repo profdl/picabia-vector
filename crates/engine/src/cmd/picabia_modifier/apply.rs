@@ -21,7 +21,12 @@
 //! per-copy rows (transform each, randomize, wallpaper) now act on the whole block, as a modifier
 //! on any group does.
 //!
-//! A stencil row is never baked here: `upTo` stops above it, and it moves onto the group with the
+//! A stencil row bakes into its sheet: when the rows applied reach it (no `upTo`, or `upTo` at or
+//! below it), the object is replaced by the sheet as the canvas draws it (computed first when it
+//! is out of date): one even-odd path of paper with the cut-outs open (paper preview), or a group
+//! of the cloth and the paste (cloth preview), with the object's name and transparency. The copies
+//! the rows above it made are in the sheet; the rows below it (ignored while live) are dropped.
+//! `upTo` above the stencil bakes those rows only, and the stencil moves onto the group with the
 //! rows after it (it cuts the same copies there).
 //!
 //! Colour rows (`color`) are baked too: each copy gets the shifted colours the renderer draws, as
@@ -55,7 +60,17 @@ const CMD: &str = "modifier.apply";
 pub const MAX_APPLY_OBJECTS: usize = 100_000;
 
 /// What applying one object's stack makes.
-struct Plan {
+enum Plan {
+    Copies(Box<Copies>),
+    /// A stencil baked into its sheet: `art` (the renderer's, ids not yet fresh) replaces `id`.
+    Sheet {
+        id: NodeId,
+        art: Node,
+    },
+}
+
+/// What baking an object's copies makes.
+struct Copies {
     id: NodeId,
     /// The instance transforms of the baked rows, one copy each.
     copies: Vec<Affine>,
@@ -91,6 +106,15 @@ pub(super) fn apply(s: &mut Session, p: &Value) -> Result<Value> {
         let mut live = Vec::new();
         let mut warnings: Vec<String> = Vec::new();
         for plan in plans {
+            let plan = match plan {
+                Plan::Copies(c) => *c,
+                Plan::Sheet { id, art } => {
+                    let sheet = sheet_node(d, &art);
+                    applied.push((id, sheet.id, 1));
+                    groups.push((id, vec![sheet]));
+                    continue;
+                }
+            };
             let (id, copies) = (plan.id, plan.copies.len());
             let (group, ids, notes) = bake(d, &plan)?;
             // What a geometry row couldn't do (skipped over the anchor cap…) is said, not lost.
@@ -138,8 +162,8 @@ fn plan(doc: &Document, id: NodeId, up_to: Option<usize>, budget: &mut usize) ->
     // A stencil row ends the stack and has no copies to bake: only the rows above it are baked,
     // and it stays live on the group (with any rows below it), cutting the same copies.
     let cut = match stack.modifiers.iter().position(|m| m.enabled && matches!(m.kind, ModifierKind::Stencil(_))) {
-        Some(0) => return Ok(None),
-        Some(at) => cut.min(at - 1),
+        Some(at) if cut >= at => return sheet_plan(doc, id, budget).map(Some),
+        Some(at) => cut.min(at.saturating_sub(1)),
         None => cut,
     };
     let baked = Stack { modifiers: stack.modifiers.get(..=cut).map(<[_]>::to_vec).unwrap_or_default(), ..stack.clone() };
@@ -168,7 +192,45 @@ fn plan(doc: &Document, id: NodeId, up_to: Option<usize>, budget: &mut usize) ->
         return Err(super::super::bad(CMD, format!("applying would make {wanted} objects (at most {MAX_APPLY_OBJECTS} at once)")));
     }
     *budget -= wanted;
-    Ok(Some(Plan { id, copies: out.instances.iter().map(|i| i.transform).collect(), out, rest, pivot: bounds.center() }))
+    Ok(Some(Plan::Copies(Box::new(Copies { id, copies: out.instances.iter().map(|i| i.transform).collect(), out, rest, pivot: bounds.center() }))))
+}
+
+/// Applying stencil object `id`: its sheet, computed now when it is out of date.
+fn sheet_plan(doc: &Document, id: NodeId, budget: &mut usize) -> Result<Plan> {
+    let node = doc.node(id).ok_or_else(|| super::super::bad(CMD, format!("no object with id {}", id.0)))?;
+    replaceable(doc, node)?;
+    let name = node.display_name();
+    let no_sheet = || super::super::bad(CMD, format!("\"{name}\" has no stencil sheet to apply (nothing to cut)"));
+    crate::picabia_stencil::ensure_one(doc, id).ok_or_else(no_sheet)?;
+    if !vectorcraft_render::picabia::draws_sheet(doc, node) {
+        return Err(no_sheet());
+    }
+    let art = vectorcraft_render::picabia::art(doc, node).ok_or_else(no_sheet)?;
+    let wanted = art.count();
+    if wanted > *budget {
+        return Err(super::super::bad(CMD, format!("applying would make more than {MAX_APPLY_OBJECTS} objects at once")));
+    }
+    *budget -= wanted;
+    Ok(Plan::Sheet { id, art: Arc::unwrap_or_clone(art) })
+}
+
+/// The baked sheet, with fresh ids: the renderer's group of fills, or its one fill (the paper
+/// preview) carrying the group's name and transparency.
+fn sheet_node(d: &mut Document, art: &Node) -> Node {
+    let mut g = d.reid(art);
+    let one = match g.children_mut() {
+        Some(ch) if ch.len() == 1 => ch.pop(),
+        _ => None,
+    };
+    let Some(one) = one else { return g };
+    let mut p = Arc::unwrap_or_clone(one);
+    p.name = g.name.take();
+    (p.visible, p.locked) = (g.visible, g.locked);
+    p.opacity = g.opacity;
+    p.blend = std::mem::take(&mut g.blend);
+    p.isolate = g.isolate;
+    p.extras_mut().mask = g.extras_mut().mask.take();
+    p
 }
 
 /// Refuse `node` when a group can't take its place.
@@ -190,7 +252,7 @@ fn replaceable(doc: &Document, node: &Node) -> Result<()> {
 
 /// The group of `plan.id`'s copies (not in the tree yet), the copies' ids, and what the geometry
 /// rows said (a row skipped over the anchor cap: its reshape isn't in the copies).
-fn bake(d: &mut Document, plan: &Plan) -> Result<(Node, Vec<NodeId>, Vec<String>)> {
+fn bake(d: &mut Document, plan: &Copies) -> Result<(Node, Vec<NodeId>, Vec<String>)> {
     let mut node = d.node(plan.id).cloned().ok_or_else(|| super::super::bad(CMD, format!("no object with id {}", plan.id.0)))?;
     // The object's transparency and its own attributes go on the group, as the renderer draws
     // the copies (composited together, once): the copies are the object without them.

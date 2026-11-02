@@ -357,8 +357,10 @@ chroma 10, lightness 10).
 Turns the layer, with every copy the rows above it made, into a laser-cut **katagami** stencil: one
 sheet of paper or film whose cut-outs let resist paste through. It is the last step: it adds no
 copies (the copies above it stand), and enabled rows below it are ignored with one warning (only
-the first enabled stencil counts). Apply bakes only the rows above it; the stencil row moves onto
-the new group, live.
+the first enabled stencil counts). Apply bakes it into its sheet: the object becomes the paper as
+drawn (one even-odd path with the cut-outs open; with the cloth preview, a group of the cloth and
+the paste), copies above it included, rows below it dropped. Apply Up to Here on a row above it
+bakes only those rows, and the stencil row moves onto the new group, live.
 
 **Status here:** ported (picabia-craft P8 to P12, P17): the sheet, islands, ties, preview, laser
 export and test card (`vectorcraft-stencil`; see [`ROADMAP.md`](ROADMAP.md)). The fields below are

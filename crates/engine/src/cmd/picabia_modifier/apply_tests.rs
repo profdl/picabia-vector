@@ -341,7 +341,7 @@ fn a_damaged_stack_and_compound_members_are_refused() {
 }
 
 #[test]
-fn a_stencil_row_stays_live_and_only_the_rows_above_it_are_baked() {
+fn applying_up_to_a_row_above_a_stencil_keeps_the_stencil_live() {
     let mut s = session();
     let r = rect(&mut s, 0.0);
     add(&mut s, r, "linearArray", json!({"count": 3, "offsetX": 150}));
@@ -349,19 +349,16 @@ fn a_stencil_row_stays_live_and_only_the_rows_above_it_are_baked() {
     add(&mut s, r, "mirror", json!({}));
     let want = drawn(&s, r);
     assert_eq!(want.len(), 3, "the mirror below the stencil is ignored");
-    let g = id_of(&ex(&mut s, "modifier.apply", json!({"ids": [r.0]}))["ids"][0]);
+    let g = id_of(&ex(&mut s, "modifier.apply", json!({"ids": [r.0], "upTo": 0}))["ids"][0]);
     assert_eq!(children(&s, g).len(), 3, "the copies above the stencil are baked");
     let l = ex(&mut s, "modifier.list", json!({"id": g.0}));
     let kinds: Vec<&str> = l["modifiers"].as_array().unwrap().iter().map(|m| m["kind"].as_str().unwrap()).collect();
     assert_eq!(kinds, ["stencil", "mirror"], "the stencil and the rows below it move onto the group");
     assert_eq!(l["modifiers"][0]["widthMm"], json!(200.0));
     assert_eq!(drawn_group(&s, g), want, "the result looks unchanged");
-    // A stencil on top: nothing to bake.
-    let r2 = rect(&mut s, 1500.0);
-    add(&mut s, r2, "stencil", json!({}));
-    add(&mut s, r2, "gridArray", json!({"rows": 2, "cols": 2}));
-    assert!(matches!(s.execute("modifier.apply", &json!({"ids": [r2.0]})), Err(EngineError::Disabled(..))));
-    assert_eq!(drawn(&s, r2).len(), 1, "a stencil alone draws the object once, unchanged");
+    // Applying the whole stack bakes the stencil too: its sheet replaces the group.
+    let p = id_of(&ex(&mut s, "modifier.apply", json!({"ids": [g.0]}))["ids"][0]);
+    assert!(matches!(node(&s, p).kind, NodeKind::Path { .. }) && !has_stack(&s, p), "the sheet, as a path");
 }
 
 /// Applying changes nothing on the page: the baked group draws what the live copies drew,

@@ -76,6 +76,8 @@ pub struct JobState {
     pub sheet: usize,
     /// The last dry run cut a stencil object (its sheets), not a design's outlines.
     pub stencil: bool,
+    /// The power ladder's powers and speeds, as the window shows them (always sent for the ladder).
+    pub grid: super::ladder::Grid,
     /// The power ladder's grid from the last dry run (`ladder`: `{powersPct, speedsMmMin, squareMm,
     /// gapMm, passes}`).
     pub ladder: Option<Value>,
@@ -190,6 +192,9 @@ impl JobState {
         }
         if self.ops_set {
             self.ops.put(p);
+        }
+        if matches!(self.source, Source::PowerLadder) {
+            self.grid.put(p);
         }
     }
 
@@ -351,7 +356,9 @@ pub fn settings(app: &mut VectorcraftApp, ui: &mut Ui, j: &mut JobState, locked:
             ),
         },
         Source::TestCard => wrapped(ui, tl!("The material's test card: bridges, holes, slits and a kerf gauge."), t.text_dim),
-        Source::PowerLadder => wrapped(ui, tl!("Squares at each power and speed, to find the material's settings."), t.text_dim),
+        Source::PowerLadder => {
+            wrapped(ui, tl!("Squares at each power and speed, to find the material's settings: powers across, speeds down."), t.text_dim)
+        }
         Source::File(path) => {
             let named = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).filter(|n| !n.is_empty());
             let mut open = false;
@@ -370,6 +377,14 @@ pub fn settings(app: &mut VectorcraftApp, ui: &mut Ui, j: &mut JobState, locked:
     }
     if matches!(j.source, Source::File(_)) {
         return changed;
+    }
+    if matches!(j.source, Source::PowerLadder) {
+        ui.add_space(2.0);
+        ui.add_enabled_ui(!locked, |ui| {
+            if super::ladder::table(ui, &mut j.grid) {
+                changed = true;
+            }
+        });
     }
     // A stencil with several sheets: which one.
     if j.sheets() > 1 {
@@ -491,9 +506,15 @@ mod tests {
         let p = j.params(&sel).unwrap();
         assert_eq!(p["material"], "film");
         assert!(p["cut"].is_object());
+        assert!(p.get("powersPct").is_none(), "the grid is the ladder's only");
         j.source = Source::PowerLadder;
-        assert_eq!(j.params(&[]).unwrap()["testCard"], "powerLadder");
-        assert_eq!(j.dry_run(&[]).unwrap().0, "modifier.stencilTestCard");
+        j.grid.power = super::super::ladder::Range { from: 10.0, to: 30.0, steps: 3 };
+        let p = j.params(&[]).unwrap();
+        assert_eq!(p["testCard"], "powerLadder");
+        assert_eq!(p["powersPct"], json!([10.0, 20.0, 30.0]), "the grid goes with the ladder");
+        let (cmd, dry) = j.dry_run(&[]).unwrap();
+        assert_eq!(cmd, "modifier.stencilTestCard");
+        assert_eq!(dry["speedsMmMin"], json!([150.0, 300.0, 600.0, 1200.0]));
         j.source = Source::File(String::new());
         assert_eq!(j.params(&sel), None, "no file chosen");
         j.source = Source::File("/tmp/a.gcode".into());

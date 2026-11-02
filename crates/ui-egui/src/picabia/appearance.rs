@@ -690,8 +690,10 @@ pub(crate) fn modifier_rows(app: &mut VectorcraftApp, ui: &mut Ui) {
             text(ui, pos2(r.left() + EYE_W + 24.0, r.center().y), &shown, false, true);
             let br = Rect::from_min_size(pos2(r.right() - 74.0, r.center().y - 11.0), vec2(68.0, 22.0));
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(br).layout(egui::Layout::right_to_left(egui::Align::Center)));
-            if widgets::flat_button(&mut child, tl!("Apply"), 64.0).on_hover_text(tl!("Turn the copies into objects")).clicked() {
-                app.run("modifier.apply", json!({"ids": ids_json(&ids)})).ok();
+            if widgets::flat_button(&mut child, tl!("Apply"), 64.0).on_hover_text(tl!("Turn the copies into objects")).clicked()
+                && let Err(e) = app.run("modifier.apply", json!({"ids": ids_json(&ids)}))
+            {
+                app.ui.status = e.to_string();
             }
         }
     }

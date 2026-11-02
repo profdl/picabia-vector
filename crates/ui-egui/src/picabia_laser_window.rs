@@ -12,6 +12,7 @@
 //! close this window; closing it with a job running leaves the bar and its Stop.
 
 pub mod job;
+pub mod ladder;
 pub mod ops;
 mod profile;
 pub mod run;
