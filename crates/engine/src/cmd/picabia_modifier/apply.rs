@@ -24,6 +24,10 @@
 //! A stencil row is never baked here: `upTo` stops above it, and it moves onto the group with the
 //! rows after it (it cuts the same copies there).
 //!
+//! Colour rows (`color`) are baked too: each copy gets the shifted colours the renderer draws, as
+//! its own paints (a shifted colour loses its swatch link), and a stack of colour rows alone
+//! applies as a group of one recoloured copy.
+//!
 //! Geometry rows (`resample`, `trim`, `tidy`, `deform`, `displace`, `screen`) are baked too: the copies get the reshaped paths the
 //! renderer draws (`vectorcraft_modifiers::Shaper`), so a stack of geometry rows alone applies as a
 //! group of one reshaped copy.
@@ -150,8 +154,9 @@ fn plan(doc: &Document, id: NodeId, up_to: Option<usize>, budget: &mut usize) ->
         &vectorcraft_modifiers::DocTargets::new(doc, id),
         &vectorcraft_modifiers::Scope::of_doc(doc),
     );
-    // One unmoved copy is the object itself, unless geometry rows reshape it.
-    let unmoved = matches!(out.instances.as_slice(), [one] if one.transform == Affine::IDENTITY) && !out.has_geometry();
+    // One unmoved copy is the object itself, unless geometry rows reshape it or colour rows
+    // recolour it.
+    let unmoved = matches!(out.instances.as_slice(), [one] if one.transform == Affine::IDENTITY) && !out.has_geometry() && !out.has_colour();
     if out.instances.is_empty() || unmoved {
         return Ok(None);
     }
@@ -204,6 +209,12 @@ fn bake(d: &mut Document, plan: &Plan) -> Result<(Node, Vec<NodeId>, Vec<String>
     let mut shaper = vectorcraft_modifiers::Shaper::new(&plan.out);
     let mut shaped = node.clone();
     shaper.source(&mut shaped);
+    // Colour rows recolour each copy as the renderer draws it: the shifted colours become the
+    // copies' own paints.
+    let recolourer = plan.out.has_colour().then(|| vectorcraft_render::picabia::colour::Recolourer::new(d));
+    if recolourer.is_some() && vectorcraft_render::picabia::colour::has_pattern(&shaped) {
+        shaper.notes.push(vectorcraft_render::picabia::colour::PATTERN_NOTE.to_string());
+    }
     let mut kids = Vec::with_capacity(plan.copies.len());
     for (k, t) in plan.copies.iter().enumerate() {
         let mut c = d.reid(&shaped);
@@ -213,6 +224,9 @@ fn bake(d: &mut Document, plan: &Plan) -> Result<(Node, Vec<NodeId>, Vec<String>
             super::super::object::transform_node(&mut c, *t, sc, true);
         }
         shaper.copy_at(&mut c, k);
+        if let Some(r) = &recolourer {
+            vectorcraft_render::picabia::colour::recolour(r, &mut c, plan.out.colour(k));
+        }
         vectorcraft_modifiers::set_node_source(&mut c, None);
         if let Some(name) = &node.name {
             c.name = Some(format!("{name} {}", k + 1));

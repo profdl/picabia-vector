@@ -695,3 +695,178 @@ fn a_screen_draws_dots_inside_the_outline_as_the_laser_reads_them() {
     assert_eq!(a.children().unwrap()[0].path_data(), copies[0].path_data(), "the laser reads what is drawn");
     assert!(notes(&d, n).is_empty());
 }
+
+// ---------- PIC32.2: the Color row ----------
+
+fn colour_stack(count: u32, row: &str) -> String {
+    format!(r#"{{"v":1,"stack":[{{"id":"a","kind":"linearArray","count":{count},"offsetX":40}},{{"id":"c","kind":"color",{row}}}]}}"#)
+}
+
+/// The fill colour of each copy of `n`'s art.
+fn copy_fills(d: &Document, n: &Node) -> Vec<Paint> {
+    let a = art(d, n).expect("drawn as copies");
+    a.children()
+        .unwrap()
+        .iter()
+        .map(|c| match c.appearance.items.first() {
+            Some(vectorcraft_doc::AppearanceItem::Fill(f)) => f.paint.clone(),
+            _ => Paint::None,
+        })
+        .collect()
+}
+
+fn rgb8(p: &Paint) -> [u8; 3] {
+    let Paint::Solid { color, .. } = p else { panic!("{p:?}") };
+    let [r, g, b, _] = color.to_rgba8(1.0);
+    [r, g, b]
+}
+
+#[test]
+fn a_colour_row_recolours_each_copy_along_the_ramp() {
+    let (mut d, r) = doc();
+    set_stack(&mut d, r, Some(&colour_stack(3, r#""hue":50,"chroma":0,"lightness":0"#)));
+    let n = d.node(r).unwrap();
+    let fills = copy_fills(&d, n);
+    assert_eq!(rgb8(&fills[0]), [255, 0, 0], "copy 0 keeps its colour");
+    let want = |h: f64| {
+        let [r, g, b] = vectorcraft_color::oklch_shift::shift_srgb([1.0, 0.0, 0.0], vectorcraft_color::oklch_shift::OklchShift::new(h, 0.0, 0.0));
+        [r, g, b].map(|v| (v * 255.0).round() as u8)
+    };
+    assert_eq!(rgb8(&fills[1]), want(25.0));
+    assert_eq!(rgb8(&fills[2]), want(50.0));
+    // Drawn as recoloured.
+    let pix = render(&d, Rect::new(0.0, 0.0, 140.0, 40.0));
+    assert_eq!(px(&pix, 20, 20), RED);
+    let [r2, g2, b2] = want(50.0);
+    assert_eq!(px(&pix, 100, 20), [r2, g2, b2, 255]);
+    // The art cache follows a changed shift.
+    set_stack(&mut d, r, Some(&colour_stack(3, r#""hue":-50,"chroma":0,"lightness":0"#)));
+    let fills = copy_fills(&d, d.node(r).unwrap());
+    assert_eq!(rgb8(&fills[2]), want(-50.0));
+}
+
+#[test]
+fn a_colour_row_alone_makes_a_change() {
+    let (mut d, r) = doc();
+    set_stack(&mut d, r, Some(r#"{"v":1,"stack":[{"id":"c","kind":"color","hue":0,"chroma":0,"lightness":40}]}"#));
+    let n = d.node(r).unwrap();
+    assert!(draws_copies(&d, n), "one unmoved copy, recoloured, is still art");
+    let pix = render(&d, Rect::new(0.0, 0.0, 40.0, 40.0));
+    let p = px(&pix, 20, 20);
+    assert_ne!(p, RED);
+    assert!(p[1] > 100 && p[2] > 100, "lighter: {p:?}");
+    // A zero shift: still one copy, the same colour, bit for bit.
+    set_stack(&mut d, r, Some(r#"{"v":1,"stack":[{"id":"c","kind":"color","hue":0,"chroma":0,"lightness":0}]}"#));
+    let fills = copy_fills(&d, d.node(r).unwrap());
+    assert_eq!(fills[0], Paint::solid(Color::rgb(1.0, 0.0, 0.0)));
+}
+
+fn styled(d: &mut Document, fill: Paint, stroke: Paint) -> NodeId {
+    let l = d.layers[0].id;
+    let n = Node::path(d.alloc_id(), shapes::rectangle(Rect::new(10.0, 10.0, 30.0, 30.0)), Appearance::basic(fill, stroke, 2.0));
+    d.insert(Some(l), 0, n).unwrap()
+}
+
+fn stroke_of(n: &Node) -> Paint {
+    n.appearance
+        .items
+        .iter()
+        .find_map(|i| match i {
+            vectorcraft_doc::AppearanceItem::Stroke(s) => Some(s.paint.clone()),
+            _ => None,
+        })
+        .unwrap()
+}
+
+#[test]
+fn strokes_follow_take_their_own_or_keep_their_colour() {
+    let mut d = Document::new(400.0, 100.0);
+    let r = styled(&mut d, Paint::solid(Color::rgb(1.0, 0.0, 0.0)), Paint::solid(Color::rgb(0.0, 0.0, 1.0)));
+    let last_stroke = |d: &Document| stroke_of(&art(d, d.node(r).unwrap()).unwrap().children().unwrap()[1]);
+    set_stack(&mut d, r, Some(&colour_stack(2, r#""hue":30"#)));
+    assert_ne!(last_stroke(&d), Paint::solid(Color::rgb(0.0, 0.0, 1.0)), "same: the fill's shift");
+    set_stack(&mut d, r, Some(&colour_stack(2, r#""hue":30,"stroke":"none""#)));
+    assert_eq!(last_stroke(&d), Paint::solid(Color::rgb(0.0, 0.0, 1.0)), "none: kept");
+    set_stack(&mut d, r, Some(&colour_stack(2, r#""hue":30,"stroke":"own","strokeLightness":50"#)));
+    let a = art(&d, d.node(r).unwrap()).unwrap();
+    let c = &a.children().unwrap()[1];
+    let Paint::Solid { color, .. } = stroke_of(c) else { panic!() };
+    assert!(vectorcraft_color::libraries::to_oklab(&color)[0] > 0.8, "own: lighter blue");
+    assert_ne!(copy_fills(&d, d.node(r).unwrap())[1], Paint::solid(Color::rgb(1.0, 0.0, 0.0)));
+}
+
+#[test]
+fn colour_models_swatch_links_registration_and_patterns() {
+    let mut d = Document::new(400.0, 100.0);
+    // A CMYK fill stays CMYK; a linked colour loses its link once shifted.
+    let linked = Paint::Solid { color: Color::cmyk(0.0, 1.0, 1.0, 0.0), swatch: Some("Brand".into()), tint: 1.0 };
+    let r = styled(&mut d, linked.clone(), Paint::registration());
+    set_stack(&mut d, r, Some(&colour_stack(2, r#""hue":40"#)));
+    let fills = copy_fills(&d, d.node(r).unwrap());
+    assert_eq!(fills[0], linked, "a zero shift keeps the link");
+    let Paint::Solid { color, swatch, .. } = &fills[1] else { panic!() };
+    assert!(matches!(color, Color::Cmyk { .. }) && swatch.is_none(), "{:?}", fills[1]);
+    let a = art(&d, d.node(r).unwrap()).unwrap();
+    assert!(stroke_of(&a.children().unwrap()[1]).is_registration(), "Registration is left alone");
+    // A Gray that gains chroma becomes RGB (the document's mode); a lightness shift keeps it Gray.
+    let g = styled(&mut d, Paint::solid(Color::gray(0.5)), Paint::None);
+    set_stack(&mut d, g, Some(&colour_stack(2, r#""hue":40,"chroma":0,"lightness":0"#)));
+    assert!(matches!(copy_fills(&d, d.node(g).unwrap())[1], Paint::Solid { color: Color::Rgb { .. }, .. }));
+    set_stack(&mut d, g, Some(&colour_stack(2, r#""hue":0,"chroma":0,"lightness":20"#)));
+    assert!(matches!(copy_fills(&d, d.node(g).unwrap())[1], Paint::Solid { color: Color::Gray { .. }, .. }));
+    // Gradient stops shift, the gradient swatch link goes.
+    let stops = vec![
+        vectorcraft_color::GradientStop::new(0.0, Color::rgb(1.0, 0.0, 0.0)),
+        vectorcraft_color::GradientStop::new(1.0, Color::rgb(0.0, 0.0, 1.0)),
+    ];
+    let mut gp = vectorcraft_color::GradientPaint::new(vectorcraft_color::Gradient::new(vectorcraft_color::GradientKind::Linear, stops));
+    gp.swatch = Some("Blend".into());
+    let gr = styled(&mut d, Paint::Gradient(Box::new(gp)), Paint::None);
+    set_stack(&mut d, gr, Some(&colour_stack(2, r#""hue":40"#)));
+    let Paint::Gradient(g1) = &copy_fills(&d, d.node(gr).unwrap())[1] else { panic!() };
+    assert!(g1.swatch.is_none());
+    assert_ne!(g1.gradient.stops[0].color, Color::rgb(1.0, 0.0, 0.0));
+    // A pattern fill keeps its tiles, with a note.
+    let pt = styled(&mut d, Paint::Pattern { pattern: "Dots".into(), xf: vectorcraft_geom::Affine::IDENTITY }, Paint::None);
+    set_stack(&mut d, pt, Some(&colour_stack(2, r#""hue":40"#)));
+    let n = d.node(pt).unwrap();
+    assert!(matches!(copy_fills(&d, n)[1], Paint::Pattern { .. }));
+    assert!(notes(&d, n).iter().any(|s| s == colour::PATTERN_NOTE), "{:?}", notes(&d, n));
+}
+
+#[test]
+fn group_members_share_their_copys_shift() {
+    let mut d = Document::new(400.0, 100.0);
+    let l = d.layers[0].id;
+    let a = red_rect(&mut d, Rect::new(10.0, 10.0, 20.0, 20.0));
+    let b = red_rect(&mut d, Rect::new(20.0, 10.0, 30.0, 20.0));
+    let g = Node::group(d.alloc_id(), vec![Arc::new(a), Arc::new(b)]);
+    let gid = d.insert(Some(l), 0, g).unwrap();
+    set_stack(&mut d, gid, Some(&colour_stack(2, r#""hue":40"#)));
+    let art = art(&d, d.node(gid).unwrap()).unwrap();
+    let copy = &art.children().unwrap()[1];
+    let fills: Vec<Paint> = copy
+        .children()
+        .unwrap()
+        .iter()
+        .map(|m| match m.appearance.items.first() {
+            Some(vectorcraft_doc::AppearanceItem::Fill(f)) => f.paint.clone(),
+            _ => Paint::None,
+        })
+        .collect();
+    assert_eq!(fills[0], fills[1]);
+    assert_ne!(fills[0], Paint::solid(Color::rgb(1.0, 0.0, 0.0)));
+}
+
+#[test]
+fn recolouring_ten_thousand_copies_stays_fast() {
+    let (mut d, r) = doc();
+    let src = r#"{"v":1,"stack":[{"id":"a","kind":"gridArray","rows":100,"cols":100,"gapX":3,"gapY":3},{"id":"c","kind":"color","hue":100,"jitterLightness":5}]}"#;
+    set_stack(&mut d, r, Some(src));
+    let t = std::time::Instant::now();
+    let a = art(&d, d.node(r).unwrap()).unwrap();
+    assert_eq!(a.children().unwrap().len(), 10_000);
+    // Generous for debug builds and loaded machines; `vectorcraft-cli perf` holds the release budget.
+    // About 25 ms in the test profile; generous for loaded machines.
+    assert!(t.elapsed() < std::time::Duration::from_secs(5), "{:?}", t.elapsed());
+}

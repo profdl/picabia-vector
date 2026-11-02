@@ -250,6 +250,14 @@ Points the spec left open, settled as the implementing session judged best (PIC3
   it), counted and reported like every per-copy expression's failures.
 - **A Color row breaks the stencil's lattice** (`Output::repeat` is `None`, like Transform Each
   and Randomize): copies in one tile no longer match the next.
+- **Spot colours** are the colours linked to one of the document's spot swatches; a Gray "gains
+  chroma" when its shifted RGB channels differ by more than 1e-4 (PIC32.2).
+- **Two passes per row** when the stroke's shift differs from the fill's (`recolor_node` with
+  `Reach { fill }`, then `Reach { stroke }`); one pass when they are the same. Shifted colours are
+  cached per art by the colour's exact bits, the shift and whether it is a spot colour: building
+  the art of 10 000 recoloured copies takes about 25 ms in the test profile.
+- **Patterns** keep their tiles; the note "pattern fills keep their colours" is one of the
+  object's art notes (shown under the rows, and in `modifier.apply`'s warnings).
 - **Jitter draws** are SplitMix64 of `(seed << 32) ^ index × 0xD6E8FEB86659FD93`, mixed again with
   `(channel + 1) × 0x9E3779B97F4A7C15` (channels: fill hue, chroma, lightness = 0, 1, 2; stroke
   hue, chroma, lightness = 3, 4, 5).
