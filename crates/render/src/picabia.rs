@@ -686,10 +686,16 @@ fn bake_tree(doc: &Document, out: &mut Document, n: &Node, depth: usize) -> Opti
 /// and after. Looks only into the containers that hold such objects ([`subtree_flags`]): nothing
 /// when the document has none.
 pub(crate) fn dependents(old: &Document, new: &Document) -> Option<Rect> {
+    let (os, ns) = (old.symbol_boxes(), new.symbol_boxes());
+    // A bound object inside a symbol's art draws in every instance: when the parameters it reads
+    // change, the layers are drawn again (rare: symbols with bound stacks).
+    if symbols_read_changed(old, new) {
+        let all = |d: &Document, s: &SymbolBoxes| d.layers.iter().filter_map(|l| crate::brush_fx::cull_bounds(s, l)).reduce(|a, b| a.union(b));
+        return vectorcraft_geom::union_opt(all(new, &ns), all(old, &os));
+    }
     if !doc_flags(new).targets {
         return None;
     }
-    let (os, ns) = (old.symbol_boxes(), new.symbol_boxes());
     let mut area: Option<Rect> = None;
     let mut visit = |n: &Node| {
         if !has_targets(n) {
@@ -723,6 +729,28 @@ pub(crate) fn dependents(old: &Document, new: &Document) -> Option<Rect> {
         walk(l, 0, &mut visit);
     }
     area
+}
+
+/// Whether a bound object in a symbol's art reads a parameter whose value differs between `old`
+/// and `new`. Nothing to look at when neither the parameters nor the variables changed.
+fn symbols_read_changed(old: &Document, new: &Document) -> bool {
+    if new.symbols.is_empty()
+        || (vectorcraft_doc::Shared::ptr_eq(&old.unknown, &new.unknown) && vectorcraft_doc::Shared::ptr_eq(&old.variables, &new.variables))
+    {
+        return false;
+    }
+    let mut changed = false;
+    for s in &new.symbols {
+        s.art.walk(&mut |n: &Node| {
+            if !changed && vectorcraft_modifiers::has_bindings(n) {
+                changed = vectorcraft_modifiers::bound_key(old, n) != vectorcraft_modifiers::bound_key(new, n);
+            }
+        });
+        if changed {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]

@@ -6,7 +6,9 @@
 //! lives in the row, so it follows the row and goes with it. See `docs/picabia/parameters.md`.
 
 use serde_json::{Map, Value, json};
-use vectorcraft_doc::{Document, NodeId};
+use std::sync::Arc;
+
+use vectorcraft_doc::{Document, Node, NodeId};
 use vectorcraft_modifiers::{Binding, Parameter, Parameters, Scope};
 
 use super::{edit, pick};
@@ -104,7 +106,8 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     let name = name_param(CMD, p)?.to_string();
     let rename = text_param(p, "rename", CMD)?.map(|r| r.trim().to_string());
     let doc = &s.doc()?.doc;
-    let mut params = Parameters::of_doc(doc);
+    let before = Parameters::of_doc(doc);
+    let mut params = before.clone();
     let param = params.get_mut(&name).ok_or_else(|| bad(CMD, format!("no parameter named `{name}`")))?;
     param.set(&props_without(p, &["name", "rename"])).map_err(|e| bad(CMD, e))?;
     let old = param.name.clone();
@@ -118,67 +121,154 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         }
         _ => None,
     };
-    // The objects whose bindings read the old name follow the rename.
+    // The objects whose bindings read the old name follow the rename (symbols' art too).
     let rewrites = match &renamed {
-        Some((from, to)) => renamed_stacks(doc, from, to).map_err(|e| bad(CMD, e))?,
-        None => Vec::new(),
+        Some((from, to)) => Rewrites::of(doc, from, to).map_err(|e| bad(CMD, e))?,
+        None => Rewrites::default(),
     };
+    // Bindings that already read the new name (left dangling by an earlier removal) take it too.
+    let warning = renamed.as_ref().and_then(|(from, to)| {
+        let readers = objects_reading(doc, from);
+        let dangling: Vec<u64> = objects_reading(doc, to).into_iter().filter(|id| !readers.contains(id)).map(|i| i.0).collect();
+        (!dangling.is_empty()).then(|| format!("objects {dangling:?} already read `{to}` and now take this parameter's value"))
+    });
     let out = params.get(renamed.as_ref().map_or(old.as_str(), |(_, to)| to.as_str())).map(Parameter::to_value).unwrap_or(Value::Null);
+    // Nothing changes: no undo step.
+    if params == before {
+        return Ok(json!({"parameter": out}));
+    }
     s.edit("Set Parameter", |doc, _| {
         params.store(doc);
-        for (id, src) in rewrites {
+        rewrites.apply(doc);
+        Ok(())
+    })?;
+    let mut v = json!({"parameter": out});
+    if let Some(w) = warning {
+        v["warning"] = json!(w);
+    }
+    Ok(v)
+}
+
+/// Whether `n`'s bindings read parameter `name` (any case).
+fn reads(n: &Node, name: &str) -> bool {
+    matches!(vectorcraft_modifiers::node_stack(n), Some(Ok(stack)) if stack.modifiers.iter().any(|m| m.bind.values().any(|b| b.reads(name))))
+}
+
+/// `n`'s stack source with parameter `from` read as `to`; `failed` says when an expression would
+/// get too long.
+fn renamed_source(n: &Node, from: &str, to: &str, failed: &mut Option<String>) -> Option<String> {
+    let Some(Ok(stack)) = vectorcraft_modifiers::node_stack(n) else { return None };
+    let mut stack = (*stack).clone();
+    for m in &mut stack.modifiers {
+        for b in m.bind.values_mut() {
+            if let Some(r) = b.renamed(from, to) {
+                if matches!(&r, Binding::Expr(e) if e.len() > vectorcraft_modifiers::expr::MAX_EXPR_LEN) {
+                    *failed = Some(format!(
+                        "renaming would make an expression of object {} longer than {} characters",
+                        n.id.0,
+                        vectorcraft_modifiers::expr::MAX_EXPR_LEN
+                    ));
+                }
+                *b = r;
+            }
+        }
+    }
+    Some(vectorcraft_modifiers::to_json(&stack))
+}
+
+/// A rename's rewrites: the objects in the layers (by id) and the symbols whose art reads it.
+#[derive(Default)]
+struct Rewrites {
+    objects: Vec<(NodeId, String)>,
+    symbols: Vec<usize>,
+    from: String,
+    to: String,
+}
+
+impl Rewrites {
+    /// Refused when a rewritten expression would be too long.
+    fn of(doc: &Document, from: &str, to: &str) -> std::result::Result<Rewrites, String> {
+        let mut failed = None;
+        let mut objects = Vec::new();
+        doc.walk(|n| {
+            if reads(n, from)
+                && let Some(src) = renamed_source(n, from, to, &mut failed)
+            {
+                objects.push((n.id, src));
+            }
+        });
+        let mut symbols = Vec::new();
+        for (k, sym) in doc.symbols.iter().enumerate() {
+            let mut hit = false;
+            sym.art.walk(&mut |n: &Node| {
+                if reads(n, from) {
+                    hit = true;
+                    // Only the length check: the art is rewritten in place by `apply`.
+                    let _ = renamed_source(n, from, to, &mut failed);
+                }
+            });
+            if hit {
+                symbols.push(k);
+            }
+        }
+        match failed {
+            Some(e) => Err(e),
+            None => Ok(Rewrites { objects, symbols, from: from.to_string(), to: to.to_string() }),
+        }
+    }
+
+    fn apply(self, doc: &mut Document) {
+        for (id, src) in self.objects {
             if let Some(n) = doc.node_mut(id) {
                 vectorcraft_modifiers::set_node_source(n, Some(src));
             }
         }
-        Ok(())
-    })?;
-    Ok(json!({"parameter": out}))
-}
-
-/// Every object of `doc` whose bindings read parameter `from`, with its stack source rewritten to
-/// read `to`. Refused when a rewritten expression would be too long.
-fn renamed_stacks(doc: &Document, from: &str, to: &str) -> std::result::Result<Vec<(NodeId, String)>, String> {
-    let mut out = Vec::new();
-    let mut failed = None;
-    doc.walk(|n| {
-        let Some(Ok(stack)) = vectorcraft_modifiers::node_stack(n) else { return };
-        if !stack.modifiers.iter().any(|m| m.bind.values().any(|b| b.reads(from))) {
-            return;
-        }
-        let mut stack = (*stack).clone();
-        for m in &mut stack.modifiers {
-            for b in m.bind.values_mut() {
-                if let Some(r) = b.renamed(from, to) {
-                    if matches!(&r, Binding::Expr(e) if e.len() > vectorcraft_modifiers::expr::MAX_EXPR_LEN) {
-                        failed = Some(format!(
-                            "renaming would make an expression of object {} longer than {} characters",
-                            n.id.0,
-                            vectorcraft_modifiers::expr::MAX_EXPR_LEN
-                        ));
-                    }
-                    *b = r;
-                }
+        for k in self.symbols {
+            if let Some(sym) = doc.symbols.get_mut(k) {
+                rename_tree(&mut sym.art, &self.from, &self.to, 0);
             }
         }
-        out.push((n.id, vectorcraft_modifiers::to_json(&stack)));
-    });
-    match failed {
-        Some(e) => Err(e),
-        None => Ok(out),
     }
 }
 
-/// The objects of `doc` whose bindings read parameter `name` (any case).
+/// Rewrite every stack in `a` that reads `from` to read `to` (copying only what changes).
+fn rename_tree(a: &mut Arc<Node>, from: &str, to: &str, depth: usize) {
+    if depth > vectorcraft_doc::MAX_DEPTH {
+        return;
+    }
+    let mut any = false;
+    a.walk(&mut |n: &Node| any |= reads(n, from));
+    if !any {
+        return;
+    }
+    let n = Arc::make_mut(a);
+    if reads(n, from) {
+        let mut failed = None;
+        if let Some(src) = renamed_source(n, from, to, &mut failed) {
+            vectorcraft_modifiers::set_node_source(n, Some(src));
+        }
+    }
+    for c in n.children_mut().into_iter().flatten() {
+        rename_tree(c, from, to, depth + 1);
+    }
+}
+
+/// The objects of `doc` whose bindings read parameter `name` (any case): in the layers and in the
+/// symbols' art (whose instances draw them with the document's parameters).
 pub(crate) fn objects_reading(doc: &Document, name: &str) -> Vec<NodeId> {
     let mut out = Vec::new();
     doc.walk(|n| {
-        if let Some(Ok(stack)) = vectorcraft_modifiers::node_stack(n)
-            && stack.modifiers.iter().any(|m| m.bind.values().any(|b| b.reads(name)))
-        {
+        if reads(n, name) {
             out.push(n.id);
         }
     });
+    for sym in &doc.symbols {
+        sym.art.walk(&mut |n: &Node| {
+            if reads(n, name) {
+                out.push(n.id);
+            }
+        });
+    }
     out
 }
 

@@ -174,7 +174,7 @@ fn popover(ui: &mut Ui, c: &Chip) -> Option<ChipAction> {
             _ => "",
         };
         if let Some(name) = widgets::dropdown_names(ui, c.id.with("param"), current, &names, 200.0).and_then(|i| names.get(i))
-            && *name != current
+            && !name.eq_ignore_ascii_case(current)
         {
             action = Some(ChipAction::Bind(Binding::Param((*name).to_string())));
         }

@@ -24,10 +24,29 @@
 use std::collections::BTreeMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
+use std::cell::RefCell;
+use std::sync::Arc;
+
 use serde_json::{Map, Value, json};
-use vectorcraft_doc::{DataValue, Document};
+use vectorcraft_doc::{DataValue, Document, Shared};
 
 use crate::expr::Names;
+
+/// The scopes kept ([`Scope::of_doc`]): a few documents (or undo versions) at once.
+const KEPT_SCOPES: usize = 8;
+
+type KeptScope = (Shared<Map<String, Value>>, Shared<vectorcraft_doc::Variables>, Arc<Scope>);
+
+thread_local! {
+    static SCOPES: RefCell<Vec<KeptScope>> = const { RefCell::new(Vec::new()) };
+    /// Scopes built on this thread (a test reads its own thread's count).
+    static SCOPE_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many scopes [`Scope::of_doc`] has built on this thread (not found kept), for tests.
+pub fn scope_builds() -> usize {
+    SCOPE_BUILDS.with(std::cell::Cell::get)
+}
 
 /// The plug-in data id parameters are kept under.
 pub const PARAMS_ID: &str = "picabia.parameters";
@@ -363,8 +382,28 @@ impl Scope {
         Scope { values, clock: 0.0 }
     }
 
-    /// The document's parameters against its active data set.
-    pub fn of_doc(doc: &Document) -> Scope {
+    /// The document's parameters against its active data set, built once per version of the
+    /// document's plug-in data and variables (both copy-on-write: an edit that changes neither
+    /// keeps them, so every bound object of a frame shares one scope). The few kept hold clones of
+    /// what they were built from, so a freed version's address is never mistaken for a new one.
+    /// Kept per thread (the UI thread draws; stencil workers keep their own).
+    pub fn of_doc(doc: &Document) -> Arc<Scope> {
+        SCOPES.with(|kept| {
+            let mut kept = kept.borrow_mut();
+            if let Some((_, _, s)) = kept.iter().find(|(u, v, _)| Shared::ptr_eq(u, &doc.unknown) && Shared::ptr_eq(v, &doc.variables)) {
+                return s.clone();
+            }
+            let s = Arc::new(Scope::build(doc));
+            if kept.len() >= KEPT_SCOPES {
+                kept.remove(0);
+            }
+            kept.push((doc.unknown.clone(), doc.variables.clone(), s.clone()));
+            s
+        })
+    }
+
+    fn build(doc: &Document) -> Scope {
+        SCOPE_BUILDS.with(|c| c.set(c.get().saturating_add(1)));
         let params = Parameters::of_doc(doc);
         if params.list.is_empty() {
             return Scope::default();

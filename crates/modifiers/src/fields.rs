@@ -80,6 +80,7 @@ const DISPLACE: &[NumberField] = &[
     w("seed", 0.0, 999_999.0),
     f("progressiveAmount", 0.0, 1.0),
 ];
+const SCREEN: &[NumberField] = &[f("lpi", 1.0, 300.0), f("angle", -360.0, 360.0), w("quality", 4.0, 64.0), f("amount", 0.0, 100.0)];
 /// The stencil settings' number fields (`tieAngle`, optional, can't be bound).
 const STENCIL: &[NumberField] = &[
     f("threshold", 0.0, 1.0),
@@ -115,6 +116,7 @@ pub fn number_fields(kind: &str) -> &'static [NumberField] {
         "tidy" => TIDY,
         "deform" => DEFORM,
         "displace" => DISPLACE,
+        "screen" => SCREEN,
         "stencil" => STENCIL,
         _ => &[],
     }

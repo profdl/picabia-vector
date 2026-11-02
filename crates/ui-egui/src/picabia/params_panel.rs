@@ -23,7 +23,7 @@ const VALUE_W: f32 = 56.0;
 /// What the section shows, read from the document once per frame.
 struct Snapshot {
     params: Parameters,
-    scope: Scope,
+    scope: std::sync::Arc<Scope>,
     variables: Vec<String>,
 }
 
@@ -34,6 +34,18 @@ fn snapshot(app: &VectorcraftApp) -> Option<Snapshot> {
         scope: Scope::of_doc(&st.doc),
         variables: st.doc.variables.variables.iter().map(|v| v.name.clone()).collect(),
     })
+}
+
+/// Run `cmd`; a refusal (a rename to a taken name, a value out of range) goes to the status bar.
+fn run(app: &mut VectorcraftApp, cmd: &str, params: serde_json::Value) {
+    match app.run(cmd, params) {
+        Ok(v) => {
+            if let Some(w) = v.get("warning").and_then(serde_json::Value::as_str) {
+                app.ui.status = w.to_string();
+            }
+        }
+        Err(e) => app.ui.status = e.to_string(),
+    }
 }
 
 /// A name `param.add` will take: `param1`, `param2`… (the first free one).
@@ -74,7 +86,7 @@ pub fn section(app: &mut VectorcraftApp, ui: &mut Ui) {
             if let Some(new) = widgets::text_field_named(ui, ("pc-param-name", &name), Some(tl!("Parameter name")), Some(&name), NAME_W, 1)
                 && !new.is_empty()
             {
-                app.run("param.set", json!({"name": name, "rename": new})).ok();
+                run(app, "param.set", json!({"name": name, "rename": new}));
             }
             match &p.kind {
                 ParamKind::Number { value, min, max, step } => {
@@ -109,7 +121,7 @@ pub fn section(app: &mut VectorcraftApp, ui: &mut Ui) {
                         })
                         .inner;
                     if let Some(n) = typed.filter(|n| n.is_finite()) {
-                        app.run("param.set", json!({"name": name, "value": n.clamp(*min, *max)})).ok();
+                        run(app, "param.set", json!({"name": name, "value": n.clamp(*min, *max)}));
                     }
                 }
                 ParamKind::Text { value } => {
@@ -119,15 +131,15 @@ pub fn section(app: &mut VectorcraftApp, ui: &mut Ui) {
                     };
                     let w = (ui.available_width() - 30.0).max(60.0);
                     let typed = ui
-                        .add_enabled_ui(!from_data, |ui| widgets::text_field_named(ui, ("pc-param-text", &name), Some(&name), Some(&shown), w, 1))
+                        .add_enabled_ui(!from_data, |ui| widgets::exact_text_field_named(ui, ("pc-param-text", &name), Some(&name), &shown, w))
                         .inner;
                     if let Some(s) = typed {
-                        app.run("param.set", json!({"name": name, "value": s})).ok();
+                        run(app, "param.set", json!({"name": name, "value": s}));
                     }
                 }
             }
             if widgets::icon_button(ui, "trash-2", tl!("Remove Parameter"), false, 22.0).clicked() {
-                app.run("param.remove", json!({"name": name})).ok();
+                run(app, "param.remove", json!({"name": name}));
             }
         });
         // Its data source: a VectorCraft variable whose value in the active data set it takes.
@@ -141,7 +153,7 @@ pub fn section(app: &mut VectorcraftApp, ui: &mut Ui) {
                 && labels.get(k).is_some_and(|l| *l != current)
             {
                 let source = if k == 0 { serde_json::Value::Null } else { json!(labels.get(k)) };
-                app.run("param.set", json!({"name": name, "source": source})).ok();
+                run(app, "param.set", json!({"name": name, "source": source}));
             }
             if from_data {
                 ui.label(egui::RichText::new(tl!("from the data set")).size(10.5).color(t.text_dim));
@@ -155,10 +167,10 @@ pub fn section(app: &mut VectorcraftApp, ui: &mut Ui) {
     ui.horizontal(|ui| {
         let full = snap.params.list.len() >= vectorcraft_modifiers::params::MAX_PARAMS;
         if ui.add_enabled(!full, egui::Button::new(tl!("+ Number")).min_size(vec2(70.0, 22.0))).clicked() {
-            app.run("param.add", json!({"name": fresh_name(&snap.params), "type": "number", "value": 0})).ok();
+            run(app, "param.add", json!({"name": fresh_name(&snap.params), "type": "number", "value": 0}));
         }
         if ui.add_enabled(!full, egui::Button::new(tl!("+ Text")).min_size(vec2(70.0, 22.0))).clicked() {
-            app.run("param.add", json!({"name": fresh_name(&snap.params), "type": "text"})).ok();
+            run(app, "param.add", json!({"name": fresh_name(&snap.params), "type": "text"}));
         }
     });
 }

@@ -75,7 +75,7 @@ pub struct Row {
     /// parameters for the binding chips (set by [`stencil_section`]).
     pub bound: Vec<vectorcraft_modifiers::BoundField>,
     pub doc_params: vectorcraft_modifiers::Parameters,
-    pub scope: vectorcraft_modifiers::Scope,
+    pub scope: Arc<vectorcraft_modifiers::Scope>,
 }
 
 /// The object's first enabled stencil row (`list` is `modifier.list`'s reply).

@@ -404,3 +404,32 @@ fn junk_bindings_and_expressions_never_panic() {
         }
     }
 }
+
+/// PIC6.3a: every bound object of a frame shares one scope; a parameter edit builds one more.
+#[test]
+fn one_scope_per_document_version() {
+    let (mut d, _) = doc_with_rect();
+    set_params(&mut d, json!([{"name": "copies", "value": 3, "max": 20}]));
+    let layer = d.layers[0].id;
+    let mut ids = vec![];
+    for k in 0..200 {
+        let id = d.alloc_id();
+        let r = Rect::new(f64::from(k), 0.0, f64::from(k) + 5.0, 5.0);
+        d.insert(Some(layer), usize::MAX, Node::path(id, shapes::rectangle(r), Appearance::default_art())).unwrap();
+        set_stack(&mut d, id, json!([{"id": "m1", "kind": "linearArray", "bind": {"count": {"param": "copies"}}}]));
+        ids.push(id);
+    }
+    let frame = |d: &Document, want: usize| {
+        for id in &ids {
+            assert_eq!(evaluate_node_in_doc(d, d.node(*id).unwrap()).unwrap().instances.len(), want);
+            let _ = bound_key(d, d.node(*id).unwrap());
+        }
+    };
+    let before = params::scope_builds();
+    frame(&d, 3);
+    frame(&d, 3);
+    assert_eq!(params::scope_builds() - before, 1, "one scope for two frames of 200 bound objects");
+    set_params(&mut d, json!([{"name": "copies", "value": 4, "max": 20}]));
+    frame(&d, 4);
+    assert_eq!(params::scope_builds() - before, 2, "a parameter edit builds one more");
+}

@@ -104,10 +104,10 @@ pub fn evaluate_node_in_doc(doc: &Document, node: &Node) -> Option<Arc<Output>> 
 }
 
 /// `doc`'s parameters when stack source `src` has bindings (they're read only then).
-fn doc_scope_for(doc: &Document, src: &str) -> Scope {
+fn doc_scope_for(doc: &Document, src: &str) -> std::sync::Arc<Scope> {
     match cache::parsed(src) {
         Ok(s) if s.has_bindings() => Scope::of_doc(doc),
-        _ => Scope::default(),
+        _ => std::sync::Arc::default(),
     }
 }
 

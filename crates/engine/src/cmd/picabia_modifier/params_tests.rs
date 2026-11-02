@@ -21,6 +21,49 @@ fn bound() -> (Session, NodeId) {
     (s, r)
 }
 
+/// PIC6.3a: a slider drag (begin, previews, commit) is one undo step; setting what is already
+/// there is none.
+#[test]
+fn a_drag_is_one_undo_step_and_an_unchanged_set_is_none() {
+    let (mut s, r) = bound();
+    let steps = undo_labels(&s).len();
+    s.begin_interaction("Set Parameter").unwrap();
+    for v in [4, 6, 9, 7] {
+        s.preview("param.set", &json!({"name": "copies", "value": v})).unwrap();
+    }
+    s.commit_interaction().unwrap();
+    assert_eq!(undo_labels(&s).len(), steps + 1);
+    assert_eq!(instances(&mut s, r), 7);
+    ex(&mut s, "edit.undo", json!({}));
+    assert_eq!(instances(&mut s, r), 3, "one undo goes back past the whole drag");
+    ex(&mut s, "param.set", json!({"name": "copies", "value": 3}));
+    ex(&mut s, "param.set", json!({"name": "copies"}));
+    assert_eq!(undo_labels(&s).len(), steps, "no change, no step");
+}
+
+/// PIC6.3a: stacks inside a symbol's art read the document's parameters: a rename rewrites them
+/// and a removal reports them; a rename onto a name dangling bindings read warns.
+#[test]
+fn symbol_art_follows_renames_and_dangling_names_warn() {
+    let (mut s, r) = bound();
+    ex(&mut s, "select.set", json!({"ids": [r.0]}));
+    ex(&mut s, "symbol.new", json!({"name": "Mark"}));
+    let doc = &s.doc().unwrap().doc;
+    let art_id = doc.symbols.iter().find(|x| x.name == "Mark").unwrap().art.id;
+    assert_eq!(super::params::objects_reading(doc, "copies").len(), 1, "the art's object reads it");
+    ex(&mut s, "param.set", json!({"name": "copies", "rename": "count"}));
+    let doc = &s.doc().unwrap().doc;
+    let mut src = vec![];
+    doc.symbols.iter().find(|x| x.name == "Mark").unwrap().art.walk(&mut |n| src.extend(vectorcraft_modifiers::node_source(n).map(str::to_string)));
+    assert!(src.iter().any(|x| x.contains(r#""param":"count""#)), "{src:?} (art {art_id:?})");
+    let removed = ex(&mut s, "param.remove", json!({"name": "count"}));
+    assert_eq!(removed["stillBound"].as_array().unwrap().len(), 1, "{removed}");
+    // A new parameter renamed onto the name the art still reads warns that it now drives it.
+    ex(&mut s, "param.add", json!({"name": "other", "value": 2}));
+    let set = ex(&mut s, "param.set", json!({"name": "other", "rename": "count"}));
+    assert!(set["warning"].as_str().is_some_and(|w| w.contains("already read `count`")), "{set}");
+}
+
 #[test]
 fn parameters_add_set_remove_list_with_undo() {
     let mut s = session();

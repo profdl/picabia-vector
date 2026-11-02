@@ -1,6 +1,6 @@
 # Parameters and bindings (PIC6)
 
-**Status:** 2026-11-01. PIC6.1 to PIC6.3: parameters, field bindings, their commands and their UI.
+**Status:** 2026-11-01. PIC6.1 to PIC6.3a: parameters, field bindings, their commands and their UI.
 This replaces picabia-craft's P6 (FigCraft variable bindings) with the owner's design.
 
 A **parameter** is a named number or text kept with the document. Any **number field** of a
@@ -58,7 +58,9 @@ Every number field of a modifier row has a chip on its right:
 | Filled square (accent) | Bound to an expression |
 | Filled square (warning colour) | The binding fails: the field's own value is used; the tooltip says why |
 
-A bound field shows the value it takes, read-only (or "per copy"). Click the chip, or Tab to it and
+A bound field shows the value it takes, read-only (or "per copy"): to change its own typed value
+(what an expression reads as `value`, and the fallback), unbind it, type, and bind again, or use
+`modifier.set`. Click the chip, or Tab to it and
 press Enter or Space, to open its popover: pick a **parameter**, type an **expression** (checked
 as it is committed; a mistake says where), or **Unbind**. A ramp will join them (it reads "Ramp:
 coming later"; a newer file's ramp is kept and ignored with a warning).
@@ -85,7 +87,9 @@ Bindings are resolved while the stack is evaluated, never written back:
 - results are clamped to the field's range (the panel's) and rounded for whole-number fields;
 - an expression reads `i` and `n` (below), `t` (the **clock**: 0 until Picabia has one), `value`,
   `pi` and parameter names; its syntax and functions are those of [`modifiers.md`](modifiers.md) ›
-  Expressions. Expressions are at most 256 characters and 32 levels deep.
+  Expressions. Expressions are at most 256 characters and 32 levels deep. The trigonometric,
+  `exp`, `ln` and power functions are the platform's maths library, so a native build and the
+  browser build may very rarely differ in the last bit of a result (`rand(k)` is exact everywhere).
 
 **Per copy or once.** `transformEach`'s amounts (`offsetX`, `offsetY`, `rotate`, `scaleX`, `scaleY`)
 and `randomize`'s (`position`, `rotation`, `scale`) run on every final copy, so an expression bound to
@@ -103,7 +107,12 @@ bindings read, so changing a parameter re-evaluates and repaints the objects tha
 others (the renderer treats bound objects as it treats copy-to-shape sources: no caching by the
 object alone, and a parameter change counts in the dirty area). A stencil's cheap key holds every
 parameter value (any change re-gathers; its geometry key spares the compute when the cut is the
-same).
+same). The resolved parameters are built once per version of the document's parameters and
+variables (per thread), so a frame with many bound objects resolves them once.
+
+**Symbols.** A bound object inside a symbol's art reads the document's parameters in every instance.
+A rename rewrites the art's bindings too, `param.remove` counts its objects, and a change of a
+parameter it reads repaints the layers (a symbol's instances aren't tracked one by one).
 
 **Exports bake values.** SVG, PDF, the other vector exports, `modifier.apply` (and Apply Up to Here,
 whose later rows keep their bindings on the new group), the stencil and laser export use the values
@@ -113,6 +122,9 @@ the parameters have now. The native file keeps the bindings and the parameters l
 
 - A field whose binding names a parameter that's removed uses its own value until a parameter of that
   name exists again (`param.remove` reports the objects still reading it; undo brings it back).
+- Renaming a parameter onto a name that dangling bindings still read makes them read it: the reply
+  (and the panel's status bar) warns which objects. A `param.set` that changes nothing records no
+  undo step; a slider drag is one.
 - `modifier.set` on a bound field changes its typed value (what `value` reads and the fallback); the
   binding stays.
 - Pasting into another document carries the bindings but not the parameters: they warn until the
@@ -161,10 +173,9 @@ reach the control channel and MCP through the command registry.
 
 ## Gaps
 
+- A symbol whose art reads a parameter repaints the whole layers, not just its instances, when it changes.
 - No ramps yet (the chip's popover has a disabled placeholder; the format keeps other binding forms).
 - No clock: `t` is 0. Motors, the randomizer and batch export wait for it.
 - Text parameters only drive number fields (as numbers); choices and on/off fields can't be bound.
 - Parameters don't travel with pasted objects to another document.
 - The older per-copy `<field>Expr` params aren't shown in the panel; their `t` keeps its old meaning.
-- A parameter's slider in the Variables panel commits on release; typing in its field commits on
-  Enter.

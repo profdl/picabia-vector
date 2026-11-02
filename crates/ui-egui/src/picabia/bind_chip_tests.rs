@@ -161,8 +161,8 @@ fn the_panels_number_fields_are_the_bindable_ones_with_the_same_ranges() {
         let mut shown = vec![];
         for (key, _, how) in fields(kind) {
             let range = match *how {
-                F::Len(lo, hi) | F::Deg(lo, hi) | F::Pct(lo, hi) | F::Int(lo, hi) | F::Num(lo, hi) => (lo, hi),
-                F::Bool | F::Choice(_) | F::Target => continue,
+                F::Len(lo, hi) | F::Deg(lo, hi) | F::Pct(lo, hi) | F::Int(lo, hi) | F::Num(lo, hi) | F::Percent(lo, hi) => (lo, hi),
+                F::Bool | F::Choice(_) | F::Target | F::Image => continue,
             };
             let spec = vectorcraft_modifiers::number_field(kind, key).unwrap_or_else(|| panic!("{kind}.{key} can't be bound"));
             assert_eq!((spec.min, spec.max), range, "{kind}.{key}");
@@ -228,6 +228,23 @@ fn a_failed_binding_warns_on_its_chip() {
         nodes.iter().map(|n| &n.1).collect::<Vec<_>>()
     );
     assert!(f.texts(&mut app, appearance).iter().any(|s| s == "2"), "the field's own value");
+}
+
+/// PIC6.3a: a refused rename (to a name expressions already use) says why in the status bar.
+#[test]
+fn a_refused_rename_says_why() {
+    let mut f = Frames::new();
+    let (mut app, _) = bound(&f);
+    let field = f.at(&mut app, variables, &|l| l == "Parameter name");
+    f.click(&mut app, field, variables);
+    let select_all = Event::Key { key: egui::Key::A, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND };
+    let enter = Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+    f.run(&mut app, vec![select_all], variables);
+    f.run(&mut app, vec![Event::Text("sin".into())], variables);
+    f.run(&mut app, vec![enter], variables);
+    f.run(&mut app, vec![], variables);
+    assert!(app.ui.status.contains("already means something"), "{:?}", app.ui.status);
+    assert_eq!(app.run("param.list", json!({})).unwrap()["parameters"][0]["name"], json!("copies"));
 }
 
 #[test]
