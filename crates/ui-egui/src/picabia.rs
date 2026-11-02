@@ -6,17 +6,23 @@
 //! Crate, package, binary and file-format names stay VectorCraft's (`.vectorcraft` files, the
 //! `vectorcraft` executable): renaming them would conflict on every upstream merge.
 
+pub mod add_menu;
 pub mod appearance;
 #[cfg(test)]
 mod appearance_tests;
+pub mod badge;
 pub mod bind_chip;
 #[cfg(test)]
 mod bind_chip_tests;
+#[cfg(test)]
+mod discover_tests;
 pub mod menu;
 pub mod params_panel;
 pub mod physics;
 #[cfg(test)]
 mod physics_tests;
+pub mod properties;
+pub mod task_bar;
 
 use egui::{RichText, Ui};
 

@@ -79,6 +79,7 @@ pub fn show(app: &mut VectorcraftApp, ui: &mut Ui) {
     }
     appearance_section(app, ui);
     divider(ui);
+    crate::picabia::properties::section(app, ui); // PICABIA: the Modifiers section (PIC3.4)
     section_header(ui, tl!("Align"));
     ui.horizontal(|ui| {
         super::align::align_buttons(app, ui, 26.0);

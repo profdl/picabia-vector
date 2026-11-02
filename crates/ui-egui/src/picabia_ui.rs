@@ -29,6 +29,11 @@ pub struct PicabiaUi {
     pub stencil_open: bool,
     /// The Appearance panel's physics row is open (`picabia::physics`).
     pub physics_open: bool,
+    /// The Properties panel's Modifiers section is collapsed (`picabia::properties`).
+    pub modifiers_collapsed: bool,
+    /// The Properties panel's Modifiers section is to open and scroll into view on its next frame
+    /// (the canvas badge and the task bar's Show Modifiers ask for it).
+    pub reveal_modifiers: bool,
 }
 
 /// Picabia's UI commands (seam in `menus::run_ui_command`); `None`: not one of them.
@@ -63,10 +68,11 @@ pub fn after_command(app: &mut VectorcraftApp, id: &str, v: &Value) {
 }
 
 /// Everything Picabia draws over the app each frame (seam in `ui_frame`, after the progress
-/// windows): the stencil's canvas markers, the Stencil window, the Laser window (or its bar while
+/// windows): the stencil's canvas markers, the modifier badges by the selection, the Stencil window, the Laser window (or its bar while
 /// connected and closed) and the safety checklist.
 pub fn show(app: &mut VectorcraftApp, ctx: &egui::Context) {
     crate::picabia_stencil_panel::canvas_markers(app, ctx);
+    crate::picabia::badge::show(app, ctx);
     crate::picabia_stencil_panel::window(app, ctx);
     crate::picabia_laser_window::show(app, ctx);
 }

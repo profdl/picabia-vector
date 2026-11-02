@@ -11,6 +11,46 @@ modifier and every copy follows. Paths, compound shapes, text and groups can car
 are drawn, exported and hit-tested as part of their source object: clicking a copy selects the
 source.
 
+## Where to find modifiers
+
+The Appearance panel isn't open in the Essentials workspace, so modifiers are reachable from the
+places that are (PIC3.4):
+
+- **Properties panel ▸ Modifiers.** A section between Appearance and Align, shown whenever objects
+  are selected. Its header shows the number of rows and collapses the section (remembered for the
+  session). Open, it shows the same rows as the Appearance panel (eye, kind and copy count such as
+  "Linear Array ×6", the disclosure that opens the row's fields, the `⋯` menu, the copy count and
+  **Apply**; one "Modifiers: Mixed" row when several selected objects' stacks differ), then
+  **+ Add Modifier**.
+- **The Add Modifier menu** (one builder, `picabia::add_menu`), grouped: **Repeat** (Linear Array,
+  Circular Array, Grid Array, Mirror, Wallpaper, Copy to Shape, Transform Each, Randomize),
+  **Shape** (Resample, Trim, Tidy, Deform, Displace, Screen, and the screen presets Ben-Day Dots
+  and Line Fill) and **Make** (Stencil, Physics ▸ Add Physics). Each entry runs `modifier.add` on
+  the selection, one undo step. The same menu is Add New Effect (`fx`) ▸ Modifiers in the
+  Appearance panel and the Properties panel's `fx` button, and Object ▸ Modifiers lists the same
+  entries in the same groups (separators instead of headings).
+- **The Contextual Task Bar's Modifiers button** (a stack-of-squares glyph, after the bar's labelled
+  buttons and before the Fill chip) opens the Add Modifier menu; when a selected object has
+  modifiers, the menu starts with **Show Modifiers** (opens the Properties panel with the section
+  open and scrolled to), **Apply Modifiers** and **Remove All Modifiers**. The button is left out
+  when the bar would no longer fit the canvas with it.
+- **The canvas badge.** When one to eight selected objects have a stack, each shows a small tag
+  just outside its bounding box's top-right corner (8 points out on the diagonal, clear of the
+  handles): the glyph and the number of rows, tooltip "3 modifiers — click to show". It is drawn
+  in screen points (it doesn't scale with the zoom), with the selection tools only, and only when
+  the task bar may show (not on the home screen, in Presentation Mode, while a 3D revolve is
+  edited, while the Simplify or Smooth slider shows, nor while something is dragged); it gives way
+  to a floating panel or menu over it. A click does what Show Modifiers does: it opens the
+  Properties panel (leaving it open wherever it already shows) with the section open and scrolled
+  into view.
+- **The command palette** finds each kind and preset by name ("Linear Array", "Add Circular
+  Array", "Ben-Day Dots", "Screen", "Stencil", "Simulate Physics"): each kind and preset
+  has a command of its own, `modifier.add.<kind>` / `modifier.add.benDay` / `modifier.add.lineFill`
+  (Object › Modifiers in the palette and the shortcut editor, so a key can be given to one), which is
+  `modifier.add` with that kind filled in (a different `kind` or `preset` is refused; the undo step
+  is named for it, "Add Linear Array"). "Simulate Physics" and "Make Stencil" were already
+  commands of their own.
+
 ## How Picabia differs on VectorCraft
 
 picabia-craft built the stack on FigCraft. On VectorCraft the spec below holds, with these
@@ -27,8 +67,8 @@ differences:
   A copy is the object's geometry with the instance transform applied, document space to document
   space; the identity is the original. The pivot is the centre of the object's geometric bounds.
 - **One list in the Appearance panel.** Picabia's rows are entries in VectorCraft's Appearance
-  panel, in one ordered list with VectorCraft's own effects, built from VectorCraft's widgets (no
-  separate Modifiers section). Evaluation rule: **Picabia rows run in their order, top first**, as
+  panel, in one ordered list with VectorCraft's own effects, built from VectorCraft's widgets (the
+  Properties panel's Modifiers section shows the same rows; see Where to find modifiers). Evaluation rule: **Picabia rows run in their order, top first**, as
   below. A VectorCraft geometry effect **below** a copy row (an array, mirror, wallpaper or copy to
   shape) applies to **each copy**; one **above** it applies to the object **before** it is copied.
   Until the interleaving is built, the simplest correct ordering that keeps this rule is shipped:

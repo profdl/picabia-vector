@@ -254,6 +254,8 @@ pub fn specs() -> Vec<CommandSpec> {
     .into_iter()
     // Parameters and field bindings (PIC6).
     .chain(params::specs())
+    // One command per kind and screen preset, for the palette and shortcuts (PIC3.4).
+    .chain(add_kinds::specs())
     .collect()
 }
 
@@ -356,19 +358,23 @@ pub(super) fn props_of<'a>(cmd: &str, p: &'a Value, required: bool) -> Result<Op
 }
 
 fn add(s: &mut Session, p: &Value) -> Result<Value> {
-    const CMD: &str = "modifier.add";
-    let kind = super::text_param(p, "kind", CMD)?.ok_or_else(|| super::bad(CMD, format!("`kind` required ({KIND_LIST})")))?;
-    let mut template = Modifier::new("", kind).ok_or_else(|| super::bad(CMD, format!("unknown kind `{kind}` (one of {KIND_LIST})")))?;
-    if let Some(name) = super::text_param(p, "preset", CMD)? {
-        template.kind = preset(kind, name).ok_or_else(|| super::bad(CMD, format!("no preset `{name}` for `{kind}` ({})", preset_list(kind))))?;
+    add_with(s, p, "modifier.add", "Add Modifier")
+}
+
+/// `modifier.add` as command `cmd` (its errors name it), recorded as undo step `label`.
+pub(super) fn add_with(s: &mut Session, p: &Value, cmd: &str, label: &str) -> Result<Value> {
+    let kind = super::text_param(p, "kind", cmd)?.ok_or_else(|| super::bad(cmd, format!("`kind` required ({KIND_LIST})")))?;
+    let mut template = Modifier::new("", kind).ok_or_else(|| super::bad(cmd, format!("unknown kind `{kind}` (one of {KIND_LIST})")))?;
+    if let Some(name) = super::text_param(p, "preset", cmd)? {
+        template.kind = preset(kind, name).ok_or_else(|| super::bad(cmd, format!("no preset `{name}` for `{kind}` ({})", preset_list(kind))))?;
     }
-    if let Some(props) = props_of(CMD, p, false)? {
-        template.set_props(props).map_err(|e| super::bad(CMD, e.to_string()))?;
+    if let Some(props) = props_of(cmd, p, false)? {
+        template.set_props(props).map_err(|e| super::bad(cmd, e.to_string()))?;
     }
-    let at = opt_index(CMD, p, "index")?;
+    let at = opt_index(cmd, p, "index")?;
     let mut added = Vec::new();
-    edit(CMD, "Add Modifier", s, p, |stack, id| {
-        let m = stack.insert(at.unwrap_or(usize::MAX), template.clone()).map_err(|e| super::bad(CMD, format!("object {}: {e}", id.0)))?;
+    edit(cmd, label, s, p, |stack, id| {
+        let m = stack.insert(at.unwrap_or(usize::MAX), template.clone()).map_err(|e| super::bad(cmd, format!("object {}: {e}", id.0)))?;
         added.push(json!({"id": id.0, "modifier": m.id}));
         Ok(())
     })?;
@@ -545,6 +551,7 @@ fn remove_all(s: &mut Session, p: &Value) -> Result<Value> {
     ok()
 }
 
+mod add_kinds;
 mod apply;
 mod export;
 mod handles;

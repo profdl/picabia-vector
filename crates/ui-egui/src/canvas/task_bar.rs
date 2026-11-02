@@ -181,6 +181,7 @@ pub(super) fn task_bar(app: &mut VectorcraftApp, ui: &mut Ui, xf: &Xf) {
     let lowest = xf.quad(b).iter().map(|c| c.y).fold(f32::NEG_INFINITY, f32::max);
     let anchor = pos2(xf.to_screen(b.center()).x, lowest);
     let est_w = 150.0 + items.iter().map(|(l, _, _, _)| l.len() as f32 * 7.2 + 44.0).sum::<f32>();
+    let est_w = est_w + crate::picabia::task_bar::est_width(app, ui.ctx()); // PICABIA: the Modifiers button's width (PIC3.4a)
     // Its place under the selection, then where the handle moved it, kept on the canvas (with the
     // bar's size last frame, the estimate before it first shows).
     let under = pos2(anchor.x - est_w / 2.0, anchor.y + 28.0);
@@ -243,6 +244,7 @@ pub(super) fn task_bar(app: &mut VectorcraftApp, ui: &mut Ui, xf: &Xf) {
                     // The selected objects' Fill, Stroke, Recolor Artwork and Lock (a basic shape's
                     // properties instead), left out with the Artboard tool.
                     if !on_artboards {
+                        crate::picabia::task_bar::button(app, ui); // PICABIA: the Modifiers button (PIC3.4)
                         let (r, resp) = ui.allocate_exact_size(vec2(26.0, 30.0), Sense::click());
                         let chip = egui::Rect::from_center_size(r.center(), vec2(16.0, 16.0));
                         widgets::proxy_chip(ui, chip, &fill, fill_mixed, None);
