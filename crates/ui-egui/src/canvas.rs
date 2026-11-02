@@ -829,6 +829,7 @@ fn selection_visuals(
         draw_inside_overlay(app, painter, xf);
         mirror_axis_overlay(app, painter, xf);
         grid_repeat_overlay(app, painter, xf);
+        picabia::modifier_handles(app, painter, xf, view_info); // PICABIA: the selected object's modifier handles
         if app.ui.view.text_threads {
             // Under the tools' overlays: a selected frame's own ports are drawn over its thread's.
             let mut threads = thread_overlays(app, xf.zoom);
