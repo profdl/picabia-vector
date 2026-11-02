@@ -1,15 +1,18 @@
 //! PICABIA: outlines on an object's modifier copies: the hover highlight on every copy, and a
 //! faint outline on a selected object's copies (the selection box stays on the object itself); a
-//! selected stencil's tie bars and repeat cell.
+//! selected stencil's tie bars and repeat cell; the selected object's modifier handles.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
-use egui::Stroke;
+use egui::{Pos2, Stroke, vec2};
 use vectorcraft_doc::{Document, Node};
 use vectorcraft_geom::{Affine, BezPath};
+use vectorcraft_modifiers::Guide;
 
 use super::Xf;
 use super::outline::stroke_path;
+use crate::VectorcraftApp;
+use crate::theme::Tokens;
 
 /// The most copies outlined for one object in a frame (as picabia-craft capped them).
 pub(super) const MAX_OUTLINES: usize = 2_000;
@@ -139,6 +142,79 @@ fn markers_of(sheet: &vectorcraft_engine::picabia_stencil::Sheet) -> Vec<(BezPat
     }
     out
 }
+
+/// Handle radius (screen points), and under the pointer or dragged.
+pub(super) const KNOB: f32 = 4.5;
+const KNOB_HOT: f32 = 6.0;
+/// The most points a guide circle is drawn with.
+const CIRCLE_STEPS: usize = 96;
+
+/// The selected object's modifier handles (the engine decides which rows show them,
+/// `Session::picabia_mod_handles`): dashed guides, round knobs ringed in the selection colour
+/// (greyed when a field they set is bound), larger under the pointer, and the readout of the one
+/// dragged or hovered. Every size is in screen points, so the handles keep their size at any zoom.
+pub(super) fn modifier_handles(app: &VectorcraftApp, p: &egui::Painter, xf: &Xf, view: vectorcraft_engine::ViewInfo) {
+    let Some(v) = app.session.picabia_mod_handles(view) else { return };
+    let t = Tokens::get(p.ctx());
+    let guide = Stroke::new(1.0, t.selection.gamma_multiply(0.8));
+    for g in &v.guides {
+        match g {
+            Guide::Line { from, to } => {
+                let pts = [xf.to_screen(*from), xf.to_screen(*to)];
+                if pts.iter().all(|q| q.is_finite()) {
+                    p.extend(egui::Shape::dashed_line(&pts, guide, 5.0, 4.0));
+                }
+            }
+            Guide::Circle { center, radius } => {
+                let r = radius * xf.zoom;
+                if !(r.is_finite() && r > 0.5) {
+                    continue;
+                }
+                let pts: Vec<Pos2> = (0..=CIRCLE_STEPS)
+                    .map(|k| {
+                        let a = k as f64 / CIRCLE_STEPS as f64 * std::f64::consts::TAU;
+                        xf.to_screen(*center + vectorcraft_geom::Vec2::new(a.cos(), a.sin()) * *radius)
+                    })
+                    .collect();
+                if pts.iter().all(|q| q.is_finite()) {
+                    p.extend(egui::Shape::dashed_line(&pts, guide, 5.0, 4.0));
+                }
+            }
+            Guide::Point(q) => {
+                let c = xf.to_screen(*q);
+                if c.is_finite() {
+                    p.line_segment([c - vec2(4.0, 0.0), c + vec2(4.0, 0.0)], guide);
+                    p.line_segment([c - vec2(0.0, 4.0), c + vec2(0.0, 4.0)], guide);
+                }
+            }
+        }
+    }
+    for h in &v.handles {
+        let c = xf.to_screen(h.at);
+        if !c.is_finite() {
+            continue;
+        }
+        let r = if h.hot { KNOB_HOT } else { KNOB };
+        let (fill, ring) = if h.bound { (t.panel, t.text_disabled) } else { (t.measure_bg, t.selection) };
+        p.circle_filled(c, r, fill);
+        p.circle_stroke(c, r, Stroke::new(2.0, ring));
+    }
+    if let Some((at, text)) = &v.readout {
+        let c = xf.to_screen(*at);
+        if c.is_finite() {
+            let galley = p.layout(text.clone(), egui::FontId::proportional(11.0), t.text, 260.0);
+            let sp = c + vec2(12.0, -12.0 - galley.size().y);
+            let r = egui::Rect::from_min_size(sp, galley.size() + vec2(12.0, 8.0));
+            p.rect_filled(r, egui::CornerRadius::same(3), t.panel);
+            p.rect_stroke(r, egui::CornerRadius::same(3), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+            p.galley(sp + vec2(6.0, 4.0), galley, t.text);
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "picabia_tests.rs"]
+mod handle_tests;
 
 #[cfg(test)]
 mod tests {

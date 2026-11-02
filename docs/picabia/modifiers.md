@@ -2,7 +2,7 @@
 
 > The modifier spec, ported from picabia-craft (`docs/picabia/modifiers.md` there, params as of its
 > P8) and rewritten for VectorCraft. The stack crate (`crates/modifiers`, PIC1.1) follows this page;
-> drawing, the panel rows, Apply and the handles are not ported yet (see [`ROADMAP.md`](ROADMAP.md)).
+> drawing, the panel rows, Apply and the canvas handles have been ported since (see [`ROADMAP.md`](ROADMAP.md)).
 
 A **modifier stack** is a list of live, non-destructive steps attached to an object. The object keeps
 its own geometry; the stack describes how it is repeated, transformed and (with the geometry rows,
@@ -846,28 +846,61 @@ The same language drives **field bindings** ([`parameters.md`](parameters.md)), 
 differences: there `t` is the clock (0 for now) and any other name is a document parameter. A field
 bound with `modifier.bind` ignores its own `<field>Expr`.
 
-## Canvas guides
+## Canvas guides and handles (PIC5.2 to PIC5.4)
 
-Each array shows guides while its layer is selected: linear, the offset line from the first to the
-last copy; circular, the ring and its centre; grid, the outline of the whole lattice; mirror, the
-axis line(s). Transform each and randomize show none.
+With the **Selection tool** and one editable object selected (not locked or hidden, no anchors
+picked on their own), the rows open in the Appearance panel show their handles on the canvas,
+each with its guides (dashed, in the selection colour). A row is open when its settings are shown
+(the disclosure) or it is the row last clicked; several open rows show all their handles. With no
+row open, the **last enabled row that has handles** shows them, as in picabia-craft. Other tools,
+a selection of several objects, and turned-off rows show none.
 
-## Canvas handles
+The handles are round knobs ringed in the selection colour, larger under the pointer, a fixed size
+on screen at any zoom. A press within 7 screen pixels takes the nearest (before the Selection tool
+sees the press, so a knob over the object wins over clicking the object; the bounding box's own
+handles win where they overlap a knob; where two knobs coincide the later row's wins, and within a row the one listed first in the table below, so a ring of radius 0 drags its radius out and a trim window over the whole closed path drags its end). Alt, Cmd and Ctrl presses stay the tool's; a Shift-press on a knob is the knob's (for its Shift constraint), so Shift-click doesn't deselect there. A drag shows a
+readout beside the knob, previews `modifier.set` and is **one undo step** ("Set Modifier"); a drag
+that ends where it began leaves none, and **Esc** puts the params back. A drag whose document is switched, whose object is deleted or whose interaction another command ends (an agent mid-drag) is dropped, its own open preview rolled back. The open rows are kept per document. The handles of one document version, selection, zoom and open rows are built once and shared by the hover, cursor and drawing. The math is in document
+points, so a zoomed or turned view (Rotate View) drags the same values; the cursor shows how the
+knob moves (four-way, a resize arrow turned with the view, or the rotate cursor).
 
-With the Selection tool and one unlocked object selected, the **last enabled modifier that has handles**
-shows them (the Appearance panel's open row lives in the UI, so it doesn't choose). They look and behave
-like VectorCraft's own handles: dots ringed in the selection colour, larger under the pointer, a
-readout beside the dragged one, one undo step per drag ("Set modifier"), Esc cancels, and the
-dragged point snaps as VectorCraft's Smart Guides and snapping do.
+A handle whose field is **bound** to a parameter or an expression ([`parameters.md`](parameters.md))
+sits where the bound value puts it but is drawn greyed, shows the not-allowed cursor, doesn't drag,
+and a press says in the status bar to change it in the Appearance panel. The panel stays the full,
+keyboard-reachable way to set every field; `modifier.handles` lists the handles shown (for agents
+and tests). Knobs that would sit on the bounding box's handles at the default params are placed
+18 screen pixels outside the box instead.
 
-| Modifier | Handle | Drag sets | Shift |
+| Row | Handle | Drag sets | Shift |
 |---|---|---|---|
-| mirror | a knob at the end of each axis line | `offset` | |
-| circularArray | the ring centre (dot inside) | `centerX`, `centerY` (the whole ring moves) | horizontal or vertical only |
+| linearArray | the last copy's centre (count > 1) | `offsetX`, `offsetY` (`count` stays) | 45° steps |
+| circularArray | the ring's centre | `centerX`, `centerY` (the whole ring moves) | one axis |
 | circularArray | a knob on the ring opposite the original | `radius` (the original stays; the ring grows away from it) | |
-| linearArray | the last copy's centre (shown when `count` > 1) | `offsetX`, `offsetY` (`count` stays) | 45° steps |
-| gridArray | the middle of the lattice's right / bottom side (more than one column / row) | `gapX` / `gapY` | both gaps equal |
+| circularArray | a knob just outside the ring where the sweep ends | `sweep` (−360…360; it follows the pointer round, more than half a turn) | 15° steps |
+| gridArray | the left edge of the last column, the top of the last row (more than one) | `gapX` / `gapY` | both gaps equal |
+| mirror | a knob at the end of each axis line | `offset` (the axis moves across) | |
+| wallpaper | the symmetry origin (not p1, which has none) | `originX`, `originY` | one axis |
+| wallpaper | the end of the cell's first side | `cellWidth` | |
+| wallpaper | the end of the second side (oblique, rectangular and centred groups) | `cellHeight`; for p1 and p2 also `angle` | keeps the angle |
+| deform taper | knobs past each end of the axis, at the scale's height | `startScale`, `endScale` | |
+| deform twist | a knob past the end of the axis, turned by half the angle | `angle` (follows the pointer round, past ±360° to ±720°) | 15° steps |
+| deform bend | the bend point on the axis | `bendPoint` | |
+| deform bulge | a knob on the reach, up and to the right of the centre | `radius` | |
+| deform shear | a knob above (beside) the box, slanted with it | `shearX` (`shearY`) | |
+| trim | the window's start and end on the object's first subpath | `start`, `end` (the point of the path nearest the pointer) | |
+| displace | a knob above the object, its height the amplitude | `amplitude` | |
 
+Every value is clamped to its field's range; a drag to a point that isn't finite sets nothing.
+Geometry rows' handles sit on the object itself, also when the row runs on each copy (below a copy
+row): copy 0 is the object.
+
+**Not built** (picabia-craft had none either, or the param doesn't exist): transform each,
+randomize, copy to shape, resample, tidy, screen and the stencil have no handles; the mirror has
+no angle (its `axis` is vertical, horizontal or both, so there is no angle to drag); deform's
+`bendAngle`, `strength` (bulge) and the axis itself (horizontal or vertical) are set in the panel;
+displace's other fields too. Handles don't snap to other objects (picabia-craft's snapped to
+layers' edges and centres), the readout is English and in points whatever the General unit, and
+a Trim handle measures the first subpath only (the row cuts every subpath by the same fractions).
 
 ## Laser: who may do what
 

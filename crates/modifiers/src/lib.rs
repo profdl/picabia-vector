@@ -73,6 +73,9 @@ pub mod expr;
 #[cfg(test)]
 mod expr_tests;
 pub mod fields;
+pub mod handles;
+#[cfg(test)]
+mod handles_tests;
 mod kinds;
 #[cfg(test)]
 mod kinds_tests;
