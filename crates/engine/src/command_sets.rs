@@ -2,9 +2,9 @@ use super::{NodeId, Value, cmd};
 
 /// The commands that act on the active artboard (#693), which the app passes as their `artboard`:
 /// Paste in Place, in Front and in Back paste onto it, Align to Artboard aligns to it, Distribute
-/// Objects and Distribute Spacing with Align to Artboard distribute objects across it, and All on
-/// Active Artboard selects on it. A `command.batch` given `artboard` passes it on to each of their
-/// steps that names none.
+/// Objects and Distribute Spacing with Align to Artboard distribute objects across it, All on
+/// Active Artboard selects on it, and Edit Symbol from the Symbols panel centers the symbol's art
+/// on it. A `command.batch` given `artboard` passes it on to each of their steps that names none.
 pub const ON_ACTIVE_ARTBOARD: [&str; 8] = [
     "edit.pasteInPlace",
     "edit.pasteInFront",
@@ -14,6 +14,7 @@ pub const ON_ACTIVE_ARTBOARD: [&str; 8] = [
     "object.distributeSpacing",
     "select.allOnArtboard",
     "physics.simulate", // PICABIA: the walls are the active artboard's edges.
+    "symbol.edit",
 ];
 
 /// The commands that resize the artboards the app passes (Object › Artboards): the app passes the
@@ -24,9 +25,9 @@ pub const FIT_ACTIVE_ARTBOARD: [&str; 2] = ["artboard.fitToArt", "artboard.fitTo
 
 /// `(command, param)` pairs the journal records only so a replay reproduces the original run
 /// (dates from the clock: `cmd::clock_date`; the artboards the app passes to the
-/// [`ON_ACTIVE_ARTBOARD`] and [`FIT_ACTIVE_ARTBOARD`] commands and to a batch); an action leaves
-/// them out ([`Session::journal_for_action`]).
-const REPLAY_ONLY: [(&str, &str); 15] = [
+/// [`ON_ACTIVE_ARTBOARD`] and [`FIT_ACTIVE_ARTBOARD`] commands and to a batch; the view's center
+/// the app passes to Edit Symbol); an action leaves them out ([`Session::journal_for_action`]).
+const REPLAY_ONLY: [(&str, &str); 17] = [
     ("file.new", "created"),
     ("document.save", "modified"),
     ("file.saveAs", "modified"),
@@ -40,6 +41,8 @@ const REPLAY_ONLY: [(&str, &str); 15] = [
     ("artboard.fitToArt", "indices"),
     ("artboard.fitToSelection", "index"),
     ("select.allOnArtboard", "artboard"),
+    ("symbol.edit", "artboard"),
+    ("symbol.edit", "viewCenter"),
     ("command.batch", "artboard"),
     ("physics.simulate", "artboard"), // PICABIA: as the other active-artboard commands.
 ];
