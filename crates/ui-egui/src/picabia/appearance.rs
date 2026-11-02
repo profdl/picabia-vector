@@ -27,6 +27,7 @@ use serde_json::{Value, json};
 use vectorcraft_doc::{Document, NodeId};
 use vectorcraft_modifiers::{Modifier, ModifierKind};
 
+use super::bind_chip::{self, ChipAction};
 use crate::panels::{pstate, set_pstate};
 use crate::theme::Tokens;
 use crate::{VectorcraftApp, icons, widgets};
@@ -66,7 +67,7 @@ pub const PRESETS: &[(&str, &str, &str)] = &[("screen", "benDay", "Ben-Day Dots"
 
 /// How a field is edited.
 #[derive(Clone, Copy)]
-enum F {
+pub(super) enum F {
     /// A length in points, shown in the document's unit, within `min..=max`.
     Len(f64, f64),
     /// Degrees within `min..=max`.
@@ -140,7 +141,7 @@ const COUNT: F = F::Int(1.0, 1000.0);
 const SEED: F = F::Int(0.0, SEED_MAX);
 
 /// Each kind's fields: `(param, label, how)`, with picabia-craft's ranges.
-fn fields(kind: &str) -> &'static [(&'static str, &'static str, F)] {
+pub(super) fn fields(kind: &str) -> &'static [(&'static str, &'static str, F)] {
     match kind {
         "linearArray" => &[
             ("count", "Copies", COUNT),
@@ -321,12 +322,14 @@ pub fn kind_label(kind: &str) -> String {
     KINDS.iter().find(|(k, _)| *k == kind).map_or_else(|| kind.to_string(), |(_, l)| tl!(l).to_string())
 }
 
-/// How many copies row `m` makes, where that reads plainly ("×5", "3 × 4"; empty otherwise).
-fn amount(m: &Modifier) -> String {
+/// How many copies row `m` makes, where that reads plainly ("×5", "3 × 4"; empty otherwise). A
+/// bound count reads the value it takes (`bound`: the row's resolved fields).
+fn amount(m: &Modifier, bound: &[vectorcraft_modifiers::BoundField]) -> String {
+    let n = |key: &str, own: u32| bound.iter().find(|b| b.field == key).and_then(|b| b.value).map_or_else(|| own.to_string(), |v| format!("{v:.0}"));
     match &m.kind {
-        ModifierKind::LinearArray(p) => format!("×{}", p.count),
-        ModifierKind::CircularArray(p) => format!("×{}", p.count),
-        ModifierKind::GridArray(p) => format!("{} × {}", p.rows, p.cols),
+        ModifierKind::LinearArray(p) => format!("×{}", n("count", p.count)),
+        ModifierKind::CircularArray(p) => format!("×{}", n("count", p.count)),
+        ModifierKind::GridArray(p) => format!("{} × {}", n("rows", p.rows), n("cols", p.cols)),
         _ => String::new(),
     }
 }
@@ -341,6 +344,8 @@ struct RowView {
     first: Modifier,
     /// Why the first object's copy-to-shape target can't be used, if it can't.
     target_problem: Option<String>,
+    /// What the first object's bound fields of this row resolved to.
+    bound: Vec<vectorcraft_modifiers::BoundField>,
 }
 
 /// What the rows show for the selection.
@@ -376,7 +381,7 @@ fn view(doc: &Document, ids: &[NodeId]) -> View {
     if want.is_empty() {
         return View::Empty;
     }
-    let rows = first
+    let mut rows: Vec<RowView> = first
         .iter()
         .enumerate()
         .map(|(i, m)| RowView {
@@ -392,6 +397,7 @@ fn view(doc: &Document, ids: &[NodeId]) -> View {
                 }
                 _ => None,
             },
+            bound: Vec::new(),
         })
         .collect();
     // Why the first object draws once (as the canvas does), then what its evaluation says.
@@ -400,13 +406,20 @@ fn view(doc: &Document, ids: &[NodeId]) -> View {
     if let Some(n) = doc.node(*first_id) {
         notes.extend(vectorcraft_render::picabia::too_big(doc, n));
         if let Some(Ok(stack)) = vectorcraft_modifiers::node_stack(n) {
-            let out = vectorcraft_modifiers::evaluate_with(
+            // Bound fields read the document's parameters, as the canvas does.
+            let out = vectorcraft_modifiers::evaluate_in(
                 &stack,
                 vectorcraft_modifiers::node_bounds_in_doc(doc, n),
                 &vectorcraft_modifiers::DocTargets::new(doc, *first_id),
+                &vectorcraft_modifiers::Scope::of_doc(doc),
             );
             copies = out.instances.len();
             notes.extend(out.warnings.iter().map(|w| w.message.clone()));
+            for b in out.bound {
+                if let Some(r) = rows.iter_mut().find(|r| r.first.id == b.modifier) {
+                    r.bound.push(b);
+                }
+            }
         }
         // What the geometry rows said while the copies were built (a row over the anchor cap…).
         notes.extend(vectorcraft_render::picabia::notes(doc, n));
@@ -561,7 +574,7 @@ fn modifier_row(app: &mut VectorcraftApp, ui: &mut Ui, doc: &Document, ids: &[No
     if chev.clicked() || resp.double_clicked() {
         set_pstate(ui.ctx(), &key, !open);
     }
-    let label = match amount(&r.first) {
+    let label = match amount(&r.first, &r.bound) {
         a if a.is_empty() || ids.len() > 1 => kind_label(&r.kind),
         a => format!("{}  {a}", kind_label(&r.kind)),
     };
@@ -646,6 +659,10 @@ fn editor(app: &mut VectorcraftApp, ui: &mut Ui, doc: &Document, ids: &[NodeId],
     let unit = app.session.general_unit();
     let first = ids.first().copied().unwrap_or(NodeId(0));
     let mut change: Option<(String, Value)> = None;
+    let mut bind: Option<(String, ChipAction)> = None;
+    // The document's parameters, for the binding chips.
+    let doc_params = vectorcraft_modifiers::Parameters::of_doc(doc);
+    let scope = vectorcraft_modifiers::Scope::of_doc(doc);
     egui::Frame::NONE.fill(t.panel_darker).inner_margin(egui::Margin { left: (EYE_W + 12.0) as i8, right: 6, top: 4, bottom: 4 }).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 3.0;
         let list = fields(&r.kind);
@@ -659,39 +676,31 @@ fn editor(app: &mut VectorcraftApp, ui: &mut Ui, doc: &Document, ids: &[NodeId],
                 ui.label_inputs_by(name.id, |ui| {
                     let fid = ("pc-field", i, *key);
                     let x = v.as_f64().unwrap_or(0.0);
-                    let new = match *how {
-                        F::Len(lo, hi) => widgets::num_field(ui, fid, Some(x), unit, 70.0).and_then(|n| clamped(n, lo, hi)).map(|n| json!(n)),
-                        F::Deg(lo, hi) => widgets::plain_field(ui, fid, x, "°", 1, 70.0).and_then(|n| clamped(n, lo, hi)).map(|n| json!(n)),
-                        F::Pct(lo, hi) => {
-                            widgets::plain_field(ui, fid, x * 100.0, "%", 1, 70.0).and_then(|n| clamped(n / 100.0, lo, hi)).map(|n| json!(n))
+                    // A bound number field shows the value it takes, read-only, and its chip.
+                    let binding = r.first.bind.get(*key);
+                    let bound = r.bound.iter().find(|b| b.field == *key);
+                    if let Some(text) = number_text(*how, unit).and_then(|fmt| bind_chip::shown_value(binding, bound, x, &fmt)) {
+                        let failed = bound.is_some_and(|b| b.error.is_some()) || matches!(binding, Some(vectorcraft_modifiers::Binding::Other(_)));
+                        bind_chip::bound_value(ui, &text, failed, 70.0);
+                    } else {
+                        let new = field_editor(ui, doc, first, fid, *how, v, x, unit, label);
+                        if let Some(new) = new {
+                            change = Some((key.to_string(), new));
                         }
-                        F::Int(lo, hi) => widgets::plain_field(ui, fid, x, "", 0, 70.0).and_then(|n| clamped(n.round(), lo, hi)).map(|n| json!(n)),
-                        F::Num(lo, hi) => widgets::plain_field(ui, fid, x, "", 2, 70.0).and_then(|n| clamped(n, lo, hi)).map(|n| json!(n)),
-                        F::Percent(lo, hi) => widgets::plain_field(ui, fid, x, "%", 1, 70.0).and_then(|n| clamped(n, lo, hi)).map(|n| json!(n)),
-                        F::Bool => {
-                            let b = v.as_bool().unwrap_or(false);
-                            widgets::check_box(ui, tl!(label), b, true).then(|| json!(!b))
+                    }
+                    if number_text(*how, unit).is_some() {
+                        let c = bind_chip::Chip {
+                            id: ui.scope_id().with(("pc-chip", i, *key)),
+                            label: tl!(label),
+                            binding,
+                            bound,
+                            per_copy_field: vectorcraft_modifiers::per_copy(&r.kind, key),
+                            params: &doc_params,
+                            scope: &scope,
+                        };
+                        if let Some(a) = bind_chip::chip(ui, &c) {
+                            bind = Some((key.to_string(), a));
                         }
-                        F::Choice(options) => {
-                            let cur = v.as_str().unwrap_or_default();
-                            let shown = options.iter().find(|(value, _)| *value == cur).map_or(cur, |(_, l)| tl!(l));
-                            let labels: Vec<&str> = options.iter().map(|(_, l)| tl!(l)).collect();
-                            widgets::dropdown_names(ui, fid, shown, &labels, 120.0)
-                                .and_then(|k| options.get(k))
-                                .filter(|(value, _)| *value != cur)
-                                .map(|(value, _)| json!(value))
-                        }
-                        F::Target => {
-                            let choices = vectorcraft_engine::cmd::picabia_modifier::target_choices(doc, first);
-                            object_picker(ui, choices, v.as_str().unwrap_or_default(), fid)
-                        }
-                        F::Image => {
-                            let choices = vectorcraft_engine::cmd::picabia_modifier::image_choices(doc, first);
-                            object_picker(ui, choices, v.as_str().unwrap_or_default(), fid)
-                        }
-                    };
-                    if let Some(new) = new {
-                        change = Some((key.to_string(), new));
                     }
                 });
             });
@@ -704,6 +713,82 @@ fn editor(app: &mut VectorcraftApp, ui: &mut Ui, doc: &Document, ids: &[NodeId],
     });
     if let Some((key, v)) = change {
         app.run("modifier.set", json!({"ids": ids_json(ids), "index": i, "props": {key: v}})).ok();
+    }
+    if let Some((field, a)) = bind {
+        run_chip(app, json!({"ids": ids_json(ids), "index": i, "field": field}), a);
+    }
+}
+
+/// Run what a binding chip asked: `modifier.bind` or `modifier.unbind` with `target` (the objects,
+/// the row and the field).
+pub(crate) fn run_chip(app: &mut VectorcraftApp, mut target: Value, a: ChipAction) {
+    match a {
+        ChipAction::Bind(b) => {
+            target["binding"] = b.to_value();
+            if let Err(e) = app.run("modifier.bind", target) {
+                app.ui.status = e.to_string();
+            }
+        }
+        ChipAction::Unbind => {
+            app.run("modifier.unbind", target).ok();
+        }
+    }
+}
+
+/// How a number field of kind `how` shows a value (`None`: not a number field).
+fn number_text(how: F, unit: vectorcraft_doc::Unit) -> Option<Box<dyn Fn(f64) -> String>> {
+    Some(match how {
+        F::Len(..) => Box::new(move |v| unit.format(v)),
+        F::Deg(..) => Box::new(|v| format!("{v:.1}°")),
+        F::Pct(..) => Box::new(|v| format!("{:.1}%", v * 100.0)),
+        F::Int(..) => Box::new(|v| format!("{v:.0}")),
+        F::Num(..) => Box::new(|v| format!("{v:.2}")),
+        F::Percent(..) => Box::new(|v| format!("{v:.1}%")),
+        F::Bool | F::Choice(_) | F::Target | F::Image => return None,
+    })
+}
+
+/// One field's editor; the new value when one was committed.
+#[allow(clippy::too_many_arguments)]
+fn field_editor(
+    ui: &mut Ui,
+    doc: &Document,
+    first: NodeId,
+    fid: (&str, usize, &str),
+    how: F,
+    v: &Value,
+    x: f64,
+    unit: vectorcraft_doc::Unit,
+    label: &str,
+) -> Option<Value> {
+    match how {
+        F::Len(lo, hi) => widgets::num_field(ui, fid, Some(x), unit, 70.0).and_then(|n| clamped(n, lo, hi)).map(|n| json!(n)),
+        F::Deg(lo, hi) => widgets::plain_field(ui, fid, x, "°", 1, 70.0).and_then(|n| clamped(n, lo, hi)).map(|n| json!(n)),
+        F::Pct(lo, hi) => widgets::plain_field(ui, fid, x * 100.0, "%", 1, 70.0).and_then(|n| clamped(n / 100.0, lo, hi)).map(|n| json!(n)),
+        F::Int(lo, hi) => widgets::plain_field(ui, fid, x, "", 0, 70.0).and_then(|n| clamped(n.round(), lo, hi)).map(|n| json!(n)),
+        F::Num(lo, hi) => widgets::plain_field(ui, fid, x, "", 2, 70.0).and_then(|n| clamped(n, lo, hi)).map(|n| json!(n)),
+        F::Bool => {
+            let b = v.as_bool().unwrap_or(false);
+            widgets::check_box(ui, tl!(label), b, true).then(|| json!(!b))
+        }
+        F::Choice(options) => {
+            let cur = v.as_str().unwrap_or_default();
+            let shown = options.iter().find(|(value, _)| *value == cur).map_or(cur, |(_, l)| tl!(l));
+            let labels: Vec<&str> = options.iter().map(|(_, l)| tl!(l)).collect();
+            widgets::dropdown_names(ui, fid, shown, &labels, 120.0)
+                .and_then(|k| options.get(k))
+                .filter(|(value, _)| *value != cur)
+                .map(|(value, _)| json!(value))
+        }
+        F::Percent(lo, hi) => widgets::plain_field(ui, fid, x, "%", 1, 70.0).and_then(|n| clamped(n, lo, hi)).map(|n| json!(n)),
+        F::Target => {
+            let choices = vectorcraft_engine::cmd::picabia_modifier::target_choices(doc, first);
+            object_picker(ui, choices, v.as_str().unwrap_or_default(), fid)
+        }
+        F::Image => {
+            let choices = vectorcraft_engine::cmd::picabia_modifier::image_choices(doc, first);
+            object_picker(ui, choices, v.as_str().unwrap_or_default(), fid)
+        }
     }
 }
 

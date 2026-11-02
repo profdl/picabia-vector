@@ -314,7 +314,13 @@ fn junk_params_are_clamped_in_every_kind() {
             ..Default::default()
         }),
     ] {
-        s.modifiers.push(Modifier { id: format!("m{}", s.modifiers.len()), enabled: true, kind, extra: Default::default() });
+        s.modifiers.push(Modifier {
+            id: format!("m{}", s.modifiers.len()),
+            enabled: true,
+            kind,
+            extra: Default::default(),
+            bind: Default::default(),
+        });
     }
     for bounds in [B, Rect::new(f64::NAN, 0.0, 1.0, f64::INFINITY)] {
         let out = evaluate(&s, bounds);

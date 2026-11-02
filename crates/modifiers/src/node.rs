@@ -12,6 +12,7 @@ use vectorcraft_geom::Rect;
 
 use crate::eval::Output;
 use crate::model::Stack;
+use crate::params::Scope;
 use crate::target::{DocTargets, TargetResolver};
 use crate::{ModError, PLUGIN_KEY, STACK_NS, STACK_PREFIX, cache};
 
@@ -97,10 +98,34 @@ pub fn evaluate_node_with(node: &Node, bounds: Rect, targets: &dyn TargetResolve
 /// [`evaluate_node`] for an object of `doc`, resolving its `copyToShape` targets there
 /// ([`DocTargets`]): what the renderer, exports, hit testing, commands and the panel use.
 pub fn evaluate_node_in_doc(doc: &Document, node: &Node) -> Option<Arc<Output>> {
-    if !has_modifiers(node) {
-        return None;
+    let src = node_source(node)?;
+    let scope = doc_scope_for(doc, src);
+    cache::evaluated_in(src, node_bounds_in_doc(doc, node), &DocTargets::new(doc, node.id), &scope).ok().filter(|o| !o.instances.is_empty())
+}
+
+/// `doc`'s parameters when stack source `src` has bindings (they're read only then).
+fn doc_scope_for(doc: &Document, src: &str) -> std::sync::Arc<Scope> {
+    match cache::parsed(src) {
+        Ok(s) if s.has_bindings() => Scope::of_doc(doc),
+        _ => std::sync::Arc::default(),
     }
-    evaluate_node_with(node, node_bounds_in_doc(doc, node), &DocTargets::new(doc, node.id))
+}
+
+/// The parameters `node`'s stack reads, resolved in `doc`: a hash that changes exactly when a value
+/// its bindings read does (0 without bindings). What repaints a bound object whose parameter
+/// changed although the object didn't.
+pub fn bound_key(doc: &Document, node: &Node) -> u64 {
+    let Some(src) = node_source(node) else { return 0 };
+    match cache::parsed(src) {
+        Ok(s) if s.has_bindings() => Scope::of_doc(doc).key(s.bound_names().iter().map(String::as_str)),
+        _ => 0,
+    }
+}
+
+/// Whether `node`'s stack has bindings (an attribute lookup and a cached parse): its drawing then
+/// depends on the document's parameters, not on the object alone.
+pub fn has_bindings(node: &Node) -> bool {
+    node_stack(node).is_some_and(|s| s.is_ok_and(|s| s.has_bindings()))
 }
 
 /// [`node_instances`] for an object of `doc` (copy-to-shape targets resolved there).

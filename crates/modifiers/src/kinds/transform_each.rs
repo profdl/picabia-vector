@@ -15,16 +15,24 @@ use vectorcraft_geom::{Affine, Vec2};
 
 use super::rng::Stream;
 use super::{Clamp, Ctx, Stage, StageResult};
+use crate::bind::{PerCopy, PerCopyExpr};
 use crate::expr::{Env, Expr, compile};
 use crate::model::TransformEach;
 use crate::{MAX_ANGLE, MAX_LENGTH, MAX_SCALE};
 
 const MIN_SCALE: f64 = 1.0e-6;
 
+/// What drives a channel per copy: its own per-copy expression, or a bound one
+/// ([`crate::bind`], which counts the copies it gives no number for).
+enum Driver {
+    Own(Expr),
+    Bound(PerCopyExpr),
+}
+
 /// One channel: its clamped value, its expression, and the range expression results are kept in.
 struct Channel {
     value: f64,
-    expr: Option<Expr>,
+    expr: Option<Driver>,
     lo: f64,
     hi: f64,
 }
@@ -33,31 +41,35 @@ impl Channel {
     /// The amount for copy `i` of `n`: the expression's value, or `ramp(value)` without one.
     fn amount(&self, i: usize, n: usize, ramp: impl Fn(f64) -> f64) -> f64 {
         match &self.expr {
-            Some(e) => e.eval_or(&Env::new(i, n, self.value), self.value).clamp(self.lo, self.hi),
+            Some(Driver::Own(e)) => e.eval_or(&Env::new(i, n, self.value), self.value).clamp(self.lo, self.hi),
+            Some(Driver::Bound(e)) => e.amount(i, n, self.value, self.lo, self.hi),
             None => ramp(self.value),
         }
     }
 }
 
-pub(crate) fn stage(p: &TransformEach, _ctx: &Ctx) -> StageResult {
+pub(crate) fn stage(p: &TransformEach, _ctx: &Ctx, per_copy: &PerCopy) -> StageResult {
     let mut warnings = Vec::new();
     let mut c = Clamp { warnings: &mut warnings };
     let (ox, oy) = (c.length("offsetX", p.offset_x), c.length("offsetY", p.offset_y));
     let rotate = c.angle("rotate", p.rotate);
     let (sx, sy) = (c.scale("scaleX", p.scale_x), c.scale("scaleY", p.scale_y));
     let jitter = c.within("jitter", p.jitter, 0.0, 10.0, 0.0);
-    let mut ch = |value: f64, text: &Option<String>, key: &str, lo: f64, hi: f64| Channel {
+    let mut ch = |field: &str, value: f64, text: &Option<String>, lo: f64, hi: f64| Channel {
         value,
-        expr: compile(text.as_deref(), key, &mut warnings),
+        expr: match per_copy.get(field) {
+            Some(b) => Some(Driver::Bound(b.clone())),
+            None => compile(text.as_deref(), &crate::expr_key(field), &mut warnings).map(Driver::Own),
+        },
         lo,
         hi,
     };
     let chans = [
-        ch(ox, &p.offset_x_expr, "offsetXExpr", -MAX_LENGTH, MAX_LENGTH),
-        ch(oy, &p.offset_y_expr, "offsetYExpr", -MAX_LENGTH, MAX_LENGTH),
-        ch(rotate, &p.rotate_expr, "rotateExpr", -MAX_ANGLE, MAX_ANGLE),
-        ch(sx, &p.scale_x_expr, "scaleXExpr", 0.0, MAX_SCALE),
-        ch(sy, &p.scale_y_expr, "scaleYExpr", 0.0, MAX_SCALE),
+        ch("offsetX", ox, &p.offset_x_expr, -MAX_LENGTH, MAX_LENGTH),
+        ch("offsetY", oy, &p.offset_y_expr, -MAX_LENGTH, MAX_LENGTH),
+        ch("rotate", rotate, &p.rotate_expr, -MAX_ANGLE, MAX_ANGLE),
+        ch("scaleX", sx, &p.scale_x_expr, 0.0, MAX_SCALE),
+        ch("scaleY", sy, &p.scale_y_expr, 0.0, MAX_SCALE),
     ];
     let (progressive, seed) = (p.progressive, p.jitter_seed);
     let each = move |_: &crate::eval::Instance, i: usize, n: usize| {

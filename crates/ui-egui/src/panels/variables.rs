@@ -189,6 +189,7 @@ pub fn show(app: &mut VectorcraftApp, ui: &mut Ui) {
         });
     }
 
+    crate::picabia::params_panel::section(app, ui); // PICABIA: Picabia's parameters (numbers and texts modifier fields bind to)
     widgets::subheader(ui, tl!("Data Sets"));
     if sets.is_empty() {
         widgets::dim_label(ui, tl!("None"));

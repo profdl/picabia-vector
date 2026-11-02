@@ -25,6 +25,10 @@
 //!   [`evaluate_node_in_doc`] / [`node_instances_in_doc`] also resolve `copyToShape` targets
 //!   ([`DocTargets`]); the cache key includes a hash of each target's outline, so moving or editing
 //!   a target re-evaluates the layers that copy onto it.
+//! - [`params`] and [`bind`]: the document's parameters (numbers and texts, a data set's values
+//!   when one is active) and each row's field bindings to a parameter or an expression, resolved
+//!   while evaluating; [`evaluate_node_in_doc`] reads the document's, and the cache key holds the
+//!   values of the parameters a stack reads ([`fields`] lists the fields a binding may drive).
 //! - [`contour`] and [`screen`]: Screen's halftone core (marching squares written for Picabia, a
 //!   spot-function field and image tone), run by the `screen` geometry row ([`shape`]).
 //!
@@ -57,6 +61,9 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod bind;
+#[cfg(test)]
+mod bind_tests;
 mod cache;
 pub mod contour;
 #[cfg(test)]
@@ -65,6 +72,7 @@ mod eval;
 pub mod expr;
 #[cfg(test)]
 mod expr_tests;
+pub mod fields;
 mod kinds;
 #[cfg(test)]
 mod kinds_tests;
@@ -75,6 +83,7 @@ mod model_displace;
 mod model_screen;
 mod model_shape;
 mod node;
+pub mod params;
 mod parse;
 pub mod screen;
 #[cfg(test)]
@@ -88,7 +97,9 @@ mod tests;
 #[cfg(test)]
 mod tone_tests;
 
-pub use eval::{ArrayStage, Guide, Instance, Output, Repeat, StencilRow, Warning, evaluate, evaluate_with, splitmix64};
+pub use bind::{Binding, BoundField, MAX_BINDINGS};
+pub use eval::{ArrayStage, Guide, Instance, Output, Repeat, StencilRow, Warning, evaluate, evaluate_in, evaluate_with, splitmix64};
+pub use fields::{NumberField, number_field, number_fields, per_copy};
 pub use model::{
     CircularArray, CopyMode, CopyToShape, GridArray, KINDS, LinearArray, MAX_CUT_COLOURS, MaterialLimits, Mirror, MirrorAxis, Modifier, ModifierKind,
     Randomize, Stack, Stencil, StencilColourMode, StencilLimitMode, StencilMaterial, StencilOutput, StencilPatternType, StencilPatternWhere,
@@ -104,9 +115,10 @@ pub use model::{
 };
 pub use model::{SCREEN_PRESETS, Screen, SpotShape, ToneSource};
 pub use node::{
-    evaluate_node, evaluate_node_in, evaluate_node_in_doc, evaluate_node_with, has_modifiers, node_bounds, node_bounds_in_doc, node_instances,
-    node_instances_in_doc, node_source, node_stack, set_node_source,
+    bound_key, evaluate_node, evaluate_node_in, evaluate_node_in_doc, evaluate_node_with, has_bindings, has_modifiers, node_bounds,
+    node_bounds_in_doc, node_instances, node_instances_in_doc, node_source, node_stack, set_node_source,
 };
+pub use params::{ParamKind, ParamValue, Parameter, Parameters, Scope};
 pub use parse::{parse, parse_cached, stack_from_value, stack_to_value, to_json};
 pub use shape::{GeometryOp, GeometryRow, MAX_GEOMETRY_ANCHORS, RowAt, Shaper, shaped_copies};
 pub use target::{

@@ -2,8 +2,10 @@
 
 use vectorcraft_geom::{Affine, Point, Rect, Vec2};
 
+use crate::bind::{BoundField, PerCopy};
 use crate::kinds::{self, Ctx, Stage};
 use crate::model::{ModifierKind, Stack, Stencil, StencilOutput, StencilRepeat};
+use crate::params::Scope;
 use crate::shape::{GeometryOp, GeometryRow, RowAt};
 use crate::target::{NoTargets, TargetResolver};
 use crate::{MAX_INSTANCES_PER_NODE, MAX_LENGTH};
@@ -70,6 +72,8 @@ pub struct Output {
     /// [`Instance::stage_indices`]: whether each is an array (linear, circular, grid: the rows a
     /// deform's ramp steps over) and how many copies it made ([`Output::ramp_position`]).
     pub array_stages: Vec<ArrayStage>,
+    /// What each bound field of the evaluated rows resolved to, in stack order ([`crate::bind`]).
+    pub bound: Vec<BoundField>,
 }
 
 /// A row that repeated the copies ([`Output::array_stages`]).
@@ -138,6 +142,44 @@ impl Output {
         self.stencil = Some(StencilRow { modifier: id.to_string(), params });
     }
 
+    /// The stencil row `m` the caps stopped short of, with its bound fields resolved.
+    fn late_stencil(&mut self, m: &crate::Modifier, scope: &Scope, n_in: usize) {
+        let r = crate::bind::resolve(m, scope, n_in);
+        self.note_bound(r.fields);
+        if let ModifierKind::Stencil(p) = &*r.kind {
+            self.set_stencil(&m.id, p);
+        }
+    }
+
+    /// Report the per-copy expressions that gave no number for some of the `n` copies (those used
+    /// the field's own value), on their fields and as warnings.
+    fn copy_failures(&mut self, copy_exprs: &[(String, PerCopy)], n: usize) {
+        for (id, exprs) in copy_exprs {
+            for e in &exprs.0 {
+                let failed = e.failed();
+                if failed == 0 {
+                    continue;
+                }
+                let message = format!("`{}` gives no number for {failed} of {n} copies (a division by zero?); they use its own value", e.field);
+                if let Some(b) = self.bound.iter_mut().find(|b| b.modifier == *id && b.field == e.field) {
+                    b.error = Some(message.clone());
+                }
+                self.warn(Some(id), message);
+            }
+        }
+    }
+
+    /// Keep what a row's bound fields resolved to; a failed one is also a warning.
+    fn note_bound(&mut self, fields: Vec<BoundField>) {
+        for f in fields {
+            if let Some(e) = &f.error {
+                let message = format!("{}: {e}", f.field);
+                self.warn(Some(&f.modifier), message);
+            }
+            self.bound.push(f);
+        }
+    }
+
     fn warn(&mut self, modifier: Option<&str>, message: impl Into<String>) {
         self.warnings.push(Warning { modifier: modifier.map(str::to_string), message: message.into() });
     }
@@ -173,6 +215,13 @@ pub fn evaluate(stack: &Stack, bounds: Rect) -> Output {
 /// [`evaluate`] with `targets` finding the layers `copyToShape` modifiers copy onto (in the
 /// layer's parent space; see [`crate::DocTargets`]).
 pub fn evaluate_with(stack: &Stack, bounds: Rect, targets: &dyn TargetResolver) -> Output {
+    evaluate_in(stack, bounds, targets, &Scope::default())
+}
+
+/// [`evaluate_with`] with bound fields reading the parameters in `scope` ([`crate::bind`];
+/// [`Scope::of_doc`] gives a document's). Without it every parameter is unknown: bound fields use
+/// their own values, with a warning.
+pub fn evaluate_in(stack: &Stack, bounds: Rect, targets: &dyn TargetResolver, scope: &Scope) -> Output {
     let mut out = Output::default();
     if !stack.is_active() {
         for m in stack.modifiers.iter().filter(|m| m.enabled) {
@@ -196,42 +245,42 @@ pub fn evaluate_with(stack: &Stack, bounds: Rect, targets: &dyn TargetResolver) 
     let mut per_copy = false;
     // A copy row has run: geometry rows from here on run on every copy.
     let mut copied = false;
+    // The per-copy expressions, to report the copies they gave no number for once they have run.
+    let mut copy_exprs: Vec<(String, PerCopy)> = Vec::new();
     for m in rows.by_ref() {
+        // Bound fields take their values now: `n` is the copies the rows above made.
+        let r = crate::bind::resolve(m, scope, set.len());
+        out.note_bound(r.fields);
+        let kind: &ModifierKind = &r.kind;
         // Terminal: no copies of its own, and the rows below it are ignored (one warning, below).
-        if let ModifierKind::Stencil(p) = &m.kind {
+        if let ModifierKind::Stencil(p) = kind {
             out.set_stencil(&m.id, p);
             break;
         }
-        if let ModifierKind::Other { kind, error } = &m.kind {
+        if let ModifierKind::Other { kind, error } = kind {
             out.warn(Some(&m.id), other_message(kind, error.as_deref()));
             continue;
         }
-        if let Some((mut op, warnings)) = crate::shape::clamped(&m.kind) {
+        if let Some((mut op, warnings)) = crate::shape::clamped(kind) {
             for w in warnings {
                 out.warn(Some(&m.id), w);
             }
-            // A screen reading an image finds it now (the shaper has no document).
-            if let GeometryOp::Screen(row) = &mut op
-                && row.params.tone == crate::model::ToneSource::Image
-            {
-                row.image = Some(if row.params.image.is_empty() {
-                    Err("choose the image it reads its tone from; it is skipped".into())
-                } else {
-                    targets.tone(&row.params.image)
-                });
-            }
+            find_tone(&mut op, targets);
             let at = if copied { RowAt::Copies } else { RowAt::Source };
             out.geometry.push(GeometryRow { modifier: m.id.clone(), op, at });
             continue;
         }
         copied = true;
         let ctx = Ctx { pivot, bounds, n_prev: set.len() };
-        let r = kinds::stage(&m.kind, &ctx, targets);
-        out.guides.extend(r.guides);
-        for w in r.warnings {
+        if !r.per_copy.0.is_empty() {
+            copy_exprs.push((m.id.clone(), r.per_copy.clone()));
+        }
+        let st = kinds::stage(kind, &ctx, targets, &r.per_copy);
+        out.guides.extend(st.guides);
+        for w in st.warnings {
             out.warn(Some(&m.id), w);
         }
-        match r.stage {
+        match st.stage {
             Stage::Unchanged => {}
             Stage::Array(copies) => {
                 let n = set.len().saturating_mul(copies.len());
@@ -244,7 +293,7 @@ pub fn evaluate_with(stack: &Stack, bounds: Rect, targets: &dyn TargetResolver) 
                 }
                 // An array of identities alone (one copy) doesn't move the lattice.
                 if !copies.iter().all(|t| *t == Affine::IDENTITY) {
-                    lattice = kinds::repeat(&m.kind, &ctx);
+                    lattice = kinds::repeat(kind, &ctx);
                 }
                 let array = matches!(m.kind, ModifierKind::LinearArray(_) | ModifierKind::CircularArray(_) | ModifierKind::GridArray(_));
                 out.array_stages.push(ArrayStage { array, copies: u32::try_from(copies.len()).unwrap_or(u32::MAX) });
@@ -271,11 +320,8 @@ pub fn evaluate_with(stack: &Stack, bounds: Rect, targets: &dyn TargetResolver) 
     }
     if out.stencil.is_none() {
         // A cap stopped the rows early: a stencil further down still ends the stack.
-        if let Some((id, p)) = rows.by_ref().find_map(|m| match &m.kind {
-            ModifierKind::Stencil(p) => Some((m.id.as_str(), p)),
-            _ => None,
-        }) {
-            out.set_stencil(id, p);
+        if let Some(m) = rows.by_ref().find(|m| matches!(m.kind, ModifierKind::Stencil(_))) {
+            out.late_stencil(m, scope, set.len());
         }
     }
     if let Some(st) = &mut out.stencil {
@@ -308,6 +354,7 @@ pub fn evaluate_with(stack: &Stack, bounds: Rect, targets: &dyn TargetResolver) 
             inst.transform *= around(pivot, l);
         }
     }
+    out.copy_failures(&copy_exprs, n);
     let before = set.len();
     set.retain(|i| i.transform.is_finite());
     if set.len() != before {
@@ -316,6 +363,19 @@ pub fn evaluate_with(stack: &Stack, bounds: Rect, targets: &dyn TargetResolver) 
     reindex(&mut set);
     out.instances = set;
     out
+}
+
+/// A screen reading an image finds it now (the shaper has no document).
+fn find_tone(op: &mut GeometryOp, targets: &dyn TargetResolver) {
+    if let GeometryOp::Screen(row) = op
+        && row.params.tone == crate::model::ToneSource::Image
+    {
+        row.image = Some(if row.params.image.is_empty() {
+            Err("choose the image it reads its tone from; it is skipped".into())
+        } else {
+            targets.tone(&row.params.image)
+        });
+    }
 }
 
 fn other_message(kind: &str, error: Option<&str>) -> String {

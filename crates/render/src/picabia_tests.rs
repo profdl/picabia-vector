@@ -197,6 +197,89 @@ fn redraws_after_an_edit_match_full_renders_when_stacks_change() {
     }
 }
 
+/// PIC6: a bound object redraws when a parameter it reads changes, though the object itself
+/// didn't; an object that doesn't read it isn't in the changed area.
+#[test]
+fn changing_a_parameter_redraws_the_objects_bound_to_it() {
+    use vectorcraft_modifiers::Parameters;
+    let set_params = |d: &mut Document, copies: f64, other: f64| {
+        let v = serde_json::json!({"params": [{"name": "copies", "value": copies, "max": 10}, {"name": "other", "value": other}]});
+        Parameters::from_value(Some(&v)).0.store(d);
+    };
+    let (mut d, r) = doc();
+    let l = d.layers[0].id;
+    let plain = red_rect(&mut d, Rect::new(300.0, 60.0, 320.0, 80.0));
+    let p = d.insert(Some(l), 1, plain).unwrap();
+    set_stack(&mut d, p, Some(&linear(2, 30.0)));
+    let bound = r#"{"v":1,"stack":[{"id":"m1","kind":"linearArray","count":2,"offsetX":40,"bind":{"count":{"param":"copies"}}}]}"#;
+    set_stack(&mut d, r, Some(bound));
+    set_params(&mut d, 2.0, 0.0);
+    let mut nd = d.clone();
+    set_params(&mut nd, 5.0, 0.0);
+    assert!(std::ptr::eq(d.node(r).unwrap(), nd.node(r).unwrap()) || d.node(r) == nd.node(r), "the object didn't change");
+    redraw_matches(&d, &nd, "parameter changed");
+    let Some(area) = dependents(&d, &nd) else { panic!("the bound object redraws") };
+    assert!(area.x1 >= 190.0 - 1.0, "covers the new copies: {area:?}");
+    assert!(area.x1 < 300.0, "the unbound object isn't redrawn: {area:?}");
+    // A parameter it doesn't read: nothing to redraw.
+    let mut od = d.clone();
+    set_params(&mut od, 2.0, 9.0);
+    assert!(dependents(&d, &od).is_none());
+    // A renderer that drew before draws the new count (no copies kept by the object's identity).
+    let opts = RenderOptions { background: Some([255, 255, 255, 255]), ..Default::default() };
+    let mut renderer = Renderer::new();
+    let _ = renderer.render(&d, 400, 100, Affine::IDENTITY, &opts);
+    let after = renderer.render(&nd, 400, 100, Affine::IDENTITY, &opts);
+    assert!(after.pixels == Renderer::new().render(&nd, 400, 100, Affine::IDENTITY, &opts).pixels);
+    assert_eq!(art(&nd, nd.node(r).unwrap()).unwrap().children().unwrap().len(), 5);
+}
+
+/// PIC6.3a: selecting another data set row repaints the object bound to the parameter it feeds.
+#[test]
+fn switching_the_data_set_repaints_a_bound_object() {
+    use vectorcraft_doc::{DataSet, DataValue, Variable, VariableKind};
+    let (mut d, r) = doc();
+    let v = serde_json::json!({"params": [{"name": "copies", "value": 2, "max": 10, "source": "n"}]});
+    vectorcraft_modifiers::Parameters::from_value(Some(&v)).0.store(&mut d);
+    d.variables.variables.push(Variable { name: "n".into(), kind: VariableKind::Text });
+    for (name, val) in [("a", "2"), ("b", "6")] {
+        d.variables.datasets.push(DataSet { name: name.into(), values: [("n".to_string(), DataValue::Text(val.into()))].into() });
+    }
+    d.variables.active_dataset = Some("a".into());
+    let bound = r#"{"v":1,"stack":[{"id":"m1","kind":"linearArray","count":2,"offsetX":40,"bind":{"count":{"param":"copies"}}}]}"#;
+    set_stack(&mut d, r, Some(bound));
+    let mut nd = d.clone();
+    nd.variables.active_dataset = Some("b".into());
+    assert!(dependents(&d, &nd).is_some_and(|a| a.x1 >= 230.0 - 1.0), "{:?}", dependents(&d, &nd));
+    redraw_matches(&d, &nd, "data set switched");
+}
+
+/// PIC6.3a: a bound object inside a symbol's art reads the document's parameters in every
+/// instance, and a parameter change repaints the instances.
+#[test]
+fn a_bound_object_in_a_symbol_repaints_its_instances() {
+    use vectorcraft_modifiers::Parameters;
+    let set_params = |d: &mut Document, copies: f64| {
+        Parameters::from_value(Some(&serde_json::json!({"params": [{"name": "copies", "value": copies, "max": 10}]}))).0.store(d);
+    };
+    let mut d = Document::new(400.0, 100.0);
+    let mut art = red_rect(&mut d, Rect::new(0.0, 0.0, 20.0, 20.0));
+    let bound = r#"{"v":1,"stack":[{"id":"m1","kind":"linearArray","count":2,"offsetX":30,"bind":{"count":{"param":"copies"}}}]}"#;
+    vectorcraft_modifiers::set_node_source(&mut art, Some(bound.into()));
+    d.symbols.push(vectorcraft_doc::Symbol { name: "s".into(), art: Arc::new(art), dynamic: false });
+    let l = d.layers[0].id;
+    let inst = Node::new(d.alloc_id(), NodeKind::SymbolInstance { symbol: "s".into(), xf: Affine::translate((10.0, 10.0)) });
+    d.insert(Some(l), 0, inst).unwrap();
+    set_params(&mut d, 2.0);
+    let mut nd = d.clone();
+    set_params(&mut nd, 5.0);
+    assert!(dependents(&d, &nd).is_some(), "the instances repaint");
+    redraw_matches(&d, &nd, "parameter read in a symbol changed");
+    let mut od = d.clone();
+    set_params(&mut od, 2.0);
+    assert!(dependents(&d, &od).is_none(), "the same value: nothing to repaint");
+}
+
 #[test]
 fn moving_a_copy_to_shape_target_redraws_its_sources_copies() {
     let (mut d, r) = doc();

@@ -71,6 +71,11 @@ pub struct Row {
     pub params: serde_json::Map<String, Value>,
     /// An enabled `wallpaper` or `gridArray` row is above it (the repeat it can follow).
     pub lattice_above: bool,
+    /// PIC6: what its bound fields resolved to (`modifier.list`'s `bound`), and the document's
+    /// parameters for the binding chips (set by [`stencil_section`]).
+    pub bound: Vec<vectorcraft_modifiers::BoundField>,
+    pub doc_params: vectorcraft_modifiers::Parameters,
+    pub scope: Arc<vectorcraft_modifiers::Scope>,
 }
 
 /// The object's first enabled stencil row (`list` is `modifier.list`'s reply).
@@ -82,7 +87,8 @@ pub fn stencil_row(list: &Value) -> Option<Row> {
         let kind = r.get("kind").and_then(Value::as_str).unwrap_or_default();
         if enabled && kind == "stencil" {
             let id = r.get("id").and_then(Value::as_str)?.to_string();
-            return Some(Row { id, params: r.as_object().cloned().unwrap_or_default(), lattice_above });
+            let bound = list.get("bound").and_then(Value::as_array).map(|b| bound_fields(b, &id)).unwrap_or_default();
+            return Some(Row { id, params: r.as_object().cloned().unwrap_or_default(), lattice_above, bound, ..Row::default() });
         }
         if enabled && matches!(kind, "wallpaper" | "gridArray") {
             lattice_above = true;
@@ -91,7 +97,55 @@ pub fn stencil_row(list: &Value) -> Option<Row> {
     None
 }
 
+/// Row `id`'s entries of `modifier.list`'s `bound`.
+fn bound_fields(list: &[Value], id: &str) -> Vec<vectorcraft_modifiers::BoundField> {
+    list.iter()
+        .take(256)
+        .filter(|b| b.get("modifier").and_then(Value::as_str) == Some(id))
+        .filter_map(|b| {
+            Some(vectorcraft_modifiers::BoundField {
+                modifier: id.to_string(),
+                field: b.get("field")?.as_str()?.to_string(),
+                value: b.get("value").and_then(Value::as_f64),
+                per_copy: b.get("perCopy").and_then(Value::as_bool).unwrap_or(false),
+                error: b.get("error").and_then(Value::as_str).map(str::to_string),
+            })
+        })
+        .collect()
+}
+
 impl Row {
+    /// Field `k`'s binding (the row's `bind`).
+    fn binding(&self, k: &str) -> Option<vectorcraft_modifiers::Binding> {
+        self.params.get("bind").and_then(|b| b.get(k)).map(vectorcraft_modifiers::Binding::from_value)
+    }
+
+    /// Field `k`'s bound value as text (`fmt` of the value used), when it is bound.
+    fn bound_text(&self, k: &str, own: f64, fmt: &dyn Fn(f64) -> String) -> Option<(String, bool)> {
+        let binding = self.binding(k);
+        let bound = self.bound.iter().find(|b| b.field == k);
+        let text = crate::picabia::bind_chip::shown_value(binding.as_ref(), bound, own, fmt)?;
+        let failed = bound.is_some_and(|b| b.error.is_some()) || matches!(binding, Some(vectorcraft_modifiers::Binding::Other(_)));
+        Some((text, failed))
+    }
+
+    /// Field `k`'s binding chip (labelled `label`); what was asked goes into `e`.
+    fn chip(&self, ui: &mut Ui, k: &str, label: &str, e: &mut Edits) {
+        let binding = self.binding(k);
+        let c = crate::picabia::bind_chip::Chip {
+            id: ui.scope_id().with(("picabia_stencil_chip", k)),
+            label,
+            binding: binding.as_ref(),
+            bound: self.bound.iter().find(|b| b.field == k),
+            per_copy_field: false,
+            params: &self.doc_params,
+            scope: &self.scope,
+        };
+        if let Some(a) = crate::picabia::bind_chip::chip(ui, &c) {
+            e.binds.push((k.to_string(), a));
+        }
+    }
+
     fn str(&self, k: &str, d: &'static str) -> String {
         self.params.get(k).and_then(Value::as_str).unwrap_or(d).to_string()
     }
@@ -276,16 +330,21 @@ fn choice(ui: &mut Ui, row: &Row, key: &str, label: &str, options: Choices, defa
 }
 
 /// A number row in `suffix` units (clamped to `lo..=hi`): the new value when one was committed.
+/// A bound field shows the value it takes, read-only; every number row has a binding chip.
 #[allow(clippy::too_many_arguments)]
-fn number(ui: &mut Ui, row: &Row, key: &str, label: &str, suffix: &str, lo: f64, hi: f64, default: f64) -> Option<f64> {
+fn number(ui: &mut Ui, row: &Row, e: &mut Edits, key: &str, label: &str, suffix: &str, lo: f64, hi: f64, default: f64) -> Option<f64> {
     let mut out = None;
     ui.horizontal(|ui| {
         lead(ui, label);
-        if let Some(v) = widgets::plain_field_named(ui, ("picabia_stencil", key), Some(label), row.num(key, default), suffix, 2, FIELD_W)
+        let own = row.num(key, default);
+        if let Some((text, failed)) = row.bound_text(key, own, &|v| format!("{} {suffix}", num(v))) {
+            crate::picabia::bind_chip::bound_value(ui, &text, failed, FIELD_W);
+        } else if let Some(v) = widgets::plain_field_named(ui, ("picabia_stencil", key), Some(label), own, suffix, 2, FIELD_W)
             && v.is_finite()
         {
             out = Some(v.clamp(lo, hi));
         }
+        row.chip(ui, key, label, e);
     });
     out
 }
@@ -376,11 +435,16 @@ fn tile_problem(row: &Row) -> Option<&'static str> {
 
 /// The edits a frame of the section asks for: each one `modifier.set` of the stencil row.
 #[derive(Default)]
-struct Edits(Vec<Value>);
+struct Edits {
+    sets: Vec<Value>,
+    /// What the binding chips asked: (field, action), each one `modifier.bind` or
+    /// `modifier.unbind` (PIC6).
+    binds: Vec<(String, crate::picabia::bind_chip::ChipAction)>,
+}
 
 impl Edits {
     fn push(&mut self, k: &str, v: Value) {
-        self.0.push(json!({ k: v }));
+        self.sets.push(json!({ k: v }));
     }
 }
 
@@ -416,7 +480,7 @@ pub fn stencil_section(ui: &mut Ui, app: &mut VectorcraftApp, node: NodeId) {
     let t = Tokens::get(ui.ctx());
     let kept = kept_section(app, ui.ctx(), node);
     let (list, info) = (&kept.0, &kept.1);
-    let Some(row) = stencil_row(list) else {
+    let Some(mut row) = stencil_row(list) else {
         wrapped(ui, tl!("This object isn't a stencil. Make Stencil turns the selection into a laser-cut stencil sheet."), t.text_dim);
         ui.add_space(4.0);
         if button(ui, "Make Stencil", true, true) {
@@ -424,6 +488,10 @@ pub fn stencil_section(ui: &mut Ui, app: &mut VectorcraftApp, node: NodeId) {
         }
         return;
     };
+    if let Some(st) = app.session.active() {
+        row.doc_params = vectorcraft_modifiers::Parameters::of_doc(&st.doc);
+        row.scope = vectorcraft_modifiers::Scope::of_doc(&st.doc);
+    }
     let mut e = Edits::default();
     colours_group(ui, &row, info.as_ref(), &mut e);
     size_group(ui, &row, info.as_ref(), &mut e);
@@ -455,8 +523,11 @@ pub fn stencil_section(ui: &mut Ui, app: &mut VectorcraftApp, node: NodeId) {
         card = button(ui, "Test Card…", false, true);
         laser = button(ui, "Laser…", false, true);
     });
-    for edit in e.0 {
+    for edit in e.sets {
         set(app, node, &row, edit);
+    }
+    for (field, a) in e.binds {
+        crate::picabia::appearance::run_chip(app, json!({"ids": [node.0], "modifier": row.id, "field": field}), a);
     }
     if export {
         let _ = app.run("modifier.stencilExport", json!({"id": node.0}));
@@ -483,12 +554,16 @@ fn colours_group(ui: &mut Ui, row: &Row, info: Option<&Info>, e: &mut Edits) {
         // Stored 0 to 1, shown as a percentage.
         ui.horizontal(|ui| {
             lead(ui, tl!("Threshold"));
-            let pct = row.num("threshold", 0.5) * 100.0;
-            if let Some(v) = widgets::plain_field_named(ui, ("picabia_stencil", "threshold"), Some(tl!("Threshold")), pct, "%", 1, FIELD_W)
+            let own = row.num("threshold", 0.5);
+            if let Some((text, failed)) = row.bound_text("threshold", own, &|v| format!("{:.1}%", v * 100.0)) {
+                crate::picabia::bind_chip::bound_value(ui, &text, failed, FIELD_W);
+            } else if let Some(v) =
+                widgets::plain_field_named(ui, ("picabia_stencil", "threshold"), Some(tl!("Threshold")), own * 100.0, "%", 1, FIELD_W)
                 && v.is_finite()
             {
                 e.push("threshold", json!(v.clamp(0.0, 100.0) / 100.0));
             }
+            row.chip(ui, "threshold", tl!("Threshold"), e);
         });
     }
     if let Some(v) = check(ui, row, "invert", tl!("Invert (cut the other colours)"), false) {
@@ -499,10 +574,10 @@ fn colours_group(ui: &mut Ui, row: &Row, info: Option<&Info>, e: &mut Edits) {
 /// Size: the design's width, the margin and the sheet it makes.
 fn size_group(ui: &mut Ui, row: &Row, info: Option<&Info>, e: &mut Edits) {
     heading(ui, tl!("Size"));
-    if let Some(v) = number(ui, row, "widthMm", tl!("Width"), "mm", 1.0, 10_000.0, 300.0) {
+    if let Some(v) = number(ui, row, e, "widthMm", tl!("Width"), "mm", 1.0, 10_000.0, 300.0) {
         e.push("widthMm", json!(v));
     }
-    if let Some(v) = number(ui, row, "marginMm", tl!("Margin"), "mm", 0.0, 1000.0, 15.0) {
+    if let Some(v) = number(ui, row, e, "marginMm", tl!("Margin"), "mm", 0.0, 1000.0, 15.0) {
         e.push("marginMm", json!(v));
     }
     if let Some((w, h)) = info.and_then(|i| i.tile_mm.or(i.sheet_mm)) {
@@ -529,7 +604,7 @@ fn cleanup_group(ui: &mut Ui, row: &Row, e: &mut Edits) {
         ("toleranceMm", tl!("Smoothing"), "mm", 10.0, 0.05),
         ("minCornerAngle", tl!("Sharpest corner"), "°", 179.0, 30.0),
     ] {
-        if let Some(v) = number(ui, row, key, label, suffix, 0.0, hi, d) {
+        if let Some(v) = number(ui, row, e, key, label, suffix, 0.0, hi, d) {
             e.push(key, json!(v));
         }
     }
@@ -546,13 +621,13 @@ fn ties_group(ui: &mut Ui, row: &Row, e: &mut Edits) {
         if let Some(v) = choice(ui, row, "patternType", tl!("Pattern"), PATTERN_TYPES, "grid") {
             e.push("patternType", json!(v));
         }
-        if let Some(v) = number(ui, row, "patternWidthMm", tl!("Tie size"), "mm", 0.05, 50.0, 0.6) {
+        if let Some(v) = number(ui, row, e, "patternWidthMm", tl!("Tie size"), "mm", 0.05, 50.0, 0.6) {
             e.push("patternWidthMm", json!(v));
         }
-        if let Some(v) = number(ui, row, "patternSpacingMm", tl!("Spacing"), "mm", 0.5, 500.0, 8.0) {
+        if let Some(v) = number(ui, row, e, "patternSpacingMm", tl!("Spacing"), "mm", 0.5, 500.0, 8.0) {
             e.push("patternSpacingMm", json!(v));
         }
-        if let Some(v) = number(ui, row, "patternAngle", tl!("Angle"), "°", 0.0, 360.0, 0.0) {
+        if let Some(v) = number(ui, row, e, "patternAngle", tl!("Angle"), "°", 0.0, 360.0, 0.0) {
             e.push("patternAngle", json!(v));
         }
         if let Some(v) = choice(ui, row, "patternWhere", tl!("Where"), PATTERN_WHERE, "everywhere") {
@@ -560,10 +635,10 @@ fn ties_group(ui: &mut Ui, row: &Row, e: &mut Edits) {
         }
     }
     if tie_mode != "gauze" {
-        if let Some(v) = number(ui, row, "tieWidthMm", tl!("Tie width"), "mm", 0.05, 50.0, 1.0) {
+        if let Some(v) = number(ui, row, e, "tieWidthMm", tl!("Tie width"), "mm", 0.05, 50.0, 1.0) {
             e.push("tieWidthMm", json!(v));
         }
-        if let Some(v) = number(ui, row, "tiesPerIsland", tl!("Ties per island"), "", 1.0, 8.0, 2.0) {
+        if let Some(v) = number(ui, row, e, "tiesPerIsland", tl!("Ties per island"), "", 1.0, 8.0, 2.0) {
             e.push("tiesPerIsland", json!(v.round()));
         }
         ui.horizontal(|ui| {
@@ -588,7 +663,7 @@ fn ties_group(ui: &mut Ui, row: &Row, e: &mut Edits) {
                 }
             }
         });
-        if let Some(v) = number(ui, row, "tieSeed", tl!("Seed"), "", 0.0, 1e9, 1.0) {
+        if let Some(v) = number(ui, row, e, "tieSeed", tl!("Seed"), "", 0.0, 1e9, 1.0) {
             e.push("tieSeed", json!(v.round()));
         }
         if let Some(v) = check(ui, row, "tieSpread", tl!("Spread the ties around each island"), true) {
@@ -618,7 +693,7 @@ fn repeat_group(ui: &mut Ui, row: &Row, e: &mut Edits) {
         e.push("hoshi", json!(v));
     }
     if row.on("hoshi", true)
-        && let Some(v) = number(ui, row, "hoshiDiameterMm", tl!("Hole diameter"), "mm", 0.2, 20.0, 1.5)
+        && let Some(v) = number(ui, row, e, "hoshiDiameterMm", tl!("Hole diameter"), "mm", 0.2, 20.0, 1.5)
     {
         e.push("hoshiDiameterMm", json!(v));
     }

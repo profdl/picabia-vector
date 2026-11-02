@@ -18,6 +18,13 @@
 //!   arguments), `mod(a, b)` (always ≥ 0 for b > 0), `clamp(x, lo, hi)`, `lerp(a, b, t)`,
 //!   `rad(deg)`, `deg(rad)`, `rand(k)` (a number in 0..1 from `k`, the same everywhere).
 //!
+//! # Binding expressions
+//! A field's binding (`crate::bind`) is an expression too, parsed with [`Expr::parse_binding`]:
+//! there `t` is the clock (0 until Picabia has one; for a 0-to-1 ramp across the copies write
+//! `i / (n - 1)`), and any other name is a document parameter (`crate::params`), read as a
+//! number when the expression is parsed. The per-copy expressions above (`rotateExpr`…) keep
+//! their meaning of `t`.
+//!
 //! # Bounds
 //! Texts over [`MAX_EXPR_LEN`] bytes and nesting deeper than [`MAX_EXPR_DEPTH`] are refused when
 //! parsing, so evaluation is a bounded walk with no allocation. Evaluation never panics; a result
@@ -52,6 +59,64 @@ impl Env {
         let t = if n > 1 { i as f64 / (n - 1) as f64 } else { 0.0 };
         Env { i: i as f64, n: n as f64, t, value }
     }
+}
+
+/// What a binding expression's names mean besides `i`, `n`, `value` and `pi`
+/// ([`Expr::parse_binding`]).
+pub trait Names {
+    /// The number name `name` (lowercase) stands for: `None` when it isn't a name at all,
+    /// `Some(Err(why))` when it is one with no number (a text parameter that isn't a number).
+    fn number(&self, name: &str) -> Option<Result<f64, String>>;
+    /// The value of `t`: the clock (0 for now).
+    fn clock(&self) -> f64;
+}
+
+/// The names in `text` that aren't `i`, `n`, `t`, `value`, `pi` or a function call (lowercase, in
+/// order, each once): the parameters a binding expression reads. Empty when the text doesn't lex
+/// or is over [`MAX_EXPR_LEN`] (it won't parse either).
+pub fn names_in(text: &str) -> Vec<String> {
+    if text.len() > MAX_EXPR_LEN {
+        return Vec::new();
+    }
+    let Ok(tokens) = lex(text) else { return Vec::new() };
+    let mut out: Vec<String> = Vec::new();
+    for (k, (tok, _)) in tokens.iter().enumerate() {
+        let Tok::Name(name) = tok else { continue };
+        let call = matches!(tokens.get(k + 1), Some((Tok::Open, _)));
+        if call || matches!(name.as_str(), "i" | "n" | "t" | "value" | "pi") || out.contains(name) {
+            continue;
+        }
+        out.push(name.clone());
+    }
+    out
+}
+
+/// `text` with the parameter name `from` (any case) replaced by `to` wherever it is read as a
+/// name (not as a function); unchanged when it doesn't lex.
+pub fn rename_in(text: &str, from: &str, to: &str) -> String {
+    let Ok(tokens) = lex(text) else { return text.to_string() };
+    let from = from.to_ascii_lowercase();
+    let mut out = String::with_capacity(text.len() + to.len());
+    let mut last = 0;
+    for (k, (tok, at)) in tokens.iter().enumerate() {
+        let Tok::Name(name) = tok else { continue };
+        if *name != from || matches!(tokens.get(k + 1), Some((Tok::Open, _))) {
+            continue;
+        }
+        out.push_str(text.get(last..*at).unwrap_or_default());
+        out.push_str(to);
+        // Names are ASCII: the lowercase name has the source's length.
+        last = at + name.len();
+    }
+    out.push_str(text.get(last..).unwrap_or_default());
+    out
+}
+
+/// Whether `name` (any case) means something in an expression already (`i`, `n`, `t`, `value`,
+/// `pi` or a function), so a parameter can't take it.
+pub fn reserved(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    matches!(lower.as_str(), "i" | "n" | "t" | "value" | "pi") || Func::of(&lower).is_some()
 }
 
 /// Why an expression didn't parse: a message and the byte offset it refers to.
@@ -174,11 +239,22 @@ impl Expr {
     /// Parse `text`. Refused: empty text, more than [`MAX_EXPR_LEN`] bytes, nesting deeper than
     /// [`MAX_EXPR_DEPTH`], unknown names, wrong argument counts, stray characters.
     pub fn parse(text: &str) -> Result<Expr, ExprError> {
+        Expr::parse_in(text, None)
+    }
+
+    /// Parse a binding expression (see the module docs): `t` is `names`' clock and other names
+    /// are looked up in `names` (their numbers are taken now). Refused as [`Expr::parse`] does,
+    /// and for a name `names` doesn't know or has no number for.
+    pub fn parse_binding(text: &str, names: &dyn Names) -> Result<Expr, ExprError> {
+        Expr::parse_in(text, Some(names))
+    }
+
+    fn parse_in(text: &str, names: Option<&dyn Names>) -> Result<Expr, ExprError> {
         if text.len() > MAX_EXPR_LEN {
             return Err(ExprError { message: format!("keep expressions under {MAX_EXPR_LEN} characters"), at: 0 });
         }
         let tokens = lex(text)?;
-        let mut p = Parser { tokens: &tokens, pos: 0, end: text.len() };
+        let mut p = Parser { tokens: &tokens, pos: 0, end: text.len(), names };
         if tokens.is_empty() {
             return Err(ExprError { message: "the expression is empty".into(), at: 0 });
         }
@@ -295,6 +371,8 @@ struct Parser<'a> {
     tokens: &'a [(Tok, usize)],
     pos: usize,
     end: usize,
+    /// Binding mode: `t` is the clock and other names are parameters.
+    names: Option<&'a dyn Names>,
 }
 
 fn binding(op: char) -> Option<(u8, Bin)> {
@@ -387,14 +465,20 @@ impl Parser<'_> {
                     }
                     return Ok(Node::Call(f, args));
                 }
-                Ok(match name.as_str() {
-                    "i" => Node::Var(Var::I),
-                    "n" => Node::Var(Var::N),
-                    "t" => Node::Var(Var::T),
-                    "value" => Node::Var(Var::Value),
-                    "pi" => Node::Num(std::f64::consts::PI),
+                Ok(match (name.as_str(), self.names) {
+                    ("i", _) => Node::Var(Var::I),
+                    ("n", _) => Node::Var(Var::N),
+                    ("t", Some(names)) => Node::Num(names.clock()),
+                    ("t", None) => Node::Var(Var::T),
+                    ("value", _) => Node::Var(Var::Value),
+                    ("pi", _) => Node::Num(std::f64::consts::PI),
                     _ if Func::of(&name).is_some() => return Err(ExprError { message: format!("`{name}` needs parentheses: {name}(…)"), at }),
-                    _ => return Err(ExprError { message: format!("unknown name `{name}` (use i, n, t, value or pi)"), at }),
+                    (_, Some(names)) => match names.number(&name) {
+                        Some(Ok(v)) => Node::Num(v),
+                        Some(Err(why)) => return Err(ExprError { message: format!("`{name}` {why}"), at }),
+                        None => return Err(ExprError { message: format!("unknown name `{name}` (use i, n, t, value, pi or a parameter)"), at }),
+                    },
+                    (_, None) => return Err(ExprError { message: format!("unknown name `{name}` (use i, n, t, value or pi)"), at }),
                 })
             }
             Tok::Op(c) => Err(ExprError { message: format!("unexpected `{c}`"), at }),

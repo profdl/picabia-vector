@@ -193,6 +193,11 @@ pub struct Inputs {
     /// The symbols the design places (also inside other symbols' art): name and art (`None`:
     /// no such symbol).
     symbols: Vec<(String, Option<Arc<Node>>)>,
+    /// The document's parameter values (`vectorcraft_modifiers::Scope::key_all`; 0 for none):
+    /// a bound stencil field, or a bound row of an object inside, changes with them, not with the
+    /// object. Any parameter change re-gathers; the geometry key spares the compute when the cut
+    /// is the same.
+    params: u64,
 }
 
 fn copies_of(doc: &Document, n: &Node) -> (Vec<Affine>, Option<Repeat>) {
@@ -257,12 +262,16 @@ impl Inputs {
                 stack.extend(kids.iter().rev().map(|k| (k, false)));
             }
         }
-        Inputs { node: node.clone(), lineage: Lineage::of(doc), copies, repeat, inner, symbols }
+        let params = vectorcraft_modifiers::Scope::of_doc(doc).key_all();
+        Inputs { node: node.clone(), lineage: Lineage::of(doc), copies, repeat, inner, symbols, params }
     }
 
     /// Whether object `n` of `doc` still matches this snapshot.
     pub fn matches(&self, doc: &Document, n: &Node) -> bool {
         if !std::ptr::eq(Arc::as_ptr(&self.node), n) {
+            return false;
+        }
+        if self.params != vectorcraft_modifiers::Scope::of_doc(doc).key_all() {
             return false;
         }
         let same_art = |a: Option<&Arc<Node>>, b: Option<&Arc<Node>>| match (a, b) {

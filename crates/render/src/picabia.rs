@@ -124,10 +124,12 @@ pub fn has_stack(n: &Node) -> bool {
     vectorcraft_modifiers::has_modifiers(n) && matches!(vectorcraft_modifiers::node_stack(n), Some(Ok(s)) if s.is_active())
 }
 
-/// Whether `n`'s stack copies onto another object: its art then changes with that object, so
-/// caches kept by `n`'s identity alone don't hold it.
+/// Whether `n`'s stack copies onto another object or has bound fields: its art then changes with
+/// that object or with the document's parameters, so caches kept by `n`'s identity alone don't
+/// hold it.
 pub fn has_targets(n: &Node) -> bool {
-    vectorcraft_modifiers::has_modifiers(n) && matches!(vectorcraft_modifiers::node_stack(n), Some(Ok(s)) if s.targets().next().is_some())
+    vectorcraft_modifiers::has_modifiers(n)
+        && matches!(vectorcraft_modifiers::node_stack(n), Some(Ok(s)) if s.targets().next().is_some() || s.has_bindings())
 }
 
 /// `targets` also stands for a stencil: its drawing changes when its sheet arrives, not only with
@@ -680,13 +682,20 @@ fn bake_tree(doc: &Document, out: &mut Document, n: &Node, depth: usize) -> Opti
 }
 
 /// What may draw differently in `new` than in `old` because a copy-to-shape target changed while
-/// its source didn't: the sources' painted bounds before and after. Looks only into the containers
-/// that hold copy-to-shape sources ([`subtree_flags`]): nothing when the document has none.
+/// its source didn't, or a parameter a bound object reads did: those objects' painted bounds before
+/// and after. Looks only into the containers that hold such objects ([`subtree_flags`]): nothing
+/// when the document has none.
 pub(crate) fn dependents(old: &Document, new: &Document) -> Option<Rect> {
+    let (os, ns) = (old.symbol_boxes(), new.symbol_boxes());
+    // A bound object inside a symbol's art draws in every instance: when the parameters it reads
+    // change, the layers are drawn again (rare: symbols with bound stacks).
+    if symbols_read_changed(old, new) {
+        let all = |d: &Document, s: &SymbolBoxes| d.layers.iter().filter_map(|l| crate::brush_fx::cull_bounds(s, l)).reduce(|a, b| a.union(b));
+        return vectorcraft_geom::union_opt(all(new, &ns), all(old, &os));
+    }
     if !doc_flags(new).targets {
         return None;
     }
-    let (os, ns) = (old.symbol_boxes(), new.symbol_boxes());
     let mut area: Option<Rect> = None;
     let mut visit = |n: &Node| {
         if !has_targets(n) {
@@ -698,6 +707,10 @@ pub(crate) fn dependents(old: &Document, new: &Document) -> Option<Rect> {
             (None, None) => false,
             _ => true,
         });
+        // A bound object whose parameters changed (the object itself may not have).
+        let moved = moved
+            || (vectorcraft_modifiers::has_bindings(n)
+                && old.node_uncached(n.id).map(|o| vectorcraft_modifiers::bound_key(old, o)) != Some(vectorcraft_modifiers::bound_key(new, n)));
         if moved {
             area = vectorcraft_geom::union_opt(area, crate::brush_fx::cull_bounds(&ns, n));
             area = vectorcraft_geom::union_opt(area, old.node_uncached(n.id).and_then(|o| crate::brush_fx::cull_bounds(&os, o)));
@@ -716,6 +729,28 @@ pub(crate) fn dependents(old: &Document, new: &Document) -> Option<Rect> {
         walk(l, 0, &mut visit);
     }
     area
+}
+
+/// Whether a bound object in a symbol's art reads a parameter whose value differs between `old`
+/// and `new`. Nothing to look at when neither the parameters nor the variables changed.
+fn symbols_read_changed(old: &Document, new: &Document) -> bool {
+    if new.symbols.is_empty()
+        || (vectorcraft_doc::Shared::ptr_eq(&old.unknown, &new.unknown) && vectorcraft_doc::Shared::ptr_eq(&old.variables, &new.variables))
+    {
+        return false;
+    }
+    let mut changed = false;
+    for s in &new.symbols {
+        s.art.walk(&mut |n: &Node| {
+            if !changed && vectorcraft_modifiers::has_bindings(n) {
+                changed = vectorcraft_modifiers::bound_key(old, n) != vectorcraft_modifiers::bound_key(new, n);
+            }
+        });
+        if changed {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]

@@ -14,9 +14,13 @@ use vectorcraft_testkit::strategies::junk_params;
 
 /// `fx` with a stack on each selected object: a resample (geometry, on the object), a grid array,
 /// a trim, a tidy, a deform, a displace and a coarse screen (geometry, on every copy), a mirror and a copy to shape onto the first
-/// selected object (refused on that object itself), and copied rows for `modifier.paste`.
+/// selected object (refused on that object itself), and copied rows for `modifier.paste`. PIC6:
+/// two parameters, the grid's rows bound to one, the deform's angle to an expression, and a
+/// transform each whose rotation is a per-copy expression.
 fn stacked(fx: Fixture) -> Session {
     let mut s = fx.session();
+    let _ = s.execute("param.add", &json!({"name": "copies", "value": 2, "min": 1, "max": 4}));
+    let _ = s.execute("param.add", &json!({"name": "label", "type": "text", "value": "x"}));
     let selected: Vec<u64> = s.active().map(|d| d.selection.objects.iter().map(|i| i.0).collect()).unwrap_or_default();
     for (k, id) in selected.iter().enumerate() {
         s.execute("modifier.add", &json!({"ids": [id], "kind": "resample", "props": {"mode": "subdivide", "iterations": 2}})).unwrap();
@@ -27,6 +31,10 @@ fn stacked(fx: Fixture) -> Session {
         s.execute("modifier.add", &json!({"ids": [id], "kind": "displace", "props": {"mode": "radial", "amplitude": 20}})).unwrap();
         s.execute("modifier.add", &json!({"ids": [id], "kind": "screen", "props": {"lpi": 4, "quality": 6, "spot": "ellipse"}})).unwrap();
         s.execute("modifier.add", &json!({"ids": [id], "kind": "mirror"})).unwrap();
+        s.execute("modifier.add", &json!({"ids": [id], "kind": "transformEach"})).unwrap();
+        s.execute("modifier.bind", &json!({"ids": [id], "index": 1, "field": "rows", "binding": {"param": "copies"}})).unwrap();
+        s.execute("modifier.bind", &json!({"ids": [id], "index": 4, "field": "angle", "binding": {"expr": "copies * 45 + value"}})).unwrap();
+        s.execute("modifier.bind", &json!({"ids": [id], "index": 8, "field": "rotate", "binding": {"expr": "i * 360 / n"}})).unwrap();
         if k > 0 {
             let _ = s.execute("modifier.add", &json!({"ids": [id], "kind": "copyToShape", "props": {"target": selected[0].to_string()}}));
         }
@@ -42,7 +50,7 @@ fn modifier_commands_with_junk_params_on_stacked_objects() {
     let path = vectorcraft_testkit::temp_dir("picabia-sweep").join("out.bin").to_string_lossy().to_string();
     let mut failures = vec![];
     let mut calls = 0usize;
-    let ids: Vec<&str> = command_specs().iter().map(|c| c.id).filter(|id| id.starts_with("modifier.")).collect();
+    let ids: Vec<&str> = command_specs().iter().map(|c| c.id).filter(|id| id.starts_with("modifier.") || id.starts_with("param.")).collect();
     assert!(ids.len() >= 9, "{ids:?}");
     for fx in Fixture::ALL {
         for id in &ids {
@@ -89,6 +97,11 @@ fn modifier_commands_undo_exactly() {
         ("modifier.apply", json!({})),
         ("modifier.duplicate", json!({"index": 0})),
         ("modifier.apply", json!({"upTo": 0})),
+        ("modifier.bind", json!({"index": 1, "field": "cols", "binding": {"expr": "copies + 1"}})),
+        ("modifier.unbind", json!({"index": 1})),
+        ("param.add", json!({"name": "gap", "value": 3})),
+        ("param.set", json!({"name": "copies", "value": 3, "rename": "count"})),
+        ("param.remove", json!({"name": "copies"})),
     ];
     for (id, p) in cases {
         let mut s = stacked(Fixture::Multi);

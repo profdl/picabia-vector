@@ -143,7 +143,13 @@ fn plan(doc: &Document, id: NodeId, up_to: Option<usize>, budget: &mut usize) ->
     let node = doc.node(id).ok_or_else(|| super::super::bad(CMD, format!("no object with id {}", id.0)))?;
     // The pivot the renderer uses (a symbol instance pivots on its art).
     let bounds = vectorcraft_modifiers::node_bounds_in_doc(doc, node);
-    let out = vectorcraft_modifiers::evaluate_with(&baked, bounds, &vectorcraft_modifiers::DocTargets::new(doc, id));
+    // Bound fields bake the values they read now (the document's parameters).
+    let out = vectorcraft_modifiers::evaluate_in(
+        &baked,
+        bounds,
+        &vectorcraft_modifiers::DocTargets::new(doc, id),
+        &vectorcraft_modifiers::Scope::of_doc(doc),
+    );
     // One unmoved copy is the object itself, unless geometry rows reshape it.
     let unmoved = matches!(out.instances.as_slice(), [one] if one.transform == Affine::IDENTITY) && !out.has_geometry();
     if out.instances.is_empty() || unmoved {

@@ -11,8 +11,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use vectorcraft_geom::Rect;
 
-use crate::eval::{Output, evaluate_with};
+use crate::eval::{Output, evaluate_in};
 use crate::model::Stack;
+use crate::params::Scope;
 use crate::target::{NoTargets, TargetResolver, TargetShape, ToneTarget};
 use crate::{ModError, parse};
 
@@ -31,11 +32,15 @@ struct Parsed {
     stack: Result<Arc<Stack>, ModError>,
 }
 
+/// An output's key: (source hash, source length, bounds, the targets' key, the bound parameters'
+/// key).
+type OutputKey = (u64, usize, [u64; 4], u64, u64);
+
 #[derive(Default)]
 struct Caches {
     parsed: HashMap<u64, Parsed>,
     parsed_bytes: usize,
-    outputs: HashMap<(u64, usize, [u64; 4], u64), Arc<Output>>,
+    outputs: HashMap<OutputKey, Arc<Output>>,
     output_instances: usize,
     output_tone_bytes: usize,
 }
@@ -106,7 +111,15 @@ impl TargetResolver for Resolved {
 /// outline hash (or the reason it didn't resolve) is part of the key. `Err` when the source
 /// doesn't parse.
 pub(crate) fn evaluated_with(src: &str, bounds: Rect, targets: &dyn TargetResolver) -> Result<Arc<Output>, ModError> {
+    evaluated_in(src, bounds, targets, &Scope::default())
+}
+
+/// [`evaluated_with`] with bound fields reading `scope`: the key also holds the values of the
+/// parameters the stack's bindings read (and only those), so changing a parameter re-evaluates
+/// exactly the stacks that read it.
+pub(crate) fn evaluated_in(src: &str, bounds: Rect, targets: &dyn TargetResolver, scope: &Scope) -> Result<Arc<Output>, ModError> {
     let stack = parsed(src)?;
+    let param_key = if stack.has_bindings() { scope.key(stack.bound_names().iter().map(String::as_str)) } else { 0 };
     let mut resolved: Vec<ResolvedShape> = Vec::new();
     for (_, t) in stack.shape_targets() {
         if !resolved.iter().any(|(r, _)| r == t) {
@@ -135,13 +148,13 @@ pub(crate) fn evaluated_with(src: &str, bounds: Rect, targets: &dyn TargetResolv
         }
     }
     let target_key = if resolved.is_empty() && tones.is_empty() { 0 } else { h.finish() };
-    let key = (hash(src), src.len(), [bounds.x0.to_bits(), bounds.y0.to_bits(), bounds.x1.to_bits(), bounds.y1.to_bits()], target_key);
+    let key = (hash(src), src.len(), [bounds.x0.to_bits(), bounds.y0.to_bits(), bounds.x1.to_bits(), bounds.y1.to_bits()], target_key, param_key);
     if let Some(c) = lock().as_ref()
         && let Some(o) = c.outputs.get(&key)
     {
         return Ok(o.clone());
     }
-    let out = Arc::new(evaluate_with(&stack, bounds, &Resolved(resolved, tones)));
+    let out = Arc::new(evaluate_in(&stack, bounds, &Resolved(resolved, tones), scope));
     let mut guard = lock();
     let c = guard.get_or_insert_with(Caches::default);
     let n = out.instances.len();
