@@ -28,16 +28,29 @@ pub fn object_items() -> Vec<Item> {
     items
 }
 
-/// The Object ▸ Physics submenu: Simulate (drop and settle, one undo step), settings for the
-/// selection (dynamic, static, or open them in the Appearance panel), and Clear.
+/// The Object ▸ Physics submenu: Simulate to Rest and Start Simulation (a live session with the
+/// transport bar), Drop and Apply (phase 1's instant drop, one undo step), settings for the
+/// selection (dynamic, static, soft presets, or open them in the Appearance panel), and Clear.
 pub fn physics_items() -> Vec<Item> {
     vec![
+        // Simulate to Rest runs the session to rest and shows it on the canvas with the transport
+        // bar (Apply or Cancel); Start Simulation plays it live.
+        Item::Cmd("Simulate to Rest", "physics.toRest", json!({})),
+        Item::Cmd("Start Simulation", "physics.play", json!({})),
         // `{}`, not null: the app adds the active artboard (the walls) to an object's params.
-        Item::Cmd("Simulate", "physics.simulate", json!({})),
+        Item::Cmd("Drop and Apply", "physics.simulate", json!({})),
         Item::Sep,
         Item::Cmd("Add Physics", "physics.set", json!({"props": {"enabled": true}})),
         Item::Cmd("Make Static", "physics.set", json!({"props": {"bodyType": "static"}})),
+        Item::Cmd("Make Cloth", "physics.set", json!({"props": {"bodyType": "soft", "soft": {"preset": "cloth"}}})),
+        Item::Cmd("Make Jelly", "physics.set", json!({"props": {"bodyType": "soft", "soft": {"preset": "jelly"}}})),
+        Item::Cmd("Make Rubber", "physics.set", json!({"props": {"bodyType": "soft", "soft": {"preset": "rubber"}}})),
         Item::Cmd("Settings…", crate::picabia_ui::PHYSICS_SETTINGS, json!({})),
+        Item::Sep,
+        // Pins: anchors of a soft object chosen with Direct Selection.
+        Item::Cmd("Pin Points", "physics.pin", json!({})),
+        Item::Cmd("Attach Points to Selected", "physics.pin", json!({"attachToSelected": true})),
+        Item::Cmd("Unpin Points", "physics.unpin", json!({})),
         Item::Sep,
         Item::Cmd("Clear Physics", "physics.clear", serde_json::Value::Null),
     ]

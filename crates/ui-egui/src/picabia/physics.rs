@@ -17,7 +17,29 @@ use crate::{VectorcraftApp, widgets};
 const ROW: f32 = 30.0;
 const EYE_W: f32 = 26.0;
 
-const BODIES: &[(&str, &str)] = &[("dynamic", "Dynamic"), ("static", "Static"), ("kinematic", "Kinematic")];
+const BODIES: &[(&str, &str)] = &[("dynamic", "Dynamic"), ("static", "Static"), ("kinematic", "Kinematic"), ("soft", "Soft")];
+const PRESETS: &[(&str, &str)] = &[("cloth", "Cloth"), ("jelly", "Jelly"), ("rubber", "Rubber")];
+
+/// A soft body's fields (PIC31.7): `(key under soft, label, how, cloth only / cells only)`. Values
+/// shown are the preset's unless set on the object; editing one sets it (a running simulation takes
+/// it at its next step, or restarts that body when it needs a new mesh).
+const SOFT_FIELDS: &[(&str, &str, F, Only)] = &[
+    ("preset", "Preset", F::Choice(PRESETS), Only::Any),
+    ("stiffness", "Stiffness", F::Num(0.0, 1.0, 2, ""), Only::Any),
+    ("bend", "Bend", F::Num(0.0, 1.0, 2, ""), Only::Cloth),
+    ("shapeKeep", "Shape memory", F::Num(0.0, 1.0, 2, ""), Only::Cells),
+    ("damping", "Wobble damping", F::Num(0.0, 1.0, 2, ""), Only::Any),
+    ("resolution", "Detail", F::Num(2.0, 100.0, 1, "pt"), Only::Any),
+    ("selfCollide", "Self-collide", F::Bool, Only::Any),
+];
+
+/// Which soft bodies a field applies to.
+#[derive(Clone, Copy, PartialEq)]
+enum Only {
+    Any,
+    Cloth,
+    Cells,
+}
 const COLLIDERS: &[(&str, &str)] = &[("auto", "Auto"), ("precise", "Precise"), ("fast", "Fast"), ("box", "Box")];
 
 /// How a field is edited.
@@ -100,12 +122,20 @@ pub fn section(app: &mut VectorcraftApp, ui: &mut Ui) {
     }
     let body = v.first.get("bodyType").and_then(Value::as_str).unwrap_or("dynamic");
     let shown = if v.mixed { tl!("Mixed") } else { BODIES.iter().find(|(k, _)| *k == body).map_or(body, |(_, l)| tl!(l)) };
-    let label = format!("{} {shown}", tl!("Physics:"));
+    let label = match soft_values(&v.first).filter(|_| !v.mixed) {
+        Some(soft) => {
+            let preset = soft.get("preset").and_then(Value::as_str).unwrap_or("jelly");
+            format!("{} {shown} ({})", tl!("Physics:"), PRESETS.iter().find(|(k, _)| *k == preset).map_or(preset, |(_, l)| tl!(l)))
+        }
+        None => format!("{} {shown}", tl!("Physics:")),
+    };
     let col = if enabled { t.text_strong } else { t.text_dim };
     ui.painter().text(pos2(r.left() + EYE_W + 24.0, r.center().y), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(12.5), col);
     let br = Rect::from_min_size(pos2(r.right() - 84.0, r.center().y - 11.0), vec2(80.0, 22.0));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(br).layout(egui::Layout::right_to_left(egui::Align::Center)));
-    if widgets::flat_button(&mut child, tl!("Simulate"), 76.0).on_hover_text(tl!("Drop and settle: run the physics until everything rests")).clicked()
+    if widgets::flat_button(&mut child, tl!("Simulate"), 76.0)
+        .on_hover_text(tl!("Simulate to Rest: run the physics until everything rests and show it; Apply or Cancel on the bar"))
+        .clicked()
     {
         simulate(app);
     }
@@ -120,34 +150,67 @@ pub fn section(app: &mut VectorcraftApp, ui: &mut Ui) {
     }
 }
 
-/// Run Simulate and say what happened in the status line.
+/// Run Simulate to Rest (the session shows the result; Apply or Cancel on the transport bar) and
+/// say what happened in the status line.
 fn simulate(app: &mut VectorcraftApp) {
-    match app.run("physics.simulate", json!({})) {
+    match app.run("physics.toRest", json!({})) {
         Ok(out) => {
-            let moved = out.get("moved").and_then(Value::as_array).map_or(0, Vec::len);
             let secs = out.get("seconds").and_then(Value::as_f64).unwrap_or(0.0);
             let settled = out.get("settled").and_then(Value::as_bool).unwrap_or(false);
-            let n = crate::i18n::trn(crate::i18n::current(), moved as u64, "{n} object moved", "{n} objects moved");
             let state = if settled { tl!("settled") } else { tl!("still moving at the step limit") };
-            app.ui.status = format!("{n} ({secs:.1} s, {state})");
+            app.ui.status = format!("{secs:.1} s, {state}: {}", tl!("Apply or Cancel on the bar"));
         }
         Err(e) => app.ui.status = e,
     }
 }
 
+/// A soft body's fields as shown: the preset's values with the object's overrides, `None` for a
+/// body that isn't soft.
+fn soft_values(first: &Value) -> Option<serde_json::Map<String, Value>> {
+    let (settings, _) = vectorcraft_physics::Settings::from_value(first).ok()?;
+    let soft = settings.soft_body()?;
+    let f = soft.fields();
+    let mut m = serde_json::Map::new();
+    m.insert("preset".into(), json!(soft.preset.as_str()));
+    for (k, x) in [("stiffness", f.stiffness), ("bend", f.bend), ("shapeKeep", f.shape_keep), ("damping", f.damping), ("resolution", f.resolution)] {
+        m.insert(k.into(), json!(x));
+    }
+    m.insert("selfCollide".into(), json!(f.self_collide));
+    Some(m)
+}
+
 fn fields(app: &mut VectorcraftApp, ui: &mut Ui, v: &View) {
     let t = Tokens::get(ui.ctx());
     let mut change: Option<(String, Value)> = None;
+    let soft = soft_values(&v.first);
     let mut clear = false;
     egui::Frame::NONE.fill(t.panel_darker).inner_margin(egui::Margin { left: (EYE_W + 12.0) as i8, right: 6, top: 4, bottom: 4 }).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 3.0;
-        for (key, label, how) in FIELDS {
-            let Some(cur) = v.first.get(*key) else { continue };
+        // A soft body has no collider fidelity (its particles collide).
+        let rows: Vec<(String, &str, F, Option<&Value>)> = FIELDS
+            .iter()
+            .filter(|(key, ..)| !(soft.is_some() && *key == "colliderType"))
+            .map(|(key, label, how)| (key.to_string(), *label, *how, v.first.get(*key)))
+            .chain(soft.iter().flat_map(|m| {
+                let cloth = m.get("preset").and_then(Value::as_str) == Some("cloth");
+                SOFT_FIELDS
+                    .iter()
+                    .filter(move |(_, _, _, only)| match only {
+                        Only::Any => true,
+                        Only::Cloth => cloth,
+                        Only::Cells => !cloth,
+                    })
+                    .map(move |(key, label, how, _)| (format!("soft.{key}"), *label, *how, m.get(*key)))
+            }))
+            .collect();
+        for (key, label, how, cur) in &rows {
+            let (key, label, how) = (key, label, how);
+            let Some(cur) = cur else { continue };
             ui.horizontal(|ui| {
                 if !matches!(how, F::Bool) {
                     ui.add_sized(vec2(84.0, 22.0), egui::Label::new(egui::RichText::new(tl!(label)).size(11.5).color(t.text)).truncate());
                 }
-                let fid = ("pp-field", *key);
+                let fid = ("pp-field", key.as_str());
                 let new = match *how {
                     F::Num(lo, hi, decimals, suffix) => widgets::plain_field(ui, fid, cur.as_f64().unwrap_or(0.0), suffix, decimals, 70.0)
                         .filter(|x| x.is_finite())
@@ -178,7 +241,11 @@ fn fields(app: &mut VectorcraftApp, ui: &mut Ui, v: &View) {
         });
     });
     if let Some((key, value)) = change {
-        app.run("physics.set", json!({"ids": ids_json(&v.ids), "props": {key: value}})).ok();
+        let props = match key.strip_prefix("soft.") {
+            Some(k) => json!({"soft": {k: value}}),
+            None => json!({key: value}),
+        };
+        app.run("physics.set", json!({"ids": ids_json(&v.ids), "props": props})).ok();
     }
     if clear {
         app.run("physics.clear", json!({"ids": ids_json(&v.ids)})).ok();

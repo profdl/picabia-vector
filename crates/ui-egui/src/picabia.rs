@@ -22,6 +22,12 @@ pub mod physics;
 #[cfg(test)]
 mod physics_tests;
 pub mod properties;
+pub mod sim_bar;
+#[cfg(test)]
+mod sim_bar_tests;
+pub mod sim_poke;
+#[cfg(test)]
+mod sim_poke_tests;
 pub mod task_bar;
 
 use egui::{RichText, Ui};

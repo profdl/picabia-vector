@@ -43,14 +43,24 @@ pub enum Piece {
 
 impl Piece {
     fn points(&self) -> Vec<Point> {
+        self.outline(16)
+    }
+
+    /// The piece's points: a ring's own, a ball as `ball_points` points around it, a box's corners.
+    pub fn outline(&self, ball_points: u32) -> Vec<Point> {
         match self {
             Piece::Ring { pts, .. } => pts.clone(),
-            Piece::Ball { center, radius } => (0..16)
-                .map(|i| f64::from(i) * std::f64::consts::TAU / 16.0)
+            Piece::Ball { center, radius } => (0..ball_points.max(3))
+                .map(|i| f64::from(i) * std::f64::consts::TAU / f64::from(ball_points.max(3)))
                 .map(|a| Point::new(center.x + radius * a.cos(), center.y + radius * a.sin()))
                 .collect(),
             Piece::Box(r) => vec![Point::new(r.x0, r.y0), Point::new(r.x1, r.y0), Point::new(r.x1, r.y1), Point::new(r.x0, r.y1)],
         }
+    }
+
+    /// Whether the piece is a closed outline (a closed ring, a ball, a box).
+    pub fn is_closed(&self) -> bool {
+        !matches!(self, Piece::Ring { closed: false, .. })
     }
 }
 
@@ -61,6 +71,10 @@ pub struct BodyShape {
     pub pieces: Vec<Piece>,
     pub bounds: Rect,
     pub notes: Vec<String>,
+    /// For each piece, the outline group it belongs to: a path's subpaths (or a compound path's
+    /// members) share one, so even-odd nesting makes holes only within it; a group's members each
+    /// have their own. Empty: all one.
+    pub owners: Vec<usize>,
 }
 
 impl BodyShape {
@@ -80,12 +94,12 @@ pub fn body_shape(node: &Node, symbols: Option<&SymbolBoxes>) -> Result<BodyShap
     check_rect(bounds)?;
     let tol = (bounds.width().hypot(bounds.height()) * 0.002).clamp(0.05, 5.0);
     // First count the flattened points, then keep every `stride`-th of them.
-    let mut counter = Collector { symbols, tol, stride: 1, seen: 0, pieces: Vec::new(), read: 0, left_out: 0, counting: true };
+    let mut counter = Collector { symbols, tol, stride: 1, seen: 0, pieces: Vec::new(), read: 0, left_out: 0, counting: true, owner: 0, fixed: None };
     counter.node(node, 0);
     let stride = counter.seen.div_ceil(MAX_RAW_POINTS).max(1);
-    let mut c = Collector { symbols, tol, stride, seen: 0, pieces: Vec::new(), read: 0, left_out: 0, counting: false };
+    let mut c = Collector { symbols, tol, stride, seen: 0, pieces: Vec::new(), read: 0, left_out: 0, counting: false, owner: 0, fixed: None };
     c.node(node, 0);
-    let mut pieces = c.pieces;
+    let mut owned = c.pieces;
     let mut notes = Vec::new();
     if c.left_out > 0 {
         notes.push(format!("more than {MAX_COLLECTED_PIECES} outlines: {} left out", c.left_out));
@@ -93,11 +107,12 @@ pub fn body_shape(node: &Node, symbols: Option<&SymbolBoxes>) -> Result<BodyShap
     if stride > 1 {
         notes.push(format!("{} outline points: every {stride}th kept", counter.seen));
     }
-    pieces.retain(|p| match p {
+    owned.retain(|(p, _)| match p {
         Piece::Ring { pts, .. } => pts.len() >= 2 && pts.iter().all(|q| finite_in_range(*q)),
         Piece::Ball { center, radius } => finite_in_range(*center) && radius.is_finite() && *radius > 0.0,
         Piece::Box(r) => check_rect(*r).is_ok(),
     });
+    let (mut pieces, mut owners): (Vec<Piece>, Vec<usize>) = owned.into_iter().unzip();
     if pieces.is_empty() {
         return Err("it has no outline to collide with".into());
     }
@@ -107,6 +122,7 @@ pub fn body_shape(node: &Node, symbols: Option<&SymbolBoxes>) -> Result<BodyShap
         let hull = convex_hull(&all);
         let hull = if hull.len() > MAX_POINTS_PER_BODY { simplify(&hull, MAX_POINTS_PER_BODY, true) } else { hull };
         pieces = vec![Piece::Ring { pts: hull, closed: true }];
+        owners = vec![0];
     }
     let rings = pieces.iter().filter(|p| matches!(p, Piece::Ring { .. })).count();
     let total: usize = pieces.iter().map(|p| if let Piece::Ring { pts, .. } = p { pts.len() } else { 0 }).sum();
@@ -122,7 +138,7 @@ pub fn body_shape(node: &Node, symbols: Option<&SymbolBoxes>) -> Result<BodyShap
             }
         }
     }
-    Ok(BodyShape { pieces, bounds, notes })
+    Ok(BodyShape { pieces, bounds, notes, owners })
 }
 
 fn finite_in_range(p: Point) -> bool {
@@ -150,7 +166,12 @@ struct Collector<'a, 'b> {
     stride: usize,
     /// Flattened points seen so far (all outlines).
     seen: usize,
-    pieces: Vec<Piece>,
+    /// The pieces read, each with its outline group ([`BodyShape::owners`]).
+    pieces: Vec<(Piece, usize)>,
+    /// The next outline group.
+    owner: usize,
+    /// Inside a compound path: its outline group, shared by its members.
+    fixed: Option<usize>,
     /// Outlines read (subpaths, boxes, balls): both passes read the same ones.
     read: usize,
     /// Outlines past the cap.
@@ -169,9 +190,18 @@ impl Collector<'_, '_> {
         true
     }
 
+    /// The outline group of the next object's outlines: the compound path's when inside one.
+    fn group(&mut self) -> usize {
+        self.fixed.unwrap_or_else(|| {
+            self.owner += 1;
+            self.owner
+        })
+    }
+
     fn push(&mut self, p: Piece) {
         if self.take() && !self.counting {
-            self.pieces.push(p);
+            let g = self.group();
+            self.pieces.push((p, g));
         }
     }
 
@@ -188,16 +218,27 @@ impl Collector<'_, '_> {
                     self.push(ball);
                     return;
                 }
+                let g = self.group();
                 for sp in &path.subpaths {
                     if !self.take() {
                         continue;
                     }
                     let mut bez = BezPath::new();
                     sp.to_bezpath_into(&mut bez);
-                    self.flatten(&bez);
+                    self.flatten(&bez, g);
                 }
             }
-            NodeKind::Compound { children, .. } | NodeKind::Layer { children, .. } => {
+            NodeKind::Compound { children, .. } => {
+                // A compound path's members make holes in each other: one outline group.
+                let outer = self.fixed;
+                let g = self.group();
+                self.fixed = Some(g);
+                for c in children.iter().filter(|c| c.visible) {
+                    self.node(c, depth + 1);
+                }
+                self.fixed = outer;
+            }
+            NodeKind::Layer { children, .. } => {
                 for c in children.iter().filter(|c| c.visible) {
                     self.node(c, depth + 1);
                 }
@@ -226,8 +267,9 @@ impl Collector<'_, '_> {
     }
 
     /// The polylines `bez` flattens to (one per subpath, with its closed flag), every
-    /// `stride`-th point kept (each subpath's first always), so a long path is thinned evenly.
-    fn flatten(&mut self, bez: &BezPath) {
+    /// `stride`-th point kept (each subpath's first always), so a long path is thinned evenly;
+    /// each in outline group `group`.
+    fn flatten(&mut self, bez: &BezPath, group: usize) {
         let mut cur: Vec<Point> = Vec::new();
         let (stride, counting) = (self.stride.max(1), self.counting);
         let mut rings: Vec<Piece> = Vec::new();
@@ -259,7 +301,7 @@ impl Collector<'_, '_> {
         finish(&mut cur, false, &mut rings);
         self.seen = seen;
         if !counting {
-            self.pieces.extend(rings);
+            self.pieces.extend(rings.into_iter().map(|r| (r, group)));
         }
     }
 }
@@ -553,21 +595,7 @@ pub fn is_simple(v: &[Point]) -> bool {
     if n < 3 {
         return false;
     }
-    let orient = |a: Point, b: Point, c: Point| {
-        let x = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
-        if x > 0.0 {
-            1
-        } else if x < 0.0 {
-            -1
-        } else {
-            0
-        }
-    };
-    let on = |a: Point, b: Point, p: Point| p.x >= a.x.min(b.x) && p.x <= a.x.max(b.x) && p.y >= a.y.min(b.y) && p.y <= a.y.max(b.y);
-    let touch = |a: Point, b: Point, c: Point, d: Point| {
-        let (o1, o2, o3, o4) = (orient(a, b, c), orient(a, b, d), orient(c, d, a), orient(c, d, b));
-        (o1 != o2 && o3 != o4) || (o1 == 0 && on(a, b, c)) || (o2 == 0 && on(a, b, d)) || (o3 == 0 && on(c, d, a)) || (o4 == 0 && on(c, d, b))
-    };
+    let touch = segments_touch;
     for i in 0..n {
         let (Some(&a), Some(&b)) = (v.get(i), v.get((i + 1) % n)) else { return false };
         for j in i + 1..n {
@@ -582,4 +610,21 @@ pub fn is_simple(v: &[Point]) -> bool {
         }
     }
     true
+}
+
+/// Whether segments `a`–`b` and `c`–`d` cross or touch.
+pub fn segments_touch(a: Point, b: Point, c: Point, d: Point) -> bool {
+    let orient = |a: Point, b: Point, c: Point| {
+        let x = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+        if x > 0.0 {
+            1
+        } else if x < 0.0 {
+            -1
+        } else {
+            0
+        }
+    };
+    let on = |a: Point, b: Point, p: Point| p.x >= a.x.min(b.x) && p.x <= a.x.max(b.x) && p.y >= a.y.min(b.y) && p.y <= a.y.max(b.y);
+    let (o1, o2, o3, o4) = (orient(a, b, c), orient(a, b, d), orient(c, d, a), orient(c, d, b));
+    (o1 != o2 && o3 != o4) || (o1 == 0 && on(a, b, c)) || (o2 == 0 && on(a, b, d)) || (o3 == 0 && on(c, d, a)) || (o4 == 0 && on(c, d, b))
 }

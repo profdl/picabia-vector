@@ -261,3 +261,19 @@ fn over_the_body_limit_dynamic_bodies_come_first_and_the_rest_are_reported() {
     assert_eq!(skipped.len(), 1);
     assert!(skipped[0]["reason"].as_str().unwrap().contains("limit"));
 }
+
+#[test]
+fn soft_settings_through_the_commands() {
+    let mut s = session();
+    let r = shape(&mut s, "shape.rectangle", 10.0, 10.0, 120.0, 20.0);
+    let out = ex(&mut s, "physics.set", json!({"ids": [r.0], "props": {"bodyType": "soft", "soft": {"preset": "cloth", "bend": 0.3}}}));
+    assert_eq!(out["settings"]["bodyType"], "soft");
+    assert_eq!(out["settings"]["soft"], json!({"preset": "cloth", "bend": 0.3}));
+    // Fields merge into the soft settings; null goes back to the preset.
+    let out = ex(&mut s, "physics.set", json!({"ids": [r.0], "props": {"soft": {"bend": null, "stiffness": 2}}}));
+    assert_eq!(out["settings"]["soft"], json!({"preset": "cloth", "stiffness": 1.0}));
+    assert_eq!(out["warnings"].as_array().unwrap().len(), 1, "{out}");
+    // Undone with the document (it is the object's attribute).
+    ex(&mut s, "edit.undo", json!({}));
+    assert_eq!(ex(&mut s, "physics.get", json!({"id": r.0}))["settings"]["soft"]["bend"], 0.3);
+}

@@ -29,6 +29,10 @@ pub struct PicabiaUi {
     pub stencil_open: bool,
     /// The Appearance panel's physics row is open (`picabia::physics`).
     pub physics_open: bool,
+    /// A poke is held on the canvas (`picabia::sim_poke::poke`).
+    pub poking: bool,
+    /// Where the pointer last pulled the poked body (screen), so holding still sends nothing.
+    pub poke_at: Option<egui::Pos2>,
     /// The Properties panel's Modifiers section is collapsed (`picabia::properties`).
     pub modifiers_collapsed: bool,
     /// The Properties panel's Modifiers section is to open and scroll into view on its next frame
@@ -75,6 +79,7 @@ pub fn show(app: &mut VectorcraftApp, ctx: &egui::Context) {
     crate::picabia::badge::show(app, ctx);
     crate::picabia_stencil_panel::window(app, ctx);
     crate::picabia_laser_window::show(app, ctx);
+    crate::picabia::sim_bar::show(app, ctx);
 }
 
 /// A button in the app's look: the accent one when `primary`; greyed and not clickable unless

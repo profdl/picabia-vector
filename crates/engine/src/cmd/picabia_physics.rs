@@ -9,21 +9,31 @@
 use std::collections::HashSet;
 
 use serde_json::{Map, Value, json};
-use vectorcraft_doc::{Document, Node, NodeId, NodeKind, Scaling};
+use vectorcraft_doc::{Document, Node, NodeId, NodeKind};
 use vectorcraft_geom::{Rect, Vec2};
+use vectorcraft_physics::mesh::{MAX_PARTICLES_PER_RUN, SoftMesh};
+use vectorcraft_physics::pose::Pose;
+use vectorcraft_physics::world::{World, WorldBody, WorldParams, moves};
 use vectorcraft_physics::{BodyInput, BodyType, Settings, SimParams, sim};
 
 use super::{CommandSpec, bad, check_numbers, cmd, has_doc, has_selection, number_or, switch_or, targets};
 use crate::{EngineError, Result, Session};
 
 pub fn specs() -> Vec<CommandSpec> {
+    let mut v = base_specs();
+    v.extend(session::specs());
+    v.extend(pins::specs());
+    v
+}
+
+fn base_specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
             "physics.set",
             "Physics Settings",
             [],
             None,
-            "{ids?|id?: the objects (default: the selection), props?: {enabled?, bodyType? (dynamic|static|kinematic), colliderType? (auto|precise|fast|box), gravityScale? (0-2), restitution? (0-1), friction? (0-1), mass? (kg added to the body's own, 0-10000), angularDamping? (0-20), linearDamping? (0-20), sensor?}} give the objects physics settings (missing ones: the defaults, dynamic) or change them, as one undo step; out-of-range values are clamped and wrong ones ignored, with warnings → {ids, settings: the first object's, warnings}",
+            "{ids?|id?: the objects (default: the selection), props?: {enabled?, bodyType? (dynamic|static|kinematic|soft), colliderType? (auto|precise|fast|box), gravityScale? (0-2), restitution? (0-1), friction? (0-1), mass? (kg added to the body's own, 0-10000), angularDamping? (0-20), linearDamping? (0-20), sensor?, soft?: {preset? (cloth|jelly|rubber), stiffness? (0-1), bend? (0-1), shapeKeep? (0-1), damping? (0-1), resolution? (particle spacing, 2-100 pt), selfCollide?, pins?: [{u, v: where on the object, fractions of its bounds, attachTo?: id}]; a field set to null follows the preset again}}} give the objects physics settings (missing ones: the defaults, dynamic) or change them, as one undo step; out-of-range values are clamped and wrong ones ignored, with warnings → {ids, settings: the first object's, warnings}",
             has_selection,
             set
         ),
@@ -110,6 +120,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     };
     // Nothing changes: no undo step.
     if !changes.is_empty() {
+        let before = s.doc()?.doc.clone();
         s.edit("Physics Settings", |d, _| {
             for (id, st) in &changes {
                 if let Some(n) = d.node_mut(*id) {
@@ -118,6 +129,8 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
             }
             Ok(())
         })?;
+        // A simulation playing in this document takes the change at its next step (PIC31.7).
+        session::settings_changed(s, &before, &changes.iter().map(|(id, _)| *id).collect::<Vec<_>>());
     }
     Ok(json!({"ids": ids.iter().map(|i| i.0).collect::<Vec<_>>(), "settings": first, "warnings": warnings}))
 }
@@ -169,7 +182,7 @@ fn collect(n: &Node, locked: bool, selected: &HashSet<NodeId>, depth: usize, out
     let locked = locked || n.locked;
     if !n.is_layer() {
         let lock = |mut st: Settings, mut w: Vec<String>| {
-            if locked && st.body_type == BodyType::Dynamic {
+            if locked && moves(&st.body_type) {
                 st.body_type = BodyType::Static;
                 w.push("locked: stays put".into());
             }
@@ -223,34 +236,52 @@ fn pick_artboard(cmd: &str, doc: &Document, p: &Value, dynamic: Option<Rect>) ->
     }
 }
 
-fn simulate(s: &mut Session, p: &Value) -> Result<Value> {
-    const CMD: &str = "physics.simulate";
-    check_numbers(p, &["steps", "gravityX", "gravityY"], CMD)?;
-    let steps = number_or(p, "steps", f64::from(sim::DEFAULT_MAX_STEPS), CMD)?;
-    if !steps.is_finite() || steps < 1.0 || steps.fract() != 0.0 {
-        return Err(bad(CMD, format!("`steps` must be a whole number of steps, 1-{}", sim::MAX_STEPS)));
-    }
-    let steps = steps.min(f64::from(sim::MAX_STEPS)) as u32;
-    let gx = number_or(p, "gravityX", 0.0, CMD)?;
-    let gy = number_or(p, "gravityY", sim::DEFAULT_GRAVITY, CMD)?;
-    if !gx.is_finite() || !gy.is_finite() || gx.abs() > sim::MAX_GRAVITY || gy.abs() > sim::MAX_GRAVITY {
-        return Err(bad(CMD, format!("gravity must be within ±{} pt/s²", sim::MAX_GRAVITY)));
-    }
-    let walls = switch_or(p, "walls", true, CMD)?;
-    let settle = switch_or(p, "stopWhenSettled", true, CMD)?;
+/// The bodies a simulation takes, shared by Simulate and the live session.
+pub(crate) struct Gathered {
+    /// The bodies' objects, in the world's order.
+    pub(crate) ids: Vec<NodeId>,
+    pub(crate) bodies: Vec<WorldBody>,
+    pub(crate) skipped: Vec<Value>,
+    pub(crate) warnings: Vec<Value>,
+    /// Objects without settings taking part as dynamic bodies with the defaults (they were
+    /// selected).
+    pub(crate) defaulted: Vec<NodeId>,
+    pub(crate) params: WorldParams,
+    /// The artboard the walls stand on.
+    pub(crate) artboard: Option<usize>,
+}
 
+/// The pin `pin` of a soft body whose rest mesh is `mesh` and whose object's bounds are `b`: the
+/// nearest particle to its place.
+fn pin_particle(mesh: &SoftMesh, b: Rect, pin: &vectorcraft_physics::Pin) -> Option<u32> {
+    let at = vectorcraft_geom::Point::new(b.x0 + pin.u * b.width(), b.y0 + pin.v * b.height());
+    mesh.nearest(at).and_then(|i| u32::try_from(i).ok())
+}
+
+/// Read the params (`gravityX`, `gravityY`, `walls`, `artboard`) and the bodies of the active
+/// document (see `physics.simulate`'s params doc): rigid bodies' outlines, soft bodies' rest meshes
+/// (within the run's particle budget) and pins. Objects without settings in `extra` (the
+/// selection, or a session's own when it starts again) take part as dynamic bodies.
+pub(crate) fn gather(s: &Session, p: &Value, cmd: &str, extra: Option<&HashSet<NodeId>>) -> Result<Gathered> {
+    check_numbers(p, &["gravityX", "gravityY"], cmd)?;
+    let gx = number_or(p, "gravityX", 0.0, cmd)?;
+    let gy = number_or(p, "gravityY", sim::DEFAULT_GRAVITY, cmd)?;
+    if !gx.is_finite() || !gy.is_finite() || gx.abs() > sim::MAX_GRAVITY || gy.abs() > sim::MAX_GRAVITY {
+        return Err(bad(cmd, format!("gravity must be within ±{} pt/s²", sim::MAX_GRAVITY)));
+    }
+    let walls = switch_or(p, "walls", true, cmd)?;
     let st = s.doc()?;
     let doc = &st.doc;
-    let selected: HashSet<NodeId> = st.selection.objects.iter().copied().collect();
+    let selected: HashSet<NodeId> = extra.cloned().unwrap_or_else(|| st.selection.objects.iter().copied().collect());
     let mut found = Vec::new();
     let mut skipped = Vec::new();
     for layer in &doc.layers {
         collect(layer, false, &selected, 0, &mut found, &mut skipped);
     }
-    // At most `MAX_BODIES` take part, dynamic ones first (in layer order), before any outline is
+    // At most `MAX_BODIES` take part, moving ones first (in layer order), before any outline is
     // read: the rest are reported.
     if found.len() > sim::MAX_BODIES {
-        let (mut keep, rest): (Vec<Found>, Vec<Found>) = found.into_iter().partition(|f| f.settings.body_type == BodyType::Dynamic);
+        let (mut keep, rest): (Vec<Found>, Vec<Found>) = found.into_iter().partition(|f| moves(&f.settings.body_type));
         let mut over: Vec<Found> = keep.split_off(keep.len().min(sim::MAX_BODIES));
         let room = sim::MAX_BODIES - keep.len();
         let mut rest = rest;
@@ -263,60 +294,156 @@ fn simulate(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let symbols = doc.symbol_boxes();
     let mut ids = Vec::new();
-    let mut bodies = Vec::new();
+    let mut bodies: Vec<WorldBody> = Vec::new();
+    let mut pins: Vec<Vec<vectorcraft_physics::Pin>> = Vec::new();
     let mut warnings: Vec<Value> = Vec::new();
+    let mut budget = MAX_PARTICLES_PER_RUN;
+    let mut defaulted = Vec::new();
     for f in found {
         let Some(n) = doc.node(f.id) else { continue };
-        match vectorcraft_physics::body_shape(n, Some(&symbols)) {
-            Ok(shape) => {
-                warnings.extend(f.warnings.iter().chain(&shape.notes).map(|m| json!({"id": f.id.0, "message": m})));
-                ids.push(f.id);
-                bodies.push(BodyInput { settings: f.settings, shape });
+        let shape = match vectorcraft_physics::body_shape(n, Some(&symbols)) {
+            Ok(shape) => shape,
+            Err(reason) => {
+                skipped.push(json!({"id": f.id.0, "reason": reason}));
+                continue;
             }
-            Err(reason) => skipped.push(json!({"id": f.id.0, "reason": reason})),
+        };
+        let mut notes: Vec<String> = f.warnings.clone();
+        notes.extend(shape.notes.iter().cloned());
+        let (mesh, body_pins) = match f.settings.soft_body() {
+            None => (None, Vec::new()),
+            Some(soft) => match vectorcraft_physics::mesh::soft_mesh(&shape, &soft, budget) {
+                Ok(mesh) => {
+                    budget = budget.saturating_sub(mesh.rest.len());
+                    notes.extend(mesh.notes.iter().cloned());
+                    (Some(mesh), soft.pins.clone())
+                }
+                Err(reason) => {
+                    skipped.push(json!({"id": f.id.0, "reason": reason}));
+                    continue;
+                }
+            },
+        };
+        warnings.extend(notes.iter().map(|m| json!({"id": f.id.0, "message": m})));
+        if doc.node(f.id).is_some_and(|n| !vectorcraft_physics::has_physics(n)) {
+            defaulted.push(f.id);
+        }
+        ids.push(f.id);
+        pins.push(body_pins);
+        bodies.push(WorldBody { settings: f.settings, shape, mesh, pins: Vec::new() });
+    }
+    // Pins: each takes its nearest particle; attached to a body in this simulation by its index.
+    for (i, list) in pins.iter().enumerate() {
+        let Some(b) = bodies.get(i) else { continue };
+        let Some(mesh) = &b.mesh else { continue };
+        let bounds = b.shape.bounds;
+        let mut resolved = Vec::new();
+        for pin in list {
+            let Some(particle) = pin_particle(mesh, bounds, pin) else { continue };
+            let to = match pin.attach_to {
+                None => None,
+                Some(target) => match ids.iter().position(|id| id.0 == target) {
+                    Some(k) if k != i && bodies.get(k).is_some_and(|t| t.mesh.is_none()) => Some(k),
+                    _ => {
+                        warnings.push(json!({"id": ids.get(i).map_or(0, |id| id.0), "message": format!("a pin is attached to object {target}, which isn't a rigid body in this simulation: pinned in place")}));
+                        None
+                    }
+                },
+            };
+            resolved.push((particle, to));
+        }
+        if let Some(b) = bodies.get_mut(i) {
+            b.pins = resolved;
         }
     }
-    if !bodies.iter().any(|b| b.settings.body_type == BodyType::Dynamic) {
+    let moving = bodies.iter().filter(|b| moves(&b.settings.body_type)).map(|b| b.shape.bounds).reduce(|a, b| a.union(b));
+    let artboard = pick_artboard(cmd, doc, p, moving)?;
+    let wall_rect = if walls { artboard.and_then(|i| doc.artboards.get(i)).map(|a| a.rect) } else { None };
+    Ok(Gathered {
+        ids,
+        bodies,
+        skipped,
+        warnings,
+        defaulted,
+        params: WorldParams { gravity: Vec2::new(gx, gy), walls: wall_rect },
+        artboard: if walls { artboard } else { None },
+    })
+}
+
+fn simulate(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "physics.simulate";
+    check_numbers(p, &["steps"], CMD)?;
+    let steps = number_or(p, "steps", f64::from(sim::DEFAULT_MAX_STEPS), CMD)?;
+    if !steps.is_finite() || steps < 1.0 || steps.fract() != 0.0 {
+        return Err(bad(CMD, format!("`steps` must be a whole number of steps, 1-{}", sim::MAX_STEPS)));
+    }
+    let steps = steps.min(f64::from(sim::MAX_STEPS)) as u32;
+    let settle = switch_or(p, "stopWhenSettled", true, CMD)?;
+    let g = gather(s, p, CMD, None)?;
+    if !g.bodies.iter().any(|b| moves(&b.settings.body_type)) {
         return Err(EngineError::Disabled(
             CMD.into(),
             "nothing to drop: select objects, or give objects physics settings (Object ▸ Physics ▸ Add Physics)".into(),
         ));
     }
-    let dynamic = bodies.iter().filter(|b| b.settings.body_type == BodyType::Dynamic).map(|b| b.shape.bounds).reduce(|a, b| a.union(b));
-    let board = pick_artboard(CMD, doc, p, dynamic)?;
-    let wall_rect = if walls { board.and_then(|i| doc.artboards.get(i)).map(|a| a.rect) } else { None };
-    let params = SimParams { gravity: Vec2::new(gx, gy), walls: wall_rect, max_steps: steps, stop_when_settled: settle };
-    let out = vectorcraft_physics::simulate(&bodies, &params);
-
-    let moves: Vec<(NodeId, vectorcraft_geom::Affine)> = ids.iter().zip(&out.outcomes).filter_map(|(id, o)| Some((*id, o.moved?))).collect();
-    let lost: Vec<u64> = ids.iter().zip(&out.outcomes).filter(|(_, o)| o.lost).map(|(id, _)| id.0).collect();
-    if !moves.is_empty() {
-        let moved_ids: Vec<NodeId> = moves.iter().map(|(id, _)| *id).collect();
-        let sc = Scaling { patterns: super::object::transform_patterns(s, p, &moved_ids)?, ..Scaling::default() };
-        s.edit("Simulate Physics", |d, _| {
-            let paths = d.index_paths(moved_ids.iter().copied());
-            for (id, xf) in &moves {
-                if let Some(n) = paths.get(id).and_then(|path| d.node_mut_at(path)) {
-                    super::object::transform_node(n, *xf, sc, true);
-                }
+    let (poses, ran, settled, lost, notes) = if g.bodies.iter().any(|b| b.mesh.is_some()) {
+        // Soft bodies: the live world, run to rest (phase 2), within the body-steps budget.
+        let (mut world, mut notes) = World::new(&g.bodies, &g.params);
+        let budget = session::step_budget(&world);
+        if steps > budget {
+            notes.push(format!("{} body-steps at most: {budget} steps", sim::MAX_BODY_STEPS));
+        }
+        let mut ran = 0;
+        while ran < steps.min(budget) {
+            world.step();
+            ran += 1;
+            if settle && world.settled() {
+                break;
             }
-            Ok(())
-        })?;
-    }
+        }
+        let lost: Vec<u64> = world.lost().iter().filter_map(|i| g.ids.get(*i)).map(|id| id.0).collect();
+        (world.poses(), ran, world.settled(), lost, notes)
+    } else {
+        // Rigid bodies only: phase 1's drop, unchanged.
+        let inputs: Vec<BodyInput> = g.bodies.iter().map(|b| BodyInput { settings: b.settings.clone(), shape: b.shape.clone() }).collect();
+        let params = SimParams { gravity: g.params.gravity, walls: g.params.walls, max_steps: steps, stop_when_settled: settle };
+        let out = vectorcraft_physics::simulate(&inputs, &params);
+        let lost: Vec<u64> = g.ids.iter().zip(&out.outcomes).filter(|(_, o)| o.lost).map(|(id, _)| id.0).collect();
+        (out.outcomes.iter().map(|o| Pose::Rigid(o.moved)).collect(), out.steps, out.settled, lost, out.notes)
+    };
+    let items: Vec<apply::Baking> =
+        g.ids.iter().zip(&poses).zip(&g.bodies).map(|((id, pose), b)| apply::Baking { id: *id, pose, mesh: b.mesh.as_ref() }).collect();
+    let moved = apply::bake(s, "Simulate Physics", p, &items)?;
     Ok(json!({
-        "bodies": bodies.len(),
-        "moved": moves.iter().map(|(id, _)| id.0).collect::<Vec<_>>(),
-        "steps": out.steps,
-        "seconds": f64::from(out.steps) / sim::HZ,
-        "settled": out.settled,
+        "bodies": g.bodies.len(),
+        "moved": moved.iter().map(|id| id.0).collect::<Vec<_>>(),
+        "steps": ran,
+        "seconds": f64::from(ran) / sim::HZ,
+        "settled": settled,
         "lost": lost,
-        "skipped": skipped,
-        "warnings": warnings,
-        "notes": out.notes,
-        "artboard": if walls { board.map_or(Value::Null, |i| json!(i)) } else { Value::Null },
+        "skipped": g.skipped,
+        "warnings": g.warnings,
+        "notes": notes,
+        "artboard": g.artboard,
     }))
 }
 
+#[path = "picabia_physics_apply.rs"]
+pub(crate) mod apply;
+#[path = "picabia_physics_pins.rs"]
+pub mod pins;
+#[path = "picabia_physics_session.rs"]
+pub mod session;
+
+#[cfg(test)]
+#[path = "picabia_physics_apply_tests.rs"]
+mod apply_tests;
+#[cfg(test)]
+#[path = "picabia_physics_pins_tests.rs"]
+mod pins_tests;
+#[cfg(test)]
+#[path = "picabia_physics_session_tests.rs"]
+mod session_tests;
 #[cfg(test)]
 #[path = "picabia_physics_tests.rs"]
 mod tests;

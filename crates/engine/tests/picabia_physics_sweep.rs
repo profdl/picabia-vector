@@ -19,8 +19,13 @@ fn with_physics(fx: Fixture) -> Session {
     let selected: Vec<u64> = s.active().map(|d| d.selection.objects.iter().map(|i| i.0).collect()).unwrap_or_default();
     let kinds = ["auto", "precise", "fast", "box"];
     for (k, id) in selected.iter().enumerate() {
-        let body = if k % 2 == 0 { "dynamic" } else { "static" };
-        let _ = s.execute("physics.set", &json!({"ids": [id], "props": {"bodyType": body, "colliderType": kinds[k % 4], "restitution": 0.6}}));
+        let body = ["dynamic", "static", "soft"][k % 3];
+        let preset = ["cloth", "jelly", "rubber"][k % 3];
+        let soft = json!({"preset": preset, "pins": [{"u": 0, "v": 0.5}]});
+        let _ = s.execute(
+            "physics.set",
+            &json!({"ids": [id], "props": {"bodyType": body, "colliderType": kinds[k % 4], "restitution": 0.6, "soft": soft}}),
+        );
     }
     s
 }
@@ -31,7 +36,7 @@ fn physics_commands_with_junk_params_on_objects_with_settings() {
     let mut failures = vec![];
     let mut calls = 0usize;
     let ids: Vec<&str> = command_specs().iter().map(|c| c.id).filter(|id| id.starts_with("physics.")).collect();
-    assert_eq!(ids.len(), 4, "{ids:?}");
+    assert_eq!(ids.len(), 17, "{ids:?}");
     for fx in Fixture::ALL {
         for id in &ids {
             let spec = command_specs().iter().find(|c| c.id == *id).unwrap();
@@ -39,9 +44,20 @@ fn physics_commands_with_junk_params_on_objects_with_settings() {
             cases.push(json!({}));
             cases.push(json!({"steps": 20000, "walls": false, "gravityX": -100000, "gravityY": 100000}));
             cases.push(json!({"props": {"bodyType": "soft", "colliderType": 7, "mass": -1, "sensor": true}}));
+            cases.push(json!({"props": {"bodyType": "soft", "soft": {"preset": "cloth", "stiffness": "x", "resolution": 1e300, "pins": [{"u": 1e300, "v": -1, "attachTo": 1}, 3]}}}));
+            cases.push(json!({"props": {"soft": [1], "bodyType": "soft"}}));
+            cases.push(json!({"step": 3_600}));
+            cases.push(json!({"id": 1, "points": [[0, 0], {"x": 1e300, "y": 0}], "attachTo": 1}));
+            cases.push(json!({"attachToSelected": true}));
+            cases.push(json!({"id": 1, "point": [0, 0], "to": {"x": 1e7, "y": -1e7}, "release": true}));
             for p in &cases {
                 calls += 1;
                 let mut s = with_physics(fx);
+                // Session commands need a session: half the cases open one first.
+                if calls.is_multiple_of(2) {
+                    let _ = s.execute("physics.session.open", &json!({}));
+                    let _ = s.execute("physics.seek", &json!({"step": 20}));
+                }
                 let r = catch_quiet(|| s.execute(id, p));
                 let fail = match r {
                     Err(msg) => Some(format!("PANIC {id} {p} [{fx:?}]: {msg}")),
@@ -62,6 +78,31 @@ fn physics_commands_with_junk_params_on_objects_with_settings() {
         failures.len(),
         failures.iter().take(60).cloned().collect::<Vec<_>>().join("\n")
     );
+}
+
+/// The session on every fixture: play by ticks, Apply undoes exactly, Cancel changes nothing.
+#[test]
+fn sessions_apply_and_undo_exactly_on_every_fixture() {
+    for fx in Fixture::ALL {
+        let mut s = with_physics(fx);
+        let Some(before) = s.active().map(|d| d.doc.clone()) else { continue };
+        let undo = s.active().map_or(0, |d| d.history.undo.len());
+        if s.execute("physics.session.open", &json!({})).is_err() {
+            continue;
+        }
+        let _ = s.execute("physics.play", &json!({}));
+        for _ in 0..30 {
+            vectorcraft_engine::cmd::picabia_physics::session::tick(&mut s, 1.0 / 30.0);
+        }
+        let _ = s.execute("physics.cancel", &json!({}));
+        assert!(s.active().unwrap().doc == before, "[{fx:?}] cancel changed the document");
+        let _ = s.execute("physics.toRest", &json!({"steps": 300}));
+        if s.execute("physics.apply", &json!({})).is_ok() && s.active().map_or(0, |d| d.history.undo.len()) > undo {
+            s.execute("edit.undo", &json!({})).unwrap();
+        }
+        assert!(s.active().unwrap().doc == before, "[{fx:?}] undo after apply");
+        check_session(&s).unwrap();
+    }
 }
 
 /// Simulate on every fixture undoes exactly.

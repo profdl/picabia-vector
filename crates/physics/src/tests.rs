@@ -94,7 +94,7 @@ fn a_static_body_stays_and_holds_what_falls_on_it() {
 fn kinematic_and_unknown_bodies_stay_put() {
     let r = Rect::new(150.0, 20.0, 210.0, 60.0);
     let n = node(1, shapes::rectangle(r));
-    for t in [BodyType::Kinematic, BodyType::Other("soft".into())] {
+    for t in [BodyType::Kinematic, BodyType::Other("inflatable".into())] {
         let out = simulate(&[body(&n, Settings { body_type: t, ..Settings::default() })], &walls());
         assert_eq!(out.outcomes[0].moved, None);
     }
@@ -168,6 +168,10 @@ fn the_same_input_gives_the_same_bits() {
     // A fingerprint of the run, printed for comparing native and wasm builds.
     let h = bits(&a).iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b).wrapping_mul(0x100_0000_01b3));
     println!("physics fingerprint {h:016x} steps {}", a.steps);
+    // Pinned (PIC31.0a): rigid-only scenes keep phase 1's guarantee, the same bits on every
+    // platform and in wasm32 (checked under Node in PIC30.1). Soft bodies (PIC31) must leave
+    // this hash alone; a rapier upgrade that changes it is a change of results to look into.
+    assert_eq!((h, a.steps), (0x6f8e_17c7_d634_739d, 109), "the rigid-only fingerprint changed");
 }
 
 #[test]
@@ -202,10 +206,10 @@ fn an_open_path_and_a_group_fall_as_one_body() {
 #[test]
 fn junk_settings_clamp_with_warnings_and_keep_unknown_fields() {
     let (s, w) = crate::parse(
-        r#"{"bodyType":"soft","colliderType":"weird","gravityScale":9,"restitution":-1,"friction":"x","mass":1e9,"angularDamping":null,"linearDamping":25,"sensor":3,"future":{"a":1}}"#,
+        r#"{"bodyType":"inflatable","colliderType":"weird","gravityScale":9,"restitution":-1,"friction":"x","mass":1e9,"angularDamping":null,"linearDamping":25,"sensor":3,"future":{"a":1}}"#,
     )
     .unwrap();
-    assert_eq!(s.body_type, BodyType::Other("soft".into()));
+    assert_eq!(s.body_type, BodyType::Other("inflatable".into()));
     assert_eq!(s.collider, ColliderType::Auto);
     assert_eq!((s.gravity_scale, s.restitution, s.friction, s.mass, s.linear_damping), (2.0, 0.0, 0.4, 10_000.0, 20.0));
     assert!(!s.sensor);
