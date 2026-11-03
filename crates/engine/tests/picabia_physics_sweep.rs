@@ -36,7 +36,7 @@ fn physics_commands_with_junk_params_on_objects_with_settings() {
     let mut failures = vec![];
     let mut calls = 0usize;
     let ids: Vec<&str> = command_specs().iter().map(|c| c.id).filter(|id| id.starts_with("physics.")).collect();
-    assert_eq!(ids.len(), 15, "{ids:?}");
+    assert_eq!(ids.len(), 17, "{ids:?}");
     for fx in Fixture::ALL {
         for id in &ids {
             let spec = command_specs().iter().find(|c| c.id == *id).unwrap();
@@ -47,6 +47,8 @@ fn physics_commands_with_junk_params_on_objects_with_settings() {
             cases.push(json!({"props": {"bodyType": "soft", "soft": {"preset": "cloth", "stiffness": "x", "resolution": 1e300, "pins": [{"u": 1e300, "v": -1, "attachTo": 1}, 3]}}}));
             cases.push(json!({"props": {"soft": [1], "bodyType": "soft"}}));
             cases.push(json!({"step": 3_600}));
+            cases.push(json!({"id": 1, "points": [[0, 0], {"x": 1e300, "y": 0}], "attachTo": 1}));
+            cases.push(json!({"attachToSelected": true}));
             cases.push(json!({"id": 1, "point": [0, 0], "to": {"x": 1e7, "y": -1e7}, "release": true}));
             for p in &cases {
                 calls += 1;

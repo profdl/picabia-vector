@@ -140,3 +140,19 @@ fn an_edit_during_a_session_never_shows_stale_clones() {
     let shown = super::sim_bar::display_doc(&app).unwrap();
     assert!(shown.node(NodeId(jelly)).is_none(), "the deleted jelly is gone from the canvas");
 }
+
+#[test]
+fn pins_show_as_markers_on_the_canvas() {
+    let (mut app, ctx, jelly, _) = scene();
+    app.run("physics.pin", json!({"id": jelly, "points": [[40, 60], [120, 60]]})).unwrap();
+    app.run("select.set", json!({"ids": [jelly]})).unwrap();
+    let count = |ctx: &egui::Context, app: &mut VectorcraftApp| {
+        let time = ctx.input(|i| i.time) + 1.0 / 60.0;
+        let mut out = ctx.run_ui(egui::RawInput { time: Some(time), ..Default::default() }, |ui| super::sim_bar::show(app, ui.ctx()));
+        out.textures_delta.clear();
+        out.shapes.iter().filter(|c| matches!(c.shape, egui::Shape::Circle(_))).count()
+    };
+    assert_eq!(count(&ctx, &mut app), 2);
+    app.run("select.set", json!({"ids": []})).unwrap();
+    assert_eq!(count(&ctx, &mut app), 0, "only on selected soft objects without a session");
+}

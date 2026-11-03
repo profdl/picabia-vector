@@ -110,6 +110,9 @@ fn object_physics_menu_runs_its_commands() {
             "physics.set",
             "physics.set",
             crate::picabia_ui::PHYSICS_SETTINGS,
+            "physics.pin",
+            "physics.pin",
+            "physics.unpin",
             "physics.clear"
         ]
     );
@@ -120,7 +123,8 @@ fn object_physics_menu_runs_its_commands() {
     for item in physics {
         if let Item::Cmd(label, cmd, p) = item {
             let p = if p.is_null() { json!({}) } else { p.clone() };
-            if *cmd != "physics.clear" {
+            // Pinning needs anchors chosen with Direct Selection (tested in the engine).
+            if *cmd != "physics.clear" && *cmd != "physics.pin" {
                 app.run(cmd, p).unwrap_or_else(|e| panic!("{label}: {e}"));
             }
         }

@@ -44,6 +44,7 @@ pub fn show(app: &mut VectorcraftApp, ctx: &egui::Context) {
             .fixed_pos(at)
             .show(ctx, |ui| bar(app, ui, state, width));
     }
+    pin_markers(app, ctx);
     // Playing (Play may have been pressed on the bar just now): keep the frames coming.
     if session::playing(&app.session) {
         ctx.request_repaint();
@@ -167,6 +168,30 @@ fn paint_glyph(p: &egui::Painter, r: Rect, g: Glyph, col: Color32) {
             p.rect_filled(Rect::from_center_size(pos2(c.x - 5.0, c.y), vec2(2.0, 12.0)), 0.5, col);
             let pts = vec![pos2(c.x + 5.0, c.y - 6.0), pos2(c.x - 3.0, c.y), pos2(c.x + 5.0, c.y + 6.0)];
             p.add(egui::Shape::convex_polygon(pts, col, Stroke::NONE));
+        }
+    }
+}
+
+/// Pins on the canvas (PIC31.8): a ring where a point is pinned in place, a dot where it is attached
+/// to another body; on the session's bodies where they are now, else on the selected soft objects.
+fn pin_markers(app: &VectorcraftApp, ctx: &egui::Context) {
+    let (Some(rect), Some(view)) = (app.canvas_rect, app.view()) else { return };
+    let marks = vectorcraft_engine::cmd::picabia_physics::pins::markers(&app.session);
+    if marks.is_empty() {
+        return;
+    }
+    let xf = crate::canvas::Xf::new(rect, view);
+    let t = Tokens::get(ctx);
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Background, Id::unique("picabia_physics_pins"))).with_clip_rect(rect);
+    for (p, attached) in marks.iter().take(512) {
+        let at = xf.to_screen(*p);
+        if !at.is_finite() {
+            continue;
+        }
+        if *attached {
+            painter.circle_filled(at, 3.5, t.selection);
+        } else {
+            painter.circle_stroke(at, 4.0, Stroke::new(1.5, t.selection));
         }
     }
 }

@@ -22,6 +22,7 @@ use crate::{EngineError, Result, Session};
 pub fn specs() -> Vec<CommandSpec> {
     let mut v = base_specs();
     v.extend(session::specs());
+    v.extend(pins::specs());
     v
 }
 
@@ -429,12 +430,17 @@ fn simulate(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[path = "picabia_physics_apply.rs"]
 pub(crate) mod apply;
+#[path = "picabia_physics_pins.rs"]
+pub mod pins;
 #[path = "picabia_physics_session.rs"]
 pub mod session;
 
 #[cfg(test)]
 #[path = "picabia_physics_apply_tests.rs"]
 mod apply_tests;
+#[cfg(test)]
+#[path = "picabia_physics_pins_tests.rs"]
+mod pins_tests;
 #[cfg(test)]
 #[path = "picabia_physics_session_tests.rs"]
 mod session_tests;

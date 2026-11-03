@@ -47,6 +47,11 @@ pub fn physics_items() -> Vec<Item> {
         Item::Cmd("Make Rubber", "physics.set", json!({"props": {"bodyType": "soft", "soft": {"preset": "rubber"}}})),
         Item::Cmd("Settings…", crate::picabia_ui::PHYSICS_SETTINGS, json!({})),
         Item::Sep,
+        // Pins: anchors of a soft object chosen with Direct Selection.
+        Item::Cmd("Pin Points", "physics.pin", json!({})),
+        Item::Cmd("Attach Points to Selected", "physics.pin", json!({"attachToSelected": true})),
+        Item::Cmd("Unpin Points", "physics.unpin", json!({})),
+        Item::Sep,
         Item::Cmd("Clear Physics", "physics.clear", serde_json::Value::Null),
     ]
 }

@@ -446,6 +446,18 @@ a body gives its collider pieces back and re-attaches the pins held to it; a cha
 edit (type laid out again) doesn't restart the session, and a restart keeps the objects that took
 part without settings; a failed Apply keeps the session; soft cells weigh by their own area.
 
+**As built (PIC31.8)** (`picabia_physics_pins.rs`): `physics.pin` (`id` + `points`, or the anchors
+chosen with Direct Selection on soft objects (a path inside a soft group pins the group);
+`attachTo`, or `attachToSelected`: the other selected object, which must have physics settings and
+not be soft) and `physics.unpin` (pins within 4 pt of each point, or of the chosen anchors; with
+none chosen, every pin of the selected soft objects), each one undo step ("Pin Points", "Unpin
+Points"); an open simulation restarts the changed bodies with their pins (PIC31.7's path). Object ▸
+Physics: Pin Points, Attach Points to Selected, Unpin Points. The canvas marks pins (a ring pinned
+in place, a dot attached) on the selected soft objects, and on every body where it is now while a
+simulation is open. A pin stores a place on the object (its bounds), and at build time takes the
+nearest particle; a pin attached to an object that isn't a rigid body in the simulation holds in
+place, with a warning.
+
 ### Commands (planned)
 
 `physics.session.open/close`, `physics.play`, `physics.pause`, `physics.reset`, `physics.seek`
@@ -466,7 +478,7 @@ do goes through these commands.
 | PIC31.5 | Transport bar and clones on the canvas; Simulate to Rest; rigid bodies on the same flow. **Done** (2026-11-02), checked headless only |
 | PIC31.6 | Poke (Selection tool drag while the session is open) and `physics.poke`. **Done** (2026-11-02), checked headless only |
 | PIC31.7 | Settings while playing (applied next step; re-mesh restarts the body). **Done** (2026-11-02), the row checked headless only |
-| PIC31.8 | Pins and attachments: Pin Points, Attach Points To…, canvas markers |
+| PIC31.8 | Pins and attachments: Pin Points, Attach Points To…, canvas markers. **Done** (2026-11-02), the markers checked headless only |
 
 Budgets (targets, to be measured in PIC31.0 and kept by `vectorcraft-cli perf`): live at 60 steps a
 second natively with 20 soft bodies of up to 400 particles and 200 rigid bodies; the web build at
