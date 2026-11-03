@@ -61,10 +61,21 @@ fn no_bar_without_a_session_and_the_bar_with_one() {
     for label in ["0.00 s", "To Rest", "Apply", "Cancel"] {
         assert!(shown.iter().any(|s| s == label), "no {label:?} in {shown:?}");
     }
-    // It sits at the bottom of the canvas, inside it.
+    // It sits at the bottom of the canvas, inside it: where its texts are drawn.
     let canvas = app.canvas_rect.unwrap();
-    let bar = super::sim_bar::bar_rect(canvas);
-    assert!(canvas.contains_rect(bar) && bar.bottom() > canvas.center().y);
+    frame(&mut app, &ctx, vec![]);
+    let drawn = frame(&mut app, &ctx, vec![]);
+    for (text, r) in drawn.iter().filter(|(t, _)| ["Apply", "Cancel", "To Rest"].contains(&t.as_str())) {
+        assert!(canvas.contains_rect(*r) && r.top() > canvas.center().y, "{text} at {r:?}");
+    }
+    // On a narrow canvas it still fits.
+    app.canvas_rect = Some(Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(420.0, 500.0)));
+    for _ in 0..4 {
+        frame(&mut app, &ctx, vec![]);
+    }
+    let drawn = frame(&mut app, &ctx, vec![]);
+    let cancel = drawn.iter().find(|(t, _)| t == "Cancel").unwrap().1;
+    assert!(cancel.right() <= 420.0, "{cancel:?}");
 }
 
 #[test]
@@ -109,5 +120,23 @@ fn cancel_closes_the_bar_and_leaves_the_art() {
     click(&mut app, &ctx, "Cancel");
     assert!(app.session.active().unwrap().doc == before);
     assert!(super::sim_bar::display_doc(&app).is_none());
-    let _ = jelly;
+    assert!(texts(&mut app, &ctx).is_empty(), "the bar is gone");
+    assert!(app.session.active().unwrap().doc.node(NodeId(jelly)).is_some());
+}
+
+#[test]
+fn an_edit_during_a_session_never_shows_stale_clones() {
+    let (mut app, ctx, jelly, _) = scene();
+    app.run("physics.session.open", json!({})).unwrap();
+    app.run("physics.seek", json!({"step": 60})).unwrap();
+    assert!(super::sim_bar::display_doc(&app).is_some());
+    // Delete the jelly: until the session follows (the next frame), the document itself is drawn.
+    app.run("select.set", json!({"ids": [jelly]})).unwrap();
+    app.run("edit.clear", json!({})).unwrap();
+    assert!(super::sim_bar::display_doc(&app).is_none(), "no stale copy");
+    let rev = app.session.active().unwrap().revision;
+    frame(&mut app, &ctx, vec![]);
+    assert!(app.session.active().unwrap().revision > rev, "the restart redraws");
+    let shown = super::sim_bar::display_doc(&app).unwrap();
+    assert!(shown.node(NodeId(jelly)).is_none(), "the deleted jelly is gone from the canvas");
 }

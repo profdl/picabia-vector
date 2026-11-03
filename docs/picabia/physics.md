@@ -329,7 +329,15 @@ The jelly scene is at the edge of the native budget even then (worst steps 2.7 f
   (`physics.play`), Drop and Apply (phase 1's instant `physics.simulate`), Add Physics, Make
   Static, Make Cloth / Jelly / Rubber, Settings…, Clear Physics. The physics row's Simulate button
   runs Simulate to Rest. The app steps a playing session every frame (`session::tick`, at most 4
-  steps a frame) and keeps repainting while it plays.
+  steps a frame) and keeps repainting while it plays. PIC31.5a (review): the display document is
+  drawn only while it was built from the document as it is (after an edit the document itself
+  shows until the session follows on the next frame, which redraws); clones move pattern fills as
+  Apply does (Transform Pattern Tiles); the four session-opening commands get the active artboard
+  as Simulate does; the bar sits at the canvas's bottom centre, as wide as fits (on a narrow
+  canvas the time and To Rest make room; the scrubber's tooltip shows the time). Gaps: every
+  step rebuilds the display document and moves the document's revision, so caches keyed by it
+  rebuild at the frame rate while playing; dragging the scrubber seeks every frame (backwards from
+  the nearest snapshot).
 - 60 steps per second, as phase 1. A frame is drawn with the newest finished step, so a slow scene
   plays slower than real time but stays exact.
 - **Scrub:** the session keeps a world snapshot every second in memory (capped; older ones thinned).

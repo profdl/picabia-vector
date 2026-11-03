@@ -5,7 +5,7 @@ use super::{NodeId, Value, cmd};
 /// Objects and Distribute Spacing with Align to Artboard distribute objects across it, All on
 /// Active Artboard selects on it, and Edit Symbol from the Symbols panel centers the symbol's art
 /// on it. A `command.batch` given `artboard` passes it on to each of their steps that names none.
-pub const ON_ACTIVE_ARTBOARD: [&str; 9] = [
+pub const ON_ACTIVE_ARTBOARD: [&str; 12] = [
     "edit.pasteInPlace",
     "edit.pasteInFront",
     "edit.pasteInBack",
@@ -13,7 +13,10 @@ pub const ON_ACTIVE_ARTBOARD: [&str; 9] = [
     "object.distribute",
     "object.distributeSpacing",
     "select.allOnArtboard",
-    "physics.simulate", // PICABIA: the walls are the active artboard's edges.
+    "physics.simulate",     // PICABIA: the walls are the active artboard's edges.
+    "physics.toRest",       // PICABIA: as physics.simulate (a live session's walls).
+    "physics.play",         // PICABIA: as physics.simulate (a live session's walls).
+    "physics.session.open", // PICABIA: as physics.simulate (a live session's walls).
     "symbol.edit",
 ];
 
@@ -27,7 +30,7 @@ pub const FIT_ACTIVE_ARTBOARD: [&str; 2] = ["artboard.fitToArt", "artboard.fitTo
 /// (dates from the clock: `cmd::clock_date`; the artboards the app passes to the
 /// [`ON_ACTIVE_ARTBOARD`] and [`FIT_ACTIVE_ARTBOARD`] commands and to a batch; the view's center
 /// the app passes to Edit Symbol); an action leaves them out ([`Session::journal_for_action`]).
-const REPLAY_ONLY: [(&str, &str); 17] = [
+const REPLAY_ONLY: [(&str, &str); 20] = [
     ("file.new", "created"),
     ("document.save", "modified"),
     ("file.saveAs", "modified"),
@@ -44,7 +47,10 @@ const REPLAY_ONLY: [(&str, &str); 17] = [
     ("symbol.edit", "artboard"),
     ("symbol.edit", "viewCenter"),
     ("command.batch", "artboard"),
-    ("physics.simulate", "artboard"), // PICABIA: as the other active-artboard commands.
+    ("physics.simulate", "artboard"),     // PICABIA: as the other active-artboard commands.
+    ("physics.toRest", "artboard"),       // PICABIA: as physics.simulate.
+    ("physics.play", "artboard"),         // PICABIA: as physics.simulate.
+    ("physics.session.open", "artboard"), // PICABIA: as physics.simulate.
 ];
 
 /// `p`, the params of command `id`, without its [`REPLAY_ONLY`] values (a batch: its steps').

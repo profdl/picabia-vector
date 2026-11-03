@@ -55,6 +55,9 @@ pub(crate) struct Live {
     pub(crate) artboard: Option<usize>,
     /// The furthest step reached (the scrubber's end).
     pub(crate) furthest: u32,
+    /// Pattern fills move with rigid bodies' clones (General › Transform Pattern Tiles), as Apply
+    /// moves them.
+    pub(crate) patterns: bool,
     /// Objects without settings that take part (they were selected when it opened).
     pub(crate) defaulted: std::collections::HashSet<NodeId>,
     /// The document the canvas draws at the current step ([`display_doc`]).
@@ -227,6 +230,7 @@ fn build(s: &mut Session, p: &Value, cmd: &str, extra: Option<&std::collections:
         playing: false,
         owed: 0.0,
         notes,
+        patterns: s.prefs.transform_pattern_tiles,
         defaulted: g.defaulted.iter().copied().collect(),
         skipped: g.skipped,
         warnings: g.warnings,
@@ -237,8 +241,9 @@ fn build(s: &mut Session, p: &Value, cmd: &str, extra: Option<&std::collections:
 }
 
 /// The session's view of its document: started again when the document changed under it (an edit;
-/// not a change that isn't one, such as type laid out again), with the params it was opened with
-/// and the same objects without settings. `true` when it started again (or closed).
+/// not a change that isn't one, such as type laid out again, which only shows it again), with the
+/// params it was opened with and the same objects without settings. `true` when what it shows
+/// changed (started again, shown again, or closed).
 fn follow_document(s: &mut Session) -> Result<bool> {
     let Some(st) = s.active() else { return Ok(false) };
     let (uid, doc) = (st.uid, st.doc.clone());
@@ -249,9 +254,9 @@ fn follow_document(s: &mut Session) -> Result<bool> {
     if st.same_content(&l.base) {
         if let Some(l) = s.picabia.physics.as_deref_mut() {
             l.base = doc;
-            l.refresh();
         }
-        return Ok(false);
+        // Shown again from the new document.
+        return Ok(true);
     }
     // The artboard is the one it stood on, if the document still has it.
     let board = l.artboard.filter(|i| *i < doc.artboards.len());
@@ -492,8 +497,14 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
 /// Advance the playing session by `dt` seconds of wall time (at most [`MAX_STEPS_PER_TICK`]
 /// steps). The app calls it every frame; `true` when the session moved (redraw).
 pub fn tick(s: &mut Session, dt: f64) -> bool {
-    if follow_document(s).is_err() {
-        return false;
+    match follow_document(s) {
+        Err(_) => return false,
+        // Started again after an edit: redraw.
+        Ok(true) => {
+            bump(s);
+            return true;
+        }
+        Ok(false) => {}
     }
     let Some(l) = live_mut(s) else { return false };
     if !l.playing {
@@ -561,7 +572,10 @@ pub fn bar_state(s: &Session) -> Option<BarState> {
 /// rest with each moved body's clone (its pose) above its object, which is dimmed. Never saved,
 /// exported or hit-tested: the real document is unchanged until Apply.
 pub fn display_doc(s: &Session) -> Option<Arc<Document>> {
-    live(s).and_then(|l| l.shown.clone())
+    // Built from the document it shows: after an edit, until the session follows it (the next
+    // tick), the document itself is drawn, never a stale copy.
+    let st = s.active()?;
+    live(s).filter(|l| Arc::ptr_eq(&l.base, &st.doc)).and_then(|l| l.shown.clone())
 }
 
 /// A body closer than this to its rest pose (points) hasn't moved.
@@ -584,7 +598,9 @@ impl Live {
             let posed = match (pose, mesh) {
                 (Pose::Rigid(Some(xf)), _) => {
                     let mut c = n.clone();
-                    crate::cmd::object::transform_node(&mut c, *xf, vectorcraft_doc::Scaling::default(), true);
+                    // As Apply moves it (Transform Pattern Tiles).
+                    let sc = vectorcraft_doc::Scaling { patterns: self.patterns, ..vectorcraft_doc::Scaling::default() };
+                    crate::cmd::object::transform_node(&mut c, *xf, sc, true);
                     Some(c)
                 }
                 (Pose::Soft(p), Some(mesh)) => vectorcraft_physics::pose::pose_node(n, mesh, p),

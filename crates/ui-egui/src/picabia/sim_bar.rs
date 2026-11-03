@@ -17,7 +17,7 @@ use vectorcraft_engine::cmd::picabia_physics::session;
 use crate::VectorcraftApp;
 use crate::theme::Tokens;
 
-/// The bar's size, points.
+/// The bar's widest, points.
 const BAR: egui::Vec2 = egui::Vec2::new(560.0, 40.0);
 /// Steps a simulated second.
 const HZ: f64 = 60.0;
@@ -31,13 +31,23 @@ pub fn display_doc(app: &VectorcraftApp) -> Option<Arc<Document>> {
 /// Step the playing session by this frame's time and draw the bar (from `picabia_ui::show`).
 pub fn show(app: &mut VectorcraftApp, ctx: &egui::Context) {
     let dt = f64::from(ctx.input(|i| i.stable_dt));
-    session::tick(&mut app.session, dt);
+    if session::tick(&mut app.session, dt) {
+        ctx.request_repaint();
+    }
+    if let (Some(state), Some(canvas)) = (session::bar_state(&app.session), app.canvas_rect) {
+        // Bottom centre of the canvas, as wide as it fits.
+        let width = BAR.x.min(canvas.width() - 24.0).max(200.0);
+        let at = pos2(canvas.center().x, canvas.bottom() - 12.0);
+        egui::Area::new(Id::unique("picabia_physics_bar"))
+            .order(egui::Order::Middle)
+            .pivot(egui::Align2::CENTER_BOTTOM)
+            .fixed_pos(at)
+            .show(ctx, |ui| bar(app, ui, state, width));
+    }
+    // Playing (Play may have been pressed on the bar just now): keep the frames coming.
     if session::playing(&app.session) {
         ctx.request_repaint();
     }
-    let (Some(state), Some(canvas)) = (session::bar_state(&app.session), app.canvas_rect) else { return };
-    let at = pos2(canvas.center().x - BAR.x / 2.0, canvas.bottom() - BAR.y - 12.0);
-    egui::Area::new(Id::unique("picabia_physics_bar")).order(egui::Order::Foreground).fixed_pos(at).show(ctx, |ui| bar(app, ui, state));
 }
 
 /// What the bar asked for.
@@ -52,13 +62,15 @@ enum Action {
     Cancel,
 }
 
-fn bar(app: &mut VectorcraftApp, ui: &mut Ui, state: session::BarState) {
+fn bar(app: &mut VectorcraftApp, ui: &mut Ui, state: session::BarState, width: f32) {
     let t = Tokens::get(ui.ctx());
     let mut action = None;
     egui::Frame::NONE.fill(t.panel).stroke(Stroke::new(1.0, t.border)).corner_radius(6.0).inner_margin(egui::Margin::symmetric(8, 6)).show(
         ui,
         |ui| {
-            ui.set_width(BAR.x - 16.0);
+            ui.set_width(width - 16.0);
+            // Narrow: the time and To Rest make room (the scrubber still shows the time).
+            let narrow = width < 470.0;
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 let (play, tip) = if state.playing { (false, tl!("Pause")) } else { (true, tl!("Play")) };
@@ -68,20 +80,29 @@ fn bar(app: &mut VectorcraftApp, ui: &mut Ui, state: session::BarState) {
                 if glyph_button(ui, Glyph::Reset, tl!("Back to the start")).clicked() {
                     action = Some(Action::Reset);
                 }
-                // The scrubber: every step reached so far, and a second past it.
+                // The scrubber: every step reached so far (at least a second).
                 let end = state.furthest.max(state.step).max(60);
                 let mut step = state.step;
-                let r = ui.add_sized(vec2(170.0, 20.0), egui::Slider::new(&mut step, 0..=end).show_value(false).trailing_fill(true));
+                let scrub = if narrow { (width - 240.0).clamp(40.0, 120.0) } else { (width - 390.0).clamp(60.0, 170.0) };
+                let r = ui
+                    .add_sized(vec2(scrub, 20.0), egui::Slider::new(&mut step, 0..=end).show_value(false).trailing_fill(true))
+                    .on_hover_text(format!("{:.2} s", f64::from(state.step) / HZ));
                 if r.changed() && step != state.step {
                     action = Some(Action::Seek(step));
                 }
                 let secs = f64::from(state.step) / HZ;
-                ui.label(egui::RichText::new(format!("{secs:.2} s")).monospace().size(11.5).color(if state.settled { t.text_dim } else { t.text }));
-                ui.add_space(4.0);
-                if crate::picabia_ui::button(ui, tl!("To Rest"), false, true) {
-                    action = Some(Action::ToRest);
+                if !narrow {
+                    ui.label(egui::RichText::new(format!("{secs:.2} s")).monospace().size(11.5).color(if state.settled {
+                        t.text_dim
+                    } else {
+                        t.text
+                    }));
+                    ui.add_space(4.0);
+                    if crate::picabia_ui::button(ui, tl!("To Rest"), false, true) {
+                        action = Some(Action::ToRest);
+                    }
                 }
-                if crate::picabia_ui::button(ui, tl!("Apply"), true, state.bodies > 0) {
+                if crate::picabia_ui::button(ui, tl!("Apply"), true, true) {
                     action = Some(Action::Apply);
                 }
                 if crate::picabia_ui::button(ui, tl!("Cancel"), false, true) {
@@ -148,10 +169,4 @@ fn paint_glyph(p: &egui::Painter, r: Rect, g: Glyph, col: Color32) {
             p.add(egui::Shape::convex_polygon(pts, col, Stroke::NONE));
         }
     }
-}
-
-/// The bar's place for tests.
-#[cfg(test)]
-pub(crate) fn bar_rect(canvas: Rect) -> Rect {
-    Rect::from_min_size(pos2(canvas.center().x - BAR.x / 2.0, canvas.bottom() - BAR.y - 12.0), BAR)
 }
