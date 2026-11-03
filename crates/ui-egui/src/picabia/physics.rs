@@ -105,7 +105,9 @@ pub fn section(app: &mut VectorcraftApp, ui: &mut Ui) {
     ui.painter().text(pos2(r.left() + EYE_W + 24.0, r.center().y), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(12.5), col);
     let br = Rect::from_min_size(pos2(r.right() - 84.0, r.center().y - 11.0), vec2(80.0, 22.0));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(br).layout(egui::Layout::right_to_left(egui::Align::Center)));
-    if widgets::flat_button(&mut child, tl!("Simulate"), 76.0).on_hover_text(tl!("Drop and settle: run the physics until everything rests")).clicked()
+    if widgets::flat_button(&mut child, tl!("Simulate"), 76.0)
+        .on_hover_text(tl!("Simulate to Rest: run the physics until everything rests and show it; Apply or Cancel on the bar"))
+        .clicked()
     {
         simulate(app);
     }
@@ -120,16 +122,15 @@ pub fn section(app: &mut VectorcraftApp, ui: &mut Ui) {
     }
 }
 
-/// Run Simulate and say what happened in the status line.
+/// Run Simulate to Rest (the session shows the result; Apply or Cancel on the transport bar) and
+/// say what happened in the status line.
 fn simulate(app: &mut VectorcraftApp) {
-    match app.run("physics.simulate", json!({})) {
+    match app.run("physics.toRest", json!({})) {
         Ok(out) => {
-            let moved = out.get("moved").and_then(Value::as_array).map_or(0, Vec::len);
             let secs = out.get("seconds").and_then(Value::as_f64).unwrap_or(0.0);
             let settled = out.get("settled").and_then(Value::as_bool).unwrap_or(false);
-            let n = crate::i18n::trn(crate::i18n::current(), moved as u64, "{n} object moved", "{n} objects moved");
             let state = if settled { tl!("settled") } else { tl!("still moving at the step limit") };
-            app.ui.status = format!("{n} ({secs:.1} s, {state})");
+            app.ui.status = format!("{secs:.1} s, {state}: {}", tl!("Apply or Cancel on the bar"));
         }
         Err(e) => app.ui.status = e,
     }

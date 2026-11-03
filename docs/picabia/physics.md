@@ -311,10 +311,25 @@ The jelly scene is at the edge of the native budget even then (worst steps 2.7 f
   "Apply Physics"). **Cancel** closes it and leaves the art untouched. A live rectangle or ellipse a
   soft body bends becomes a path; a rigid one stays live.
 
+- **As built (PIC31.5):** the canvas draws a *display document* while a session is open: the
+  document at rest with each moved body's clone (its pose: rigid moved and turned, soft bent)
+  inserted above its object, which is drawn at a quarter of its opacity. Clones have their own
+  ids in that copy only; it is never saved, exported, selected or hit-tested (one canvas seam swaps
+  the document the renderer draws). A body that hasn't moved shows as itself. Deviation: the
+  selection outline and handles stay on the objects at rest.
+
 ### The clock and the transport bar
 
 - A slim transport bar (the "slim bar now, keyframe timeline later" of `plan/reference/decisions.md`):
   play/pause, reset, a scrubber with the time, Simulate to Rest, Apply and Cancel.
+- **As built (PIC31.5):** the bar floats at the bottom of the canvas while a session is open in
+  the active document: play/pause and back-to-start (glyphs drawn in code), the scrubber (0 to the
+  furthest step reached, at least a second), the time, To Rest, Apply and Cancel; every button is
+  a `physics.*` command. Object ▸ Physics: Simulate to Rest (`physics.toRest`), Start Simulation
+  (`physics.play`), Drop and Apply (phase 1's instant `physics.simulate`), Add Physics, Make
+  Static, Make Cloth / Jelly / Rubber, Settings…, Clear Physics. The physics row's Simulate button
+  runs Simulate to Rest. The app steps a playing session every frame (`session::tick`, at most 4
+  steps a frame) and keeps repainting while it plays.
 - 60 steps per second, as phase 1. A frame is drawn with the newest finished step, so a slow scene
   plays slower than real time but stays exact.
 - **Scrub:** the session keeps a world snapshot every second in memory (capped; older ones thinned).
@@ -415,7 +430,7 @@ do goes through these commands.
 | PIC31.2 | Bodies from objects: cloth strip and jelly/rubber cells, caps, junk; tune the presets. **Meshing done** (2026-11-02); the presets are tuned once the world runs (PIC31.2b) |
 | PIC31.3 | Pose to art: rigid, cloth and jelly warps; Apply as one undo step. **Done** (2026-11-02): warps and the bake; the `physics.apply` command comes with the session (PIC31.4) |
 | PIC31.4 | Session and clock: world, steps, snapshots, event log, `physics.session/play/pause/reset/seek/apply/cancel`, rest detection. **Done** (2026-11-02): commands above |
-| PIC31.5 | Transport bar and clones on the canvas; Simulate to Rest; rigid bodies on the same flow |
+| PIC31.5 | Transport bar and clones on the canvas; Simulate to Rest; rigid bodies on the same flow. **Done** (2026-11-02), checked headless only |
 | PIC31.6 | Poke (Selection tool drag while the session is open) and `physics.poke` |
 | PIC31.7 | Settings while playing (applied next step; re-mesh restarts the body) |
 | PIC31.8 | Pins and attachments: Pin Points, Attach Points To…, canvas markers |

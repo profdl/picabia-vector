@@ -53,6 +53,10 @@ pub(crate) struct Live {
     pub(crate) warnings: Vec<Value>,
     /// The artboard the walls stand on.
     pub(crate) artboard: Option<usize>,
+    /// The furthest step reached (the scrubber's end).
+    pub(crate) furthest: u32,
+    /// The document the canvas draws at the current step ([`display_doc`]).
+    pub(crate) shown: Option<Arc<Document>>,
 }
 
 impl fmt::Debug for Live {
@@ -67,9 +71,26 @@ impl fmt::Debug for Live {
 }
 
 impl Live {
-    /// The world's poses with their objects and meshes, for Apply and the clones.
+    /// The world's poses with their objects and meshes, for Apply and the clones. A body within
+    /// [`STILL`] of its rest pose hasn't moved (`Pose::Rigid(None)`): the world is f32, so a body
+    /// at rest comes back a hair off, which mustn't turn a live shape into a path.
     pub(crate) fn poses(&self) -> Vec<(NodeId, Pose, Option<&SoftMesh>)> {
-        self.ids.iter().zip(self.sim.world().poses()).zip(&self.bodies).map(|((id, pose), b)| (*id, pose, b.mesh.as_ref())).collect()
+        self.ids
+            .iter()
+            .zip(self.sim.world().poses())
+            .zip(&self.bodies)
+            .map(|((id, pose), b)| {
+                let still = match (&pose, &b.mesh) {
+                    (Pose::Soft(p), Some(m)) => p.len() == m.rest.len() && p.iter().zip(&m.rest).all(|(a, r)| (*a - *r).hypot() < STILL),
+                    (Pose::Rigid(Some(xf)), _) => {
+                        let r = b.shape.bounds;
+                        [r.origin(), vectorcraft_geom::Point::new(r.x1, r.y1)].iter().all(|c| (*xf * *c - *c).hypot() < STILL)
+                    }
+                    _ => false,
+                };
+                (*id, if still { Pose::Rigid(None) } else { pose }, b.mesh.as_ref())
+            })
+            .collect()
     }
 
     /// The body index of object `id`.
@@ -206,6 +227,8 @@ fn build(s: &mut Session, p: &Value, cmd: &str) -> Result<Live> {
         skipped: g.skipped,
         warnings: g.warnings,
         artboard: g.artboard,
+        furthest: 0,
+        shown: None,
     })
 }
 
@@ -224,6 +247,7 @@ fn follow_document(s: &mut Session) -> Result<()> {
         Ok(mut fresh) => {
             fresh.playing = playing;
             fresh.notes.insert(0, "the document changed: the simulation started again from the new rest pose".into());
+            fresh.refresh();
             s.picabia.physics = Some(Box::new(fresh));
         }
         Err(_) => s.picabia.physics = None,
@@ -459,9 +483,124 @@ pub fn playing(s: &Session) -> bool {
     live(s).is_some_and(|l| l.playing)
 }
 
-/// Views redraw: the document's revision moves (the session isn't part of the document).
+/// The shown document follows the session, and views redraw: the document's revision moves (the
+/// session isn't part of the document).
 fn bump(s: &mut Session) {
+    if let Some(l) = live_mut(s) {
+        l.refresh();
+    }
     if let Ok(st) = s.doc_mut() {
         st.revision += 1;
     }
+}
+
+/// What the transport bar shows of the active document's session.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BarState {
+    /// The current step (60 a second).
+    pub step: u32,
+    /// The furthest step reached (the scrubber's end).
+    pub furthest: u32,
+    pub playing: bool,
+    /// Every body rests.
+    pub settled: bool,
+    /// Bodies in the session.
+    pub bodies: usize,
+}
+
+/// The transport bar's state, when a session is open in the active document.
+pub fn bar_state(s: &Session) -> Option<BarState> {
+    let l = live(s)?;
+    Some(BarState {
+        step: l.sim.step(),
+        furthest: l.furthest.max(l.sim.step()),
+        playing: l.playing,
+        settled: l.sim.world().settled(),
+        bodies: l.ids.len(),
+    })
+}
+
+/// The document the canvas draws while a session is open in the active document: the document at
+/// rest with each moved body's clone (its pose) above its object, which is dimmed. Never saved,
+/// exported or hit-tested: the real document is unchanged until Apply.
+pub fn display_doc(s: &Session) -> Option<Arc<Document>> {
+    live(s).and_then(|l| l.shown.clone())
+}
+
+/// A body closer than this to its rest pose (points) hasn't moved.
+pub const STILL: f64 = 1e-3;
+
+/// How much of an original shows under its clone.
+pub const DIMMED: f32 = 0.25;
+
+impl Live {
+    /// Recompute the shown document for the current step.
+    pub(crate) fn refresh(&mut self) {
+        self.furthest = self.furthest.max(self.sim.step());
+        let mut doc = (*self.base).clone();
+        let poses = self.poses();
+        let paths = doc.index_paths(self.ids.iter().copied());
+        // Deepest and last first, so inserting a clone keeps the other paths valid.
+        let mut work: Vec<(Vec<usize>, vectorcraft_doc::Node)> = Vec::new();
+        for (id, pose, mesh) in &poses {
+            let (Some(path), Some(n)) = (paths.get(id), self.base.node(*id)) else { continue };
+            let posed = match (pose, mesh) {
+                (Pose::Rigid(Some(xf)), _) => {
+                    let mut c = n.clone();
+                    crate::cmd::object::transform_node(&mut c, *xf, vectorcraft_doc::Scaling::default(), true);
+                    Some(c)
+                }
+                (Pose::Soft(p), Some(mesh)) => vectorcraft_physics::pose::pose_node(n, mesh, p),
+                _ => None,
+            };
+            if let Some(c) = posed.filter(|c| c != n) {
+                work.push((path.clone(), c));
+            }
+        }
+        work.sort_by(|a, b| b.0.cmp(&a.0));
+        for (path, clone) in work {
+            let Some((&at, parent)) = path.split_last() else { continue };
+            if parent.is_empty() {
+                continue;
+            }
+            let clone = doc.reid(&clone);
+            if let Some(n) = doc.node_mut_at(&path) {
+                n.opacity *= DIMMED;
+            }
+            if let Some(children) = doc.node_mut_at(parent).and_then(|p| p.children_mut()) {
+                let at = (at + 1).min(children.len());
+                children.insert(at, Arc::new(clone));
+            }
+        }
+        self.shown = Some(Arc::new(doc));
+    }
+}
+
+/// The moving body whose shown pose is under `at` (document space), topmost first: a soft body by
+/// its particles' bounds grown by their radius, a rigid one by its object's bounds where it is now.
+pub fn body_at(s: &Session, at: vectorcraft_geom::Point) -> Option<NodeId> {
+    let l = live(s)?;
+    let world = l.sim.world();
+    let poses = l.poses();
+    for (i, (id, pose, mesh)) in poses.iter().enumerate().rev() {
+        if !world.movable(i) {
+            continue;
+        }
+        let r = match (pose, mesh) {
+            (Pose::Soft(p), Some(m)) => {
+                let Some(first) = p.first() else { continue };
+                let r = p.iter().fold(vectorcraft_geom::Rect::from_points(*first, *first), |r, q| r.union_pt(*q));
+                r.inflate(m.radius + m.spacing / 2.0, m.radius + m.spacing / 2.0)
+            }
+            (Pose::Rigid(xf), _) => {
+                let Some(b) = l.base.node(*id).and_then(|n| n.geometric_bounds()) else { continue };
+                xf.map_or(b, |xf| xf.transform_rect_bbox(b))
+            }
+            _ => continue,
+        };
+        if r.contains(at) {
+            return Some(*id);
+        }
+    }
+    None
 }

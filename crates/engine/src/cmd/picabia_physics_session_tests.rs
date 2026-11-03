@@ -142,3 +142,34 @@ fn the_session_belongs_to_its_document() {
     // Nothing to move in an empty document.
     assert!(s.execute("physics.session.open", &json!({})).is_err());
 }
+
+#[test]
+fn the_display_document_shows_clones_over_dimmed_objects() {
+    use super::session::{DIMMED, bar_state, body_at, display_doc};
+    let mut s = session();
+    let (jelly, boxy, shelf, _) = scene(&mut s);
+    assert!(display_doc(&s).is_none() && bar_state(&s).is_none());
+    ex(&mut s, "physics.session.open", json!({}));
+    // At rest nothing moved: no clones yet.
+    let count = |d: &vectorcraft_doc::Document| d.layers.iter().map(|l| l.children().map_or(0, Vec::len)).sum::<usize>();
+    let doc = s.doc().unwrap().doc.clone();
+    assert_eq!(count(&display_doc(&s).unwrap()), count(&doc));
+    ex(&mut s, "physics.seek", json!({"step": 60}));
+    let shown = display_doc(&s).unwrap();
+    assert_eq!(count(&shown), count(&doc) + 3, "the jelly, the box and the cloth moved; the shelf didn't");
+    assert!((shown.node(jelly).unwrap().opacity - doc.node(jelly).unwrap().opacity * DIMMED).abs() < 1e-9);
+    assert_eq!(shown.node(shelf).unwrap().opacity, doc.node(shelf).unwrap().opacity);
+    let bar = bar_state(&s).unwrap();
+    assert_eq!((bar.step, bar.furthest, bar.playing, bar.bodies), (60, 60, false, 4));
+    ex(&mut s, "physics.seek", json!({"step": 10}));
+    assert_eq!(bar_state(&s).unwrap().furthest, 60, "the scrubber keeps its end");
+    // Hit test on the shown pose: the box where it is now, not where it was.
+    let poses = s.picabia.physics.as_ref().unwrap().poses();
+    let (_, pose, _) = poses.iter().find(|(id, ..)| *id == boxy).unwrap();
+    let vectorcraft_physics::pose::Pose::Rigid(Some(xf)) = pose else { panic!("the box moved") };
+    let now = *xf * bounds(&s, boxy).center();
+    assert_eq!(body_at(&s, now), Some(boxy));
+    assert_eq!(body_at(&s, vectorcraft_geom::Point::new(-500.0, -500.0)), None);
+    // The shelf (static) is never grabbed.
+    assert_eq!(body_at(&s, bounds(&s, shelf).center()), None);
+}

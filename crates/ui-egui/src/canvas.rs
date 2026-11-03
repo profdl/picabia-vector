@@ -251,7 +251,7 @@ pub fn show(app: &mut VectorcraftApp, ui: &mut Ui) {
     }
     let painter = ui.painter_at(rect);
     let Some(st) = app.session.active() else { return };
-    let doc = st.doc.clone();
+    let doc = crate::picabia::sim_bar::display_doc(app).unwrap_or_else(|| st.doc.clone()); // PICABIA: a physics session's clones
     let mask_view = st.shown_mask();
 
     paint_paper(app, st, ui, &painter, &xf, rect, &t);

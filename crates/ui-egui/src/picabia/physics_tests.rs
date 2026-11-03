@@ -54,11 +54,15 @@ fn the_row_shows_for_objects_with_settings_and_simulate_drops_them() {
     let shown = texts(&mut app, &ctx);
     assert!(shown.iter().any(|s| s == "Physics: Dynamic"), "{shown:?}");
     assert!(shown.iter().any(|s| s == "Simulate"));
+    // Simulate to Rest: the session shows the result; nothing moves until Apply (PIC31.5).
+    let undo = app.session.active().unwrap().history.undo.len();
     click(&mut app, &ctx, "Simulate");
+    assert_eq!(app.session.active().unwrap().history.undo.len(), undo);
+    assert!(app.ui.status.contains("settled"), "{}", app.ui.status);
+    app.run("physics.apply", json!({})).unwrap();
     let b = app.session.active().unwrap().doc.node(vectorcraft_doc::NodeId(id)).unwrap().geometric_bounds().unwrap();
     assert!((b.y1 - 300.0).abs() < 2.0, "{b:?}");
-    assert_eq!(app.session.active().unwrap().history.undo.last().unwrap().label, "Simulate Physics");
-    assert!(app.ui.status.contains("1 object moved"), "{}", app.ui.status);
+    assert_eq!(app.session.active().unwrap().history.undo.last().unwrap().label, "Apply Physics");
 }
 
 #[test]
@@ -94,7 +98,21 @@ fn object_physics_menu_runs_its_commands() {
     let object = tree.iter().find(|(title, _)| *title == "Object").map(|(_, items)| items).unwrap();
     let Some(Item::Sub(_, physics)) = object.iter().find(|i| matches!(i, Item::Sub("Physics", _))) else { panic!("no Object ▸ Physics") };
     let ids: Vec<&str> = physics.iter().filter_map(|i| if let Item::Cmd(_, id, _) = i { Some(*id) } else { None }).collect();
-    assert_eq!(ids, ["physics.simulate", "physics.set", "physics.set", crate::picabia_ui::PHYSICS_SETTINGS, "physics.clear"]);
+    assert_eq!(
+        ids,
+        [
+            "physics.toRest",
+            "physics.play",
+            "physics.simulate",
+            "physics.set",
+            "physics.set",
+            "physics.set",
+            "physics.set",
+            "physics.set",
+            crate::picabia_ui::PHYSICS_SETTINGS,
+            "physics.clear"
+        ]
+    );
     // Every item runs from the app.
     let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
@@ -107,5 +125,6 @@ fn object_physics_menu_runs_its_commands() {
             }
         }
     }
-    assert_eq!(app.run("physics.get", json!({"id": id})).unwrap()["settings"]["bodyType"], "static");
+    let settings = app.run("physics.get", json!({"id": id})).unwrap()["settings"].clone();
+    assert_eq!((settings["bodyType"].as_str(), settings["soft"]["preset"].as_str()), (Some("soft"), Some("rubber")), "{settings}");
 }
