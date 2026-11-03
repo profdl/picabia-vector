@@ -1,8 +1,9 @@
 # Physics
 
-**Status:** 2026-11-02, phase 1 (PIC30.1, PIC30.2): drop-and-settle; phase 2 (PIC31, soft bodies
-and live simulation) under way: its gate (PIC31.0) failed on cross-platform bits and the owner
-accepted per-platform soft results (see [Decisions](#decisions)). Ported from the owner's
+**Status:** 2026-11-03, phase 1 (PIC30.1, PIC30.2): drop-and-settle; phase 2 (PIC31.0 to PIC31.8,
+soft bodies and live simulation) built and tested headless, not yet tried by hand in the app: its
+gate (PIC31.0) failed on cross-platform bits and the owner accepted per-platform soft results (see
+[Decisions](#decisions)); the native step budget isn't met (see Budgets). Ported from the owner's
 tlprocedural (its Physics modifier: `PhysicsSettings` in `src/types/modifiers.ts`, defaults in
 `modifierConfig.ts`, ranges in `modifierSchemas.ts`, the world in
 `src/store/modifiers/core/PhysicsEngine.ts` and `PhysicsGeometryConverter.ts`).
@@ -138,7 +139,8 @@ settings: the eye, the fields, Simulate and Clear Physics.
 
 ## Phase 2: soft bodies and live simulation (planned)
 
-Planned 2026-11-02 with the owner; not started. Any object (or several) can be given a soft-body
+Planned 2026-11-02 with the owner; built 2026-11-02/03 (each part's **As built** note says what
+changed from the plan). Any object (or several) can be given a soft-body
 preset, fine-tuned, and simulated live on the canvas alongside the rigid bodies: a cloth strip drapes
 over a static shelf, a jelly lands on a box and wobbles. The canvas draws simulated clones; the real
 objects change only on **Apply**.
