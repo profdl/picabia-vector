@@ -55,6 +55,8 @@ pub(crate) struct Live {
     pub(crate) artboard: Option<usize>,
     /// The furthest step reached (the scrubber's end).
     pub(crate) furthest: u32,
+    /// Objects without settings that take part (they were selected when it opened).
+    pub(crate) defaulted: std::collections::HashSet<NodeId>,
     /// The document the canvas draws at the current step ([`display_doc`]).
     pub(crate) shown: Option<Arc<Document>>,
 }
@@ -203,9 +205,10 @@ fn live_mut(s: &mut Session) -> Option<&mut Live> {
     s.picabia.physics.as_deref_mut().filter(|l| l.doc_uid == uid)
 }
 
-/// Build a session from the active document.
-fn build(s: &mut Session, p: &Value, cmd: &str) -> Result<Live> {
-    let g: Gathered = gather(s, p, cmd)?;
+/// Build a session from the active document (`extra`: objects without settings to take part;
+/// `None`: the selection).
+fn build(s: &mut Session, p: &Value, cmd: &str, extra: Option<&std::collections::HashSet<NodeId>>) -> Result<Live> {
+    let g: Gathered = gather(s, p, cmd, extra)?;
     if !g.bodies.iter().any(|b| vectorcraft_physics::world::moves(&b.settings.body_type)) {
         return Err(EngineError::Disabled(
             cmd.into(),
@@ -223,7 +226,8 @@ fn build(s: &mut Session, p: &Value, cmd: &str) -> Result<Live> {
         sim: SimSession::new(world),
         playing: false,
         owed: 0.0,
-        notes: g.notes.into_iter().chain(notes).collect(),
+        notes,
+        defaulted: g.defaulted.iter().copied().collect(),
         skipped: g.skipped,
         warnings: g.warnings,
         artboard: g.artboard,
@@ -232,27 +236,45 @@ fn build(s: &mut Session, p: &Value, cmd: &str) -> Result<Live> {
     })
 }
 
-/// The session's view of its document: started again when the document changed under it.
-/// `params` are the ones it was opened with.
-fn follow_document(s: &mut Session) -> Result<()> {
-    let Some(st) = s.active() else { return Ok(()) };
+/// The session's view of its document: started again when the document changed under it (an edit;
+/// not a change that isn't one, such as type laid out again), with the params it was opened with
+/// and the same objects without settings. `true` when it started again (or closed).
+fn follow_document(s: &mut Session) -> Result<bool> {
+    let Some(st) = s.active() else { return Ok(false) };
     let (uid, doc) = (st.uid, st.doc.clone());
-    let Some(l) = s.picabia.physics.as_deref() else { return Ok(()) };
+    let Some(l) = s.picabia.physics.as_deref() else { return Ok(false) };
     if l.doc_uid != uid || Arc::ptr_eq(&l.base, &doc) {
-        return Ok(());
+        return Ok(false);
     }
-    let p = json!({"gravityX": l.params.gravity.x, "gravityY": l.params.gravity.y, "walls": l.params.walls.is_some(), "artboard": l.artboard});
+    if st.same_content(&l.base) {
+        if let Some(l) = s.picabia.physics.as_deref_mut() {
+            l.base = doc;
+            l.refresh();
+        }
+        return Ok(false);
+    }
+    // The artboard is the one it stood on, if the document still has it.
+    let board = l.artboard.filter(|i| *i < doc.artboards.len());
+    let p = json!({"gravityX": l.params.gravity.x, "gravityY": l.params.gravity.y, "walls": l.params.walls.is_some(), "artboard": board});
     let playing = l.playing;
-    match build(s, &p, "physics.session.open") {
+    let extra = l.defaulted.clone();
+    match build(s, &p, "physics.session.open", Some(&extra)) {
         Ok(mut fresh) => {
             fresh.playing = playing;
             fresh.notes.insert(0, "the document changed: the simulation started again from the new rest pose".into());
             fresh.refresh();
             s.picabia.physics = Some(Box::new(fresh));
         }
+        // Nothing moves any more (the bodies were deleted, their settings cleared): it closes.
         Err(_) => s.picabia.physics = None,
     }
-    Ok(())
+    Ok(true)
+}
+
+/// The most steps one command may take: phase 1's body-steps budget over what a step costs.
+pub(crate) fn step_budget(world: &World) -> u32 {
+    let n = sim::MAX_BODY_STEPS / u64::try_from(world.cost()).unwrap_or(u64::MAX).max(1);
+    u32::try_from(n).unwrap_or(MAX_SESSION_STEPS).clamp(1, MAX_SESSION_STEPS)
 }
 
 fn summary(l: &Live) -> Value {
@@ -269,7 +291,7 @@ fn summary(l: &Live) -> Value {
 }
 
 fn open(s: &mut Session, p: &Value) -> Result<Value> {
-    let l = build(s, p, "physics.session.open")?;
+    let l = build(s, p, "physics.session.open", None)?;
     let out = summary(&l);
     s.picabia.physics = Some(Box::new(l));
     bump(s);
@@ -285,7 +307,9 @@ fn close(s: &mut Session, _: &Value) -> Result<Value> {
 }
 
 fn info(s: &mut Session, _: &Value) -> Result<Value> {
-    follow_document(s)?;
+    if follow_document(s)? {
+        bump(s);
+    }
     let Some(l) = live(s) else { return Ok(json!({"open": false})) };
     let kinds: Vec<Value> = l
         .ids
@@ -312,7 +336,7 @@ fn info(s: &mut Session, _: &Value) -> Result<Value> {
 fn ensure(s: &mut Session, p: &Value, cmd: &str) -> Result<()> {
     follow_document(s)?;
     if live(s).is_none() {
-        let l = build(s, p, cmd)?;
+        let l = build(s, p, cmd, None)?;
         s.picabia.physics = Some(Box::new(l));
     }
     Ok(())
@@ -363,8 +387,11 @@ fn seek(s: &mut Session, p: &Value) -> Result<Value> {
     let step = step_param(p, "step", 0.0, CMD)?;
     follow_document(s)?;
     let Some(l) = live_mut(s) else { return Err(bad(CMD, "no simulation is open")) };
-    l.sim.seek(step);
-    let out = json!({"step": l.sim.step(), "seconds": f64::from(l.sim.step()) / sim::HZ, "settled": l.sim.world().settled()});
+    // Forward, at most the body-steps budget in one go.
+    let most = l.sim.step().saturating_add(step_budget(l.sim.world()));
+    let capped = step > most;
+    l.sim.seek(step.min(most));
+    let out = json!({"step": l.sim.step(), "seconds": f64::from(l.sim.step()) / sim::HZ, "settled": l.sim.world().settled(), "capped": capped});
     bump(s);
     Ok(out)
 }
@@ -375,8 +402,9 @@ fn to_rest(s: &mut Session, p: &Value) -> Result<Value> {
     ensure(s, p, CMD)?;
     let Some(l) = live_mut(s) else { return Err(bad(CMD, "no simulation is open")) };
     l.playing = false;
-    l.sim.to_rest(max);
-    let out = json!({"step": l.sim.step(), "seconds": f64::from(l.sim.step()) / sim::HZ, "settled": l.sim.world().settled()});
+    let budget = step_budget(l.sim.world());
+    l.sim.to_rest(max.min(budget));
+    let out = json!({"step": l.sim.step(), "seconds": f64::from(l.sim.step()) / sim::HZ, "settled": l.sim.world().settled(), "capped": max > budget});
     bump(s);
     Ok(out)
 }
@@ -409,28 +437,28 @@ fn poke(s: &mut Session, p: &Value) -> Result<Value> {
     if l.sim.events().len() >= MAX_EVENTS {
         return Err(bad(CMD, format!("at most {MAX_EVENTS} pokes and changes are recorded in one simulation")));
     }
-    let mut grabbed = l.sim.world().grabbed();
+    let full = || bad(CMD, format!("at most {MAX_EVENTS} pokes and changes are recorded in one simulation"));
     if let (Some(id), Some(at)) = (id, at) {
         let body = l.body_of(id).ok_or_else(|| bad(CMD, format!("object {} isn't in the simulation", id.0)))?;
         if !l.sim.world().movable(body) {
             return Err(bad(CMD, format!("object {} doesn't move (static, kinematic or out of the world)", id.0)));
         }
         if !l.sim.record(Event::Grab { body, at }) {
-            return Err(bad(CMD, format!("at most {MAX_EVENTS} pokes and changes are recorded in one simulation")));
+            return Err(full());
         }
-        grabbed = Some(body);
     } else if id.is_some() || at.is_some() {
         return Err(bad(CMD, "grabbing takes both `id` and `point`"));
     }
     if let Some(to) = to {
-        if grabbed.is_none() {
+        if l.sim.held().is_none() {
             return Err(bad(CMD, "nothing is grabbed: pass `id` and `point` first"));
         }
-        l.sim.record(Event::DragTo { to });
-        // (A pull replacing the last one in this step is never refused.)
+        if !l.sim.record(Event::DragTo { to }) {
+            return Err(full());
+        }
     }
-    if release {
-        l.sim.record(Event::Release);
+    if release && !l.sim.record(Event::Release) {
+        return Err(full());
     }
     let step = l.sim.step();
     bump(s);
@@ -447,7 +475,16 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let poses = l.poses();
     let items: Vec<Baking> = poses.iter().map(|(id, pose, mesh)| Baking { id: *id, pose, mesh: *mesh }).collect();
-    let changed = bake(s, "Apply Physics", p, &items)?;
+    let changed = match bake(s, "Apply Physics", p, &items) {
+        Ok(c) => c,
+        Err(e) => {
+            // The session stays: Apply can be tried again.
+            drop(items);
+            drop(poses);
+            s.picabia.physics = Some(l);
+            return Err(e);
+        }
+    };
     bump(s);
     Ok(json!({"changed": changed.iter().map(|i| i.0).collect::<Vec<_>>()}))
 }

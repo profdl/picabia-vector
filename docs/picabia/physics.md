@@ -411,7 +411,13 @@ keeps its params and output: a scene with soft bodies runs through the live worl
 in one step; a rigid-only scene runs phase 1's drop unchanged. Snapshots: every 60 steps, at most
 64 (then every other one is dropped and the interval doubles); events at most 20,000 (consecutive
 pulls in one step keep the last); a snapshot is the world before its step's events, so replaying
-applies each once.
+applies each once. PIC31.4a (review): one command steps at most phase 1's 6 million body-steps
+(a rigid body counts one, twenty soft particles one; `seek` and `toRest` answer `capped`); soft
+bodies fall out of the world as rigid ones do (left where they were, reported); a new grab lets go
+of the last; a grab and a pull can be recorded at the same step (paused, or a script); restarting
+a body gives its collider pieces back and re-attaches the pins held to it; a change that isn't an
+edit (type laid out again) doesn't restart the session, and a restart keeps the objects that took
+part without settings; a failed Apply keeps the session; soft cells weigh by their own area.
 
 ### Commands (planned)
 

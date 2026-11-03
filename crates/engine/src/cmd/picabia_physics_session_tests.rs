@@ -97,12 +97,28 @@ fn pokes_replay_when_scrubbing_and_edits_restart_the_session() {
     let (jelly, boxy, ..) = scene(&mut s);
     ex(&mut s, "physics.session.open", json!({}));
     ex(&mut s, "physics.seek", json!({"step": 30}));
-    let b = bounds(&s, boxy);
-    ex(&mut s, "physics.poke", json!({"id": boxy.0, "point": [b.center().x, b.center().y], "to": {"x": 300, "y": 40}}));
+    // Grab the box where it is now, and pull, at the same step (paused).
+    let poses = s.picabia.physics.as_ref().unwrap().poses();
+    let (_, pose, _) = poses.iter().find(|(id, ..)| *id == boxy).unwrap();
+    let c = bounds(&s, boxy).center();
+    let c = match pose {
+        vectorcraft_physics::pose::Pose::Rigid(Some(xf)) => *xf * c,
+        _ => c,
+    };
+    ex(&mut s, "physics.poke", json!({"id": boxy.0, "point": [c.x, c.y]}));
+    ex(&mut s, "physics.poke", json!({"to": {"x": 300, "y": 40}}));
     ex(&mut s, "physics.seek", json!({"step": 90}));
     ex(&mut s, "physics.poke", json!({"release": true}));
     ex(&mut s, "physics.seek", json!({"step": 150}));
     let a = s.picabia.physics.as_ref().unwrap().sim.world().poses();
+    // The poke changed the box's motion (an unpoked run ends elsewhere).
+    let mut t = session();
+    scene(&mut t);
+    ex(&mut t, "physics.session.open", json!({}));
+    ex(&mut t, "physics.seek", json!({"step": 150}));
+    let unpoked = t.picabia.physics.as_ref().unwrap().sim.world().poses();
+    let k = s.picabia.physics.as_ref().unwrap().body_of(boxy).unwrap();
+    assert_ne!(a[k], unpoked[k], "the poke moved the box");
     ex(&mut s, "physics.seek", json!({"step": 0}));
     ex(&mut s, "physics.seek", json!({"step": 150}));
     let again = s.picabia.physics.as_ref().unwrap().sim.world().poses();

@@ -13,7 +13,6 @@ use vectorcraft_doc::{Document, Node, NodeId, NodeKind};
 use vectorcraft_geom::{Rect, Vec2};
 use vectorcraft_physics::mesh::{MAX_PARTICLES_PER_RUN, SoftMesh};
 use vectorcraft_physics::pose::Pose;
-use vectorcraft_physics::session::SimSession;
 use vectorcraft_physics::world::{World, WorldBody, WorldParams, moves};
 use vectorcraft_physics::{BodyInput, BodyType, Settings, SimParams, sim};
 
@@ -240,7 +239,9 @@ pub(crate) struct Gathered {
     pub(crate) bodies: Vec<WorldBody>,
     pub(crate) skipped: Vec<Value>,
     pub(crate) warnings: Vec<Value>,
-    pub(crate) notes: Vec<String>,
+    /// Objects without settings taking part as dynamic bodies with the defaults (they were
+    /// selected).
+    pub(crate) defaulted: Vec<NodeId>,
     pub(crate) params: WorldParams,
     /// The artboard the walls stand on.
     pub(crate) artboard: Option<usize>,
@@ -255,8 +256,9 @@ fn pin_particle(mesh: &SoftMesh, b: Rect, pin: &vectorcraft_physics::Pin) -> Opt
 
 /// Read the params (`gravityX`, `gravityY`, `walls`, `artboard`) and the bodies of the active
 /// document (see `physics.simulate`'s params doc): rigid bodies' outlines, soft bodies' rest meshes
-/// (within the run's particle budget) and pins.
-pub(crate) fn gather(s: &Session, p: &Value, cmd: &str) -> Result<Gathered> {
+/// (within the run's particle budget) and pins. Objects without settings in `extra` (the
+/// selection, or a session's own when it starts again) take part as dynamic bodies.
+pub(crate) fn gather(s: &Session, p: &Value, cmd: &str, extra: Option<&HashSet<NodeId>>) -> Result<Gathered> {
     check_numbers(p, &["gravityX", "gravityY"], cmd)?;
     let gx = number_or(p, "gravityX", 0.0, cmd)?;
     let gy = number_or(p, "gravityY", sim::DEFAULT_GRAVITY, cmd)?;
@@ -266,7 +268,7 @@ pub(crate) fn gather(s: &Session, p: &Value, cmd: &str) -> Result<Gathered> {
     let walls = switch_or(p, "walls", true, cmd)?;
     let st = s.doc()?;
     let doc = &st.doc;
-    let selected: HashSet<NodeId> = st.selection.objects.iter().copied().collect();
+    let selected: HashSet<NodeId> = extra.cloned().unwrap_or_else(|| st.selection.objects.iter().copied().collect());
     let mut found = Vec::new();
     let mut skipped = Vec::new();
     for layer in &doc.layers {
@@ -292,6 +294,7 @@ pub(crate) fn gather(s: &Session, p: &Value, cmd: &str) -> Result<Gathered> {
     let mut pins: Vec<Vec<vectorcraft_physics::Pin>> = Vec::new();
     let mut warnings: Vec<Value> = Vec::new();
     let mut budget = MAX_PARTICLES_PER_RUN;
+    let mut defaulted = Vec::new();
     for f in found {
         let Some(n) = doc.node(f.id) else { continue };
         let shape = match vectorcraft_physics::body_shape(n, Some(&symbols)) {
@@ -318,6 +321,9 @@ pub(crate) fn gather(s: &Session, p: &Value, cmd: &str) -> Result<Gathered> {
             },
         };
         warnings.extend(notes.iter().map(|m| json!({"id": f.id.0, "message": m})));
+        if doc.node(f.id).is_some_and(|n| !vectorcraft_physics::has_physics(n)) {
+            defaulted.push(f.id);
+        }
         ids.push(f.id);
         pins.push(body_pins);
         bodies.push(WorldBody { settings: f.settings, shape, mesh, pins: Vec::new() });
@@ -354,7 +360,7 @@ pub(crate) fn gather(s: &Session, p: &Value, cmd: &str) -> Result<Gathered> {
         bodies,
         skipped,
         warnings,
-        notes: Vec::new(),
+        defaulted,
         params: WorldParams { gravity: Vec2::new(gx, gy), walls: wall_rect },
         artboard: if walls { artboard } else { None },
     })
@@ -369,7 +375,7 @@ fn simulate(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let steps = steps.min(f64::from(sim::MAX_STEPS)) as u32;
     let settle = switch_or(p, "stopWhenSettled", true, CMD)?;
-    let g = gather(s, p, CMD)?;
+    let g = gather(s, p, CMD, None)?;
     if !g.bodies.iter().any(|b| moves(&b.settings.body_type)) {
         return Err(EngineError::Disabled(
             CMD.into(),
@@ -377,11 +383,22 @@ fn simulate(s: &mut Session, p: &Value) -> Result<Value> {
         ));
     }
     let (poses, ran, settled, lost, notes) = if g.bodies.iter().any(|b| b.mesh.is_some()) {
-        // Soft bodies: the live world, run to rest (phase 2).
-        let (world, notes) = World::new(&g.bodies, &g.params);
-        let mut run = SimSession::new(world);
-        let ran = if settle { run.to_rest(steps) } else { run.advance(steps) };
-        (run.world().poses(), ran, run.world().settled(), Vec::new(), notes)
+        // Soft bodies: the live world, run to rest (phase 2), within the body-steps budget.
+        let (mut world, mut notes) = World::new(&g.bodies, &g.params);
+        let budget = session::step_budget(&world);
+        if steps > budget {
+            notes.push(format!("{} body-steps at most: {budget} steps", sim::MAX_BODY_STEPS));
+        }
+        let mut ran = 0;
+        while ran < steps.min(budget) {
+            world.step();
+            ran += 1;
+            if settle && world.settled() {
+                break;
+            }
+        }
+        let lost: Vec<u64> = world.lost().iter().filter_map(|i| g.ids.get(*i)).map(|id| id.0).collect();
+        (world.poses(), ran, world.settled(), lost, notes)
     } else {
         // Rigid bodies only: phase 1's drop, unchanged.
         let inputs: Vec<BodyInput> = g.bodies.iter().map(|b| BodyInput { settings: b.settings.clone(), shape: b.shape.clone() }).collect();

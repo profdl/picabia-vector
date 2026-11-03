@@ -97,6 +97,10 @@ pub struct World {
     gravity: Vector,
     origin: Point,
     slots: Vec<Slot>,
+    /// Each body's pins (particle, attached body), kept to re-attach after a restart.
+    pins: Vec<Vec<(u32, Option<usize>)>>,
+    /// Collider pieces each body takes from the run's budget, given back when it is removed.
+    pieces: Vec<usize>,
     grab: Option<Grab>,
     pieces_left: usize,
 }
@@ -137,6 +141,8 @@ impl World {
             gravity: Vector::new(fin(g(params.gravity.x) / PT_PER_M), fin(g(params.gravity.y) / PT_PER_M)),
             origin,
             slots: Vec::with_capacity(bodies.len()),
+            pins: bodies.iter().map(|b| b.pins.clone()).collect(),
+            pieces: vec![0; bodies.len()],
             grab: None,
             pieces_left: MAX_PIECES_PER_RUN,
         };
@@ -147,7 +153,11 @@ impl World {
             if b.mesh.is_none()
                 && let Some(s) = slots.get_mut(i)
             {
+                let before = w.pieces_left;
                 *s = w.add_rigid(b, &mut boxed);
+                if let Some(p) = w.pieces.get_mut(i) {
+                    *p = before.saturating_sub(w.pieces_left);
+                }
             }
         }
         w.slots = slots;
@@ -209,7 +219,14 @@ impl World {
         // 1 kg/m² of area, as rigid bodies, plus the extra mass.
         let area = match &mesh.kind {
             MeshKind::Strip(st) => st.length * st.thickness,
-            MeshKind::Cells => b.shape.bounds.width() * b.shape.bounds.height() * 0.5,
+            MeshKind::Cells => mesh
+                .cells
+                .iter()
+                .filter_map(|c| {
+                    let [a, b, d] = [mesh.rest.get(c[0] as usize)?, mesh.rest.get(c[1] as usize)?, mesh.rest.get(c[2] as usize)?];
+                    Some(((*b - *a).cross(*d - *a) / 2.0).abs())
+                })
+                .sum::<f64>(),
         } / (PT_PER_M * PT_PER_M);
         let mass = (area + s.mass).max(1e-3);
         let pinned: Vec<u32> = b.pins.iter().filter(|(_, to)| to.is_none()).map(|(i, _)| *i).collect();
@@ -272,18 +289,29 @@ impl World {
             &(),
             &(),
         );
-        // Rigid bodies that fell out of the world stop taking part (as phase 1).
+        // Bodies that fell out of the world stop taking part (as phase 1), soft ones too.
         let lost_m = (LOST_DISTANCE / PT_PER_M) as f32;
+        let out = |t: Vector| !(t.x.is_finite() && t.y.is_finite()) || t.x.abs() > lost_m || t.y.abs() > lost_m;
         for slot in &mut self.slots {
-            if let Slot::Rigid { handle, .. } = slot
-                && let Some(rb) = self.rbs.get_mut(*handle)
-                && rb.is_dynamic()
-                && rb.is_enabled()
-            {
-                let t = rb.translation();
-                if !(t.x.is_finite() && t.y.is_finite()) || t.x.abs() > lost_m || t.y.abs() > lost_m {
-                    rb.set_enabled(false);
+            match slot {
+                Slot::Rigid { handle, .. } => {
+                    if let Some(rb) = self.rbs.get_mut(*handle)
+                        && rb.is_dynamic()
+                        && rb.is_enabled()
+                        && out(rb.translation())
+                    {
+                        rb.set_enabled(false);
+                    }
                 }
+                Slot::Soft { handle } => {
+                    if let Some(sb) = self.soft.get_mut(*handle)
+                        && sb.is_enabled()
+                        && out(sb.center_of_mass())
+                    {
+                        sb.set_enabled(false);
+                    }
+                }
+                Slot::None => {}
             }
         }
     }
@@ -335,9 +363,11 @@ impl World {
                         .filter(|rb| rb.is_dynamic() && rb.is_enabled())
                         .and_then(|rb| sim::motion(*start, self.origin, rb.translation(), rb.rotation().angle())),
                 ),
-                Slot::Soft { handle } => {
-                    Pose::Soft(self.soft.get(*handle).map_or_else(Vec::new, |sb| sb.particle_positions().map(|v| self.to_pt(v)).collect()))
-                }
+                // A soft body that fell out of the world is left where it was.
+                Slot::Soft { handle } => match self.soft.get(*handle).filter(|sb| sb.is_enabled()) {
+                    Some(sb) => Pose::Soft(sb.particle_positions().map(|v| self.to_pt(v)).collect()),
+                    None => Pose::Rigid(None),
+                },
             })
             .collect()
     }
@@ -355,9 +385,35 @@ impl World {
     pub fn movable(&self, body: usize) -> bool {
         match self.slots.get(body) {
             Some(Slot::Rigid { handle, .. }) => self.rbs.get(*handle).is_some_and(|rb| rb.is_dynamic() && rb.is_enabled()),
-            Some(Slot::Soft { handle }) => self.soft.contains(*handle),
+            Some(Slot::Soft { handle }) => self.soft.get(*handle).is_some_and(|sb| sb.is_enabled()),
             _ => false,
         }
+    }
+
+    /// The bodies that fell out of the world (left where they were).
+    pub fn lost(&self) -> Vec<usize> {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| match slot {
+                Slot::Rigid { handle, .. } => self.rbs.get(*handle).is_some_and(|rb| rb.is_dynamic() && !rb.is_enabled()),
+                Slot::Soft { handle } => self.soft.get(*handle).is_some_and(|sb| !sb.is_enabled()),
+                Slot::None => false,
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// What a step costs, in body-steps: one per rigid body, one per twenty soft particles (PIC31.0:
+    /// a 400-particle jelly costs about as much as twenty boxes).
+    pub fn cost(&self) -> usize {
+        let soft: usize = self
+            .slots
+            .iter()
+            .filter_map(|s| if let Slot::Soft { handle } = s { self.soft.get(*handle).map(|sb| sb.num_particles()) } else { None })
+            .sum();
+        let rigid = self.slots.iter().filter(|s| matches!(s, Slot::Rigid { .. })).count();
+        (rigid + soft.div_ceil(20)).max(1)
     }
 
     /// Grab body `body` at `at` (document space): a soft body by its nearest particle, a rigid one
@@ -366,6 +422,8 @@ impl World {
         if !self.movable(body) || !(at.x.is_finite() && at.y.is_finite()) {
             return false;
         }
+        // A new grab lets go of what was held (its spring force would stay otherwise).
+        self.release();
         let target = self.to_m(at);
         match self.slots.get(body) {
             Some(Slot::Rigid { handle, .. }) => {
@@ -467,10 +525,14 @@ impl World {
         }
     }
 
-    /// Put body `body` back at its rest pose as `new` (a new mesh, a new kind of body).
+    /// Put body `body` back at its rest pose as `new` (a new mesh, a new kind of body). Its collider
+    /// pieces go back to the run's budget, and soft bodies attached to it are attached again.
     pub fn restart_body(&mut self, body: usize, new: &WorldBody) {
+        if body >= self.slots.len() {
+            return;
+        }
         if self.grab.as_ref().is_some_and(|g| g.body == body) {
-            self.grab = None;
+            self.release();
         }
         match self.slots.get(body).cloned() {
             Some(Slot::Rigid { handle, .. }) => {
@@ -481,11 +543,45 @@ impl World {
             }
             _ => {}
         }
+        if let Some(p) = self.pieces.get_mut(body) {
+            self.pieces_left = self.pieces_left.saturating_add(*p).min(MAX_PIECES_PER_RUN);
+            *p = 0;
+        }
+        if let Some(p) = self.pins.get_mut(body) {
+            p.clone_from(&new.pins);
+        }
         let mut boxed = 0;
         let mut notes = Vec::new();
+        let before = self.pieces_left;
         let slot = if new.mesh.is_some() { self.add_soft(new, &mut notes) } else { self.add_rigid(new, &mut boxed) };
+        if let Some(p) = self.pieces.get_mut(body) {
+            *p = before.saturating_sub(self.pieces_left);
+        }
         if let Some(s) = self.slots.get_mut(body) {
-            *s = slot;
+            *s = slot.clone();
+        }
+        // Soft bodies pinned to this one hold on to its new handle.
+        if let Slot::Rigid { handle: rb, .. } = slot {
+            let attached: Vec<(SoftBodyHandle, u32)> = self
+                .pins
+                .iter()
+                .enumerate()
+                .filter_map(|(i, pins)| match self.slots.get(i) {
+                    Some(Slot::Soft { handle }) => {
+                        Some(pins.iter().filter(|(_, to)| *to == Some(body)).map(|(p, _)| (*handle, *p)).collect::<Vec<_>>())
+                    }
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            for (h, p) in attached {
+                if let Some(sb) = self.soft.get_mut(h)
+                    && (p as usize) < sb.num_particles()
+                {
+                    sb.detach_particle(p as usize);
+                    sb.attach_particle(p as usize, rb, &self.rbs);
+                }
+            }
         }
     }
 

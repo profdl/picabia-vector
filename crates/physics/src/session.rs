@@ -81,6 +81,20 @@ impl SimSession {
         &self.current
     }
 
+    /// The body a poke holds once this step's recorded events apply (they apply when the next step
+    /// is taken), so a grab and a pull can be recorded at the same step.
+    pub fn held(&self) -> Option<usize> {
+        let mut held = self.current.grabbed();
+        for (_, e) in self.events.iter().filter(|(s, _)| *s == self.step) {
+            match e {
+                Event::Grab { body, .. } => held = Some(*body),
+                Event::Release => held = None,
+                _ => {}
+            }
+        }
+        held
+    }
+
     /// The recorded events.
     pub fn events(&self) -> &[(u32, Event)] {
         &self.events

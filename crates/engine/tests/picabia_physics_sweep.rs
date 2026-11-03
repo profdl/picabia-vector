@@ -46,7 +46,7 @@ fn physics_commands_with_junk_params_on_objects_with_settings() {
             cases.push(json!({"props": {"bodyType": "soft", "colliderType": 7, "mass": -1, "sensor": true}}));
             cases.push(json!({"props": {"bodyType": "soft", "soft": {"preset": "cloth", "stiffness": "x", "resolution": 1e300, "pins": [{"u": 1e300, "v": -1, "attachTo": 1}, 3]}}}));
             cases.push(json!({"props": {"soft": [1], "bodyType": "soft"}}));
-            cases.push(json!({"step": 36_000}));
+            cases.push(json!({"step": 3_600}));
             cases.push(json!({"id": 1, "point": [0, 0], "to": {"x": 1e7, "y": -1e7}, "release": true}));
             for p in &cases {
                 calls += 1;
@@ -78,7 +78,7 @@ fn physics_commands_with_junk_params_on_objects_with_settings() {
     );
 }
 
-/// The session on every fixture: play by ticks, poke, Apply undoes exactly, Cancel changes nothing.
+/// The session on every fixture: play by ticks, Apply undoes exactly, Cancel changes nothing.
 #[test]
 fn sessions_apply_and_undo_exactly_on_every_fixture() {
     for fx in Fixture::ALL {

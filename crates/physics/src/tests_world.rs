@@ -228,3 +228,94 @@ fn retuning_and_restarting_take_effect_and_junk_is_harmless() {
     empty.step();
     assert!(empty.poses().is_empty() && empty.settled());
 }
+
+// PIC31.4a (review).
+
+fn centre_y(w: &World, i: usize) -> f64 {
+    match &w.poses()[i] {
+        Pose::Soft(p) => p.iter().map(|q| q.y).sum::<f64>() / p.len() as f64,
+        Pose::Rigid(a) => a.map_or(0.0, |a| a.as_coeffs()[5]),
+    }
+}
+
+#[test]
+fn a_second_grab_lets_go_of_the_first() {
+    let a = soft(shapes::ellipse(Rect::new(100.0, 100.0, 160.0, 160.0)), Soft::of(Preset::Rubber));
+    let b = rigid(Rect::new(400.0, 100.0, 440.0, 140.0), BodyType::Dynamic);
+    let (mut w, _) = World::new(&[a, b], &params());
+    // Hold the rubber up where it is, then grab the box: the rubber must fall.
+    assert!(w.grab(0, Point::new(130.0, 130.0)));
+    w.drag_to(Point::new(130.0, 60.0));
+    for _ in 0..30 {
+        w.step();
+    }
+    let held = centre_y(&w, 0);
+    assert!(w.grab(1, Point::new(420.0, 120.0)));
+    assert_eq!(w.grabbed(), Some(1));
+    for _ in 0..60 {
+        w.step();
+    }
+    assert!(centre_y(&w, 0) > held + 50.0, "let go: it falls ({held} → {})", centre_y(&w, 0));
+}
+
+#[test]
+fn restarting_a_body_keeps_what_is_attached_to_it() {
+    let mut cloth = soft(shapes::rectangle(Rect::new(100.0, 100.0, 300.0, 104.0)), Soft::of(Preset::Cloth));
+    let n = cloth.mesh.as_ref().unwrap().rest.len() as u32;
+    cloth.pins = vec![(n - 1, Some(1))];
+    let carrier = rigid(Rect::new(280.0, 60.0, 320.0, 90.0), BodyType::Dynamic);
+    let (mut w, _) = World::new(&[cloth, carrier.clone()], &params());
+    w.restart_body(1, &carrier);
+    let start = particles(&w, 0)[(n - 1) as usize];
+    for _ in 0..60 {
+        w.step();
+    }
+    let end = particles(&w, 0)[(n - 1) as usize];
+    // The box falls freely onto the floor; the attached end goes with it, not the cloth's speed.
+    let boxy = match &w.poses()[1] {
+        Pose::Rigid(Some(a)) => *a * Point::new(300.0, 75.0),
+        other => panic!("{other:?}"),
+    };
+    assert!((end - boxy).hypot() < 40.0 && end.y > start.y + 50.0, "attached end {end:?}, box {boxy:?}");
+}
+
+#[test]
+fn retuning_gravity_takes_effect() {
+    let b = rigid(Rect::new(100.0, 20.0, 140.0, 60.0), BodyType::Dynamic);
+    let (mut a, _) = World::new(std::slice::from_ref(&b), &params());
+    let (mut c, _) = World::new(std::slice::from_ref(&b), &params());
+    let mut floating = b.settings.clone();
+    floating.gravity_scale = 0.0;
+    c.retune(0, &floating);
+    for _ in 0..30 {
+        a.step();
+        c.step();
+    }
+    assert!(centre_y(&a, 0) > 50.0 && centre_y(&c, 0).abs() < 1e-3, "{} {}", centre_y(&a, 0), centre_y(&c, 0));
+}
+
+#[test]
+fn a_soft_body_falling_out_of_the_world_is_left_where_it_was() {
+    let body = soft(shapes::ellipse(Rect::new(100.0, 100.0, 140.0, 140.0)), Soft::of(Preset::Rubber));
+    let (mut w, _) = World::new(&[body], &WorldParams { gravity: Vec2::new(0.0, crate::sim::MAX_GRAVITY), walls: None });
+    let mut steps = 0;
+    while w.lost().is_empty() && steps < 2_000 {
+        w.step();
+        steps += 1;
+    }
+    assert_eq!(w.lost(), vec![0], "after {steps} steps");
+    assert_eq!(w.poses()[0], Pose::Rigid(None));
+    assert!(w.settled() && !w.movable(0));
+    assert!(w.cost() >= 1);
+}
+
+#[test]
+fn a_grab_and_a_pull_recorded_at_the_same_step() {
+    let (w, _) = World::new(&[rigid(Rect::new(100.0, 20.0, 160.0, 60.0), BodyType::Dynamic)], &params());
+    let mut s = SimSession::new(w);
+    assert_eq!(s.held(), None);
+    s.record(Event::Grab { body: 0, at: Point::new(130.0, 40.0) });
+    assert_eq!(s.held(), Some(0), "held once this step's events apply");
+    s.record(Event::Release);
+    assert_eq!(s.held(), None);
+}
