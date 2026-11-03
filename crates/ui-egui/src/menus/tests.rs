@@ -164,6 +164,7 @@ fn last_effect_dialog_and_view_toggles() {
         ("view.textThreads", "Hide Text Threads", "Show Text Threads"),
         ("view.gradientAnnotator", "Hide Gradient Annotator", "Show Gradient Annotator"),
         ("view.livePaintGaps", "Show Live Paint Gaps", "Hide Live Paint Gaps"),
+        ("view.modifierCopyOutlines", "Show Modifier Copy Outlines", "Hide Modifier Copy Outlines"),
         ("type.hiddenCharacters", "Show Hidden Characters", "Hide Hidden Characters"),
         ("view.template", "Hide Template", "Show Template"),
     ] {

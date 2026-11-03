@@ -26,6 +26,7 @@ fn view_toggle_label(app: &VectorcraftApp, id: &str) -> Option<String> {
         "type.hiddenCharacters" => if v.hidden_chars { "Hide Hidden Characters" } else { "Show Hidden Characters" }.into(),
         "view.gradientAnnotator" => if v.gradient_annotator { "Hide Gradient Annotator" } else { "Show Gradient Annotator" }.into(),
         "view.livePaintGaps" => if v.live_paint_gaps { "Hide Live Paint Gaps" } else { "Show Live Paint Gaps" }.into(),
+        "view.modifierCopyOutlines" => if v.modifier_copy_outlines { "Hide Modifier Copy Outlines" } else { "Show Modifier Copy Outlines" }.into(), // PICABIA
         _ => return None,
     };
     Some(text)

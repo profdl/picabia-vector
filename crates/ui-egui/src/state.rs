@@ -259,6 +259,10 @@ pub struct ViewFlags {
     /// Preview Color.
     #[serde(default)]
     pub live_paint_gaps: bool,
+    /// PICABIA: View → Show/Hide Modifier Copy Outlines: a faint outline on each of a selected
+    /// object's modifier copies (off: the selection outline stays on the object itself).
+    #[serde(default)]
+    pub modifier_copy_outlines: bool,
     /// Type → Show Hidden Characters.
     pub hidden_chars: bool,
     /// View → Hide/Show Template: template layers drawn (dimmed) or left out of the canvas.
@@ -287,6 +291,7 @@ impl Default for ViewFlags {
             text_threads: true,
             gradient_annotator: true,
             live_paint_gaps: false,
+            modifier_copy_outlines: false,
             hidden_chars: false,
             templates: true,
         }

@@ -1,5 +1,6 @@
 //! PICABIA: outlines on an object's modifier copies: the hover highlight on every copy, and a
-//! faint outline on a selected object's copies (the selection box stays on the object itself); a
+//! faint outline on a selected object's copies when View › Show Modifier Copy Outlines is on (the
+//! selection box stays on the object itself); a
 //! selected stencil's tie bars and repeat cell; the selected object's modifier handles.
 
 use std::sync::{Arc, Mutex, PoisonError};
@@ -82,11 +83,13 @@ pub(super) fn copy_outlines(p: &egui::Painter, doc: &Document, n: &Node, outline
 /// The most path elements the stencil markers draw for one object (a fine lattice has many).
 const MAX_MARKER_ELEMENTS: usize = 50_000;
 
-/// What a selected object shows besides its own outline: a faint outline on its copies, and,
-/// for a stencil with a computed sheet, its tie bars (thin, in the selection colour) and the
-/// repeat cell its tile is cut from (dashed).
-pub(super) fn selected_outlines(p: &egui::Painter, doc: &Document, n: &Node, outline: &BezPath, xf: &Xf, color: egui::Color32) {
-    copy_outlines(p, doc, n, outline, xf, Stroke::new(1.0, color.gamma_multiply(0.4)));
+/// What a selected object shows besides its own outline: a faint outline on its copies when
+/// `copies` (View › Show Modifier Copy Outlines), and, for a stencil with a computed sheet, its
+/// tie bars (thin, in the selection colour) and the repeat cell its tile is cut from (dashed).
+pub(super) fn selected_outlines(p: &egui::Painter, doc: &Document, n: &Node, outline: &BezPath, xf: &Xf, color: egui::Color32, copies: bool) {
+    if copies {
+        copy_outlines(p, doc, n, outline, xf, Stroke::new(1.0, color.gamma_multiply(0.4)));
+    }
     for (bp, dashed) in stencil_markers(doc, n).iter() {
         if *dashed {
             for pts in super::outline::to_screen_path(bp, xf) {

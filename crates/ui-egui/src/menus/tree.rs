@@ -569,6 +569,7 @@ pub fn menu_tree_named(english_names: bool) -> Vec<(&'static str, Vec<Item>)> {
                 c("Hide Gradient Annotator", "view.gradientAnnotator"),
                 c("Hide Corner Widget", "view.cornerWidget"),
                 c("Show Live Paint Gaps", "view.livePaintGaps"),
+                c("Show Modifier Copy Outlines", "view.modifierCopyOutlines"), // PICABIA
                 Sep,
                 sub(
                     "Guides",

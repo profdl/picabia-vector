@@ -205,6 +205,13 @@ pub const UI_COMMANDS: &[(&str, &str, &str, &str)] = &[
         "",
         "{} toggle drawing the gaps of the selected Live Paint groups (those livePaint.info lists) in each group's Gap Preview Color while edges show → true when on",
     ),
+    // PICABIA: outlines on a selected object's modifier copies, off by default.
+    (
+        "view.modifierCopyOutlines",
+        "Show Modifier Copy Outlines",
+        "",
+        "{} toggle a faint selection outline on each of the selected objects' modifier copies while edges show (off: only the object itself is outlined) → true when on",
+    ),
     ("type.hiddenCharacters", "Show Hidden Characters", "Cmd+Alt+I", "{} toggle markers for spaces, paragraph ends and story ends"),
     ("type.alignLeft", "Align left", "Cmd+Shift+L", "{} align the selected type's paragraphs (or those the Type tool's selection touches) left"),
     (
