@@ -12,6 +12,8 @@
 //! (PIC31.0: the same bits either way). Soft bodies give the same bits on one machine and build, not
 //! across platforms (`docs/picabia/physics.md` › Decisions).
 
+use std::sync::Arc;
+
 use rapier2d::prelude::*;
 use vectorcraft_geom::{Point, Rect, Vec2};
 
@@ -99,6 +101,9 @@ pub struct World {
     slots: Vec<Slot>,
     /// Each body's pins (particle, attached body), kept to re-attach after a restart.
     pins: Vec<Vec<(u32, Option<usize>)>>,
+    /// What each body is now (its mesh, settings, pins): restarts change it, and a snapshot from
+    /// before a restart keeps the old one, so a pose always goes with its own mesh.
+    inputs: Vec<Arc<WorldBody>>,
     /// Collider pieces each body takes from the run's budget, given back when it is removed.
     pieces: Vec<usize>,
     grab: Option<Grab>,
@@ -142,6 +147,7 @@ impl World {
             origin,
             slots: Vec::with_capacity(bodies.len()),
             pins: bodies.iter().map(|b| b.pins.clone()).collect(),
+            inputs: bodies.iter().map(|b| Arc::new(b.clone())).collect(),
             pieces: vec![0; bodies.len()],
             grab: None,
             pieces_left: MAX_PIECES_PER_RUN,
@@ -550,6 +556,9 @@ impl World {
         if let Some(p) = self.pins.get_mut(body) {
             p.clone_from(&new.pins);
         }
+        if let Some(b) = self.inputs.get_mut(body) {
+            *b = Arc::new(new.clone());
+        }
         let mut boxed = 0;
         let mut notes = Vec::new();
         let before = self.pieces_left;
@@ -583,6 +592,11 @@ impl World {
                 }
             }
         }
+    }
+
+    /// What body `body` is now: its settings, outline, mesh and pins (changed by restarts).
+    pub fn body(&self, body: usize) -> Option<&WorldBody> {
+        self.inputs.get(body).map(|b| b.as_ref())
     }
 
     /// The number of bodies.

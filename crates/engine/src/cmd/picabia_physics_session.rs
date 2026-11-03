@@ -80,10 +80,14 @@ impl Live {
     /// [`STILL`] of its rest pose hasn't moved (`Pose::Rigid(None)`): the world is f32, so a body
     /// at rest comes back a hair off, which mustn't turn a live shape into a path.
     pub(crate) fn poses(&self) -> Vec<(NodeId, Pose, Option<&SoftMesh>)> {
+        let world = self.sim.world();
+        // Each pose with the mesh the world has for it now (a restart changes it; scrubbing back
+        // before the restart brings the old one back).
         self.ids
             .iter()
-            .zip(self.sim.world().poses())
-            .zip(&self.bodies)
+            .zip(world.poses())
+            .enumerate()
+            .filter_map(|(i, (id, pose))| Some(((id, pose), world.body(i)?)))
             .map(|((id, pose), b)| {
                 let still = match (&pose, &b.mesh) {
                     (Pose::Soft(p), Some(m)) => p.len() == m.rest.len() && p.iter().zip(&m.rest).all(|(a, r)| (*a - *r).hypot() < STILL),
@@ -705,8 +709,9 @@ pub(crate) fn settings_changed(s: &mut Session, before: &Arc<Document>, ids: &[N
             Event::Retune { body: i, settings: Box::new(new.settings.clone()) }
         };
         if !l.sim.record(event) {
-            l.notes.push(format!("at most {MAX_EVENTS} changes are recorded: a setting change was left out"));
-            break;
+            // The log is full: the session starts again with the new settings, as after an edit.
+            l.notes.push(format!("at most {MAX_EVENTS} changes are recorded: the simulation starts again with the new settings"));
+            return;
         }
         if let Some(b) = l.bodies.get_mut(i) {
             *b = new.clone();

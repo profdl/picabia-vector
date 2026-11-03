@@ -369,6 +369,10 @@ The jelly scene is at the edge of the native budget even then (worst steps 2.7 f
   takes part: the session starts again. The physics row: Body has Soft; a soft body's row reads
   "Physics: Soft (Cloth)" and shows Preset, Stiffness, Bend (cloth) or Shape memory (jelly,
   rubber), Wobble damping, Detail and Self-collide (the preset's values unless set; no Collider).
+  PIC31.7a (review): the world keeps what each body is now (mesh, settings, pins), and snapshots
+  keep theirs, so scrubbing back before a restart shows the body with its old mesh (and its pins'
+  markers); when the event log is full, a settings change starts the session again instead of
+  being dropped. Undoing a settings change restarts the session from step 0 (an edit).
 
 ### Settings
 

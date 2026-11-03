@@ -230,7 +230,9 @@ fn unpin(s: &mut Session, p: &Value) -> Result<Value> {
 pub fn markers(s: &Session) -> Vec<(Point, bool)> {
     let mut out = Vec::new();
     if let Some(l) = live(s) {
-        for ((_, pose, _), b) in l.poses().iter().zip(&l.bodies) {
+        let world = l.sim.world();
+        for (k, (_, pose, _)) in l.poses().iter().enumerate() {
+            let Some(b) = world.body(k) else { continue };
             let particles: Option<&Vec<Point>> = match pose {
                 vectorcraft_physics::pose::Pose::Soft(p) => Some(p),
                 _ => None,

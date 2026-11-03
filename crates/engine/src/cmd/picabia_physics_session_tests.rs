@@ -218,3 +218,24 @@ fn settings_changed_while_playing_take_effect_at_the_next_step() {
     ex(&mut s, "physics.set", json!({"ids": [boxy.0], "props": {"enabled": false}}));
     assert_eq!(ex(&mut s, "physics.session.info", json!({}))["step"], 0);
 }
+
+#[test]
+fn scrubbing_back_before_a_restart_shows_the_old_mesh() {
+    let mut s = session();
+    let (jelly, ..) = scene(&mut s);
+    ex(&mut s, "physics.session.open", json!({}));
+    ex(&mut s, "physics.seek", json!({"step": 30}));
+    let n_old = s.picabia.physics.as_ref().unwrap().sim.world().body(0).and_then(|b| b.mesh.as_ref()).map(|m| m.rest.len());
+    ex(&mut s, "physics.set", json!({"ids": [jelly.0], "props": {"soft": {"resolution": 30}}}));
+    ex(&mut s, "physics.seek", json!({"step": 60}));
+    let k = s.picabia.physics.as_ref().unwrap().body_of(jelly).unwrap();
+    let n_new = s.picabia.physics.as_ref().unwrap().sim.world().body(k).and_then(|b| b.mesh.as_ref()).map(|m| m.rest.len());
+    assert_ne!(n_old, n_new, "a coarser mesh after the change");
+    // Back before the change: the display uses the old mesh again (the clone is drawn, not dropped).
+    ex(&mut s, "physics.seek", json!({"step": 20}));
+    let poses = s.picabia.physics.as_ref().unwrap().poses();
+    let (_, pose, mesh) = &poses[k];
+    if let (vectorcraft_physics::pose::Pose::Soft(p), Some(m)) = (pose, mesh) {
+        assert_eq!(p.len(), m.rest.len(), "a pose goes with its own mesh");
+    }
+}
