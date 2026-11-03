@@ -128,3 +128,23 @@ fn object_physics_menu_runs_its_commands() {
     let settings = app.run("physics.get", json!({"id": id})).unwrap()["settings"].clone();
     assert_eq!((settings["bodyType"].as_str(), settings["soft"]["preset"].as_str()), (Some("soft"), Some("rubber")), "{settings}");
 }
+
+#[test]
+fn a_soft_body_shows_its_preset_and_fields() {
+    let (mut app, ctx, id) = with_physics();
+    app.run("physics.set", json!({"ids": [id], "props": {"bodyType": "soft", "soft": {"preset": "cloth"}}})).unwrap();
+    app.picabia.physics_open = true;
+    let shown = texts(&mut app, &ctx);
+    assert!(shown.iter().any(|s| s == "Physics: Soft (Cloth)"), "{shown:?}");
+    for label in ["Preset", "Stiffness", "Bend", "Wobble damping", "Detail", "Self-collide"] {
+        assert!(shown.iter().any(|s| s == label), "no {label:?} in {shown:?}");
+    }
+    assert!(!shown.iter().any(|s| s == "Shape memory" || s == "Collider"), "cloth has no shape memory, soft bodies no collider: {shown:?}");
+    click(&mut app, &ctx, "Self-collide");
+    let settings = app.run("physics.get", json!({"id": id})).unwrap()["settings"].clone();
+    assert_eq!(settings["soft"]["selfCollide"], true, "{settings}");
+    // Jelly shows shape memory instead of bend.
+    app.run("physics.set", json!({"ids": [id], "props": {"soft": {"preset": "jelly"}}})).unwrap();
+    let shown = texts(&mut app, &ctx);
+    assert!(shown.iter().any(|s| s == "Shape memory") && !shown.iter().any(|s| s == "Bend"), "{shown:?}");
+}

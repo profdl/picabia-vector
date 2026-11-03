@@ -189,3 +189,32 @@ fn the_display_document_shows_clones_over_dimmed_objects() {
     // The shelf (static) is never grabbed.
     assert_eq!(body_at(&s, bounds(&s, shelf).center()), None);
 }
+
+#[test]
+fn settings_changed_while_playing_take_effect_at_the_next_step() {
+    let mut s = session();
+    let (jelly, boxy, ..) = scene(&mut s);
+    ex(&mut s, "physics.session.open", json!({}));
+    ex(&mut s, "physics.seek", json!({"step": 30}));
+    let events = |s: &Session| s.picabia.physics.as_ref().unwrap().sim.events().len();
+    // Material: the running body is retuned; the session keeps its step.
+    ex(&mut s, "physics.set", json!({"ids": [boxy.0], "props": {"restitution": 0.9}}));
+    let info = ex(&mut s, "physics.session.info", json!({}));
+    assert_eq!(info["step"], 30, "{info}");
+    assert_eq!(events(&s), 1);
+    // A new mesh: that body alone starts again from its rest pose, with a note.
+    ex(&mut s, "physics.set", json!({"ids": [jelly.0], "props": {"soft": {"resolution": 20}}}));
+    let info = ex(&mut s, "physics.session.info", json!({}));
+    assert_eq!(info["step"], 30, "{info}");
+    assert_eq!(events(&s), 2);
+    assert!(info["notes"].as_array().unwrap().iter().any(|n| n.as_str().unwrap().contains("started again from its rest pose")), "{info}");
+    ex(&mut s, "physics.seek", json!({"step": 90}));
+    // Scrubbing back before the changes and forward again replays them: the same bits.
+    let a = s.picabia.physics.as_ref().unwrap().sim.world().poses();
+    ex(&mut s, "physics.seek", json!({"step": 10}));
+    ex(&mut s, "physics.seek", json!({"step": 90}));
+    assert_eq!(s.picabia.physics.as_ref().unwrap().sim.world().poses(), a);
+    // Turning a body's settings off changes who takes part: the session starts again.
+    ex(&mut s, "physics.set", json!({"ids": [boxy.0], "props": {"enabled": false}}));
+    assert_eq!(ex(&mut s, "physics.session.info", json!({}))["step"], 0);
+}

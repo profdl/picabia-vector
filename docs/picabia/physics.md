@@ -359,6 +359,17 @@ The jelly scene is at the edge of the native budget even then (worst steps 2.7 f
   (resolution, cloth to cell body or back, self-collide, pins) restarts that body from its rest
   pose, with a note.
 
+- **As built (PIC31.7):** `physics.set` on a body of an open session (the physics row, a script)
+  records the change at the current step: bounce, friction, sensor, a rigid body's gravity and drag,
+  and a soft body's stiffness, bend, shape memory and damping retune the running body; another kind
+  of body, collider, extra mass, or a soft body's preset kind (cloth to cells), detail,
+  self-collide, pins, gravity or drag restart that body alone from its rest pose, with a note
+  (rapier keeps a soft body's gravity and drag per particle from when it was made). Scrubbing back
+  before the change replays the old settings. Turning a body's settings on or off changes who
+  takes part: the session starts again. The physics row: Body has Soft; a soft body's row reads
+  "Physics: Soft (Cloth)" and shows Preset, Stiffness, Bend (cloth) or Shape memory (jelly,
+  rubber), Wobble damping, Detail and Self-collide (the preset's values unless set; no Collider).
+
 ### Settings
 
 `bodyType: "soft"` (phase 1 already keeps unknown body types) with a `soft` object: `preset`
@@ -454,7 +465,7 @@ do goes through these commands.
 | PIC31.4 | Session and clock: world, steps, snapshots, event log, `physics.session/play/pause/reset/seek/apply/cancel`, rest detection. **Done** (2026-11-02): commands above |
 | PIC31.5 | Transport bar and clones on the canvas; Simulate to Rest; rigid bodies on the same flow. **Done** (2026-11-02), checked headless only |
 | PIC31.6 | Poke (Selection tool drag while the session is open) and `physics.poke`. **Done** (2026-11-02), checked headless only |
-| PIC31.7 | Settings while playing (applied next step; re-mesh restarts the body) |
+| PIC31.7 | Settings while playing (applied next step; re-mesh restarts the body). **Done** (2026-11-02), the row checked headless only |
 | PIC31.8 | Pins and attachments: Pin Points, Attach Points To…, canvas markers |
 
 Budgets (targets, to be measured in PIC31.0 and kept by `vectorcraft-cli perf`): live at 60 steps a

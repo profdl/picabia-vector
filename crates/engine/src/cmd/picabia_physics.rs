@@ -119,6 +119,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     };
     // Nothing changes: no undo step.
     if !changes.is_empty() {
+        let before = s.doc()?.doc.clone();
         s.edit("Physics Settings", |d, _| {
             for (id, st) in &changes {
                 if let Some(n) = d.node_mut(*id) {
@@ -127,6 +128,8 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
             }
             Ok(())
         })?;
+        // A simulation playing in this document takes the change at its next step (PIC31.7).
+        session::settings_changed(s, &before, &changes.iter().map(|(id, _)| *id).collect::<Vec<_>>());
     }
     Ok(json!({"ids": ids.iter().map(|i| i.0).collect::<Vec<_>>(), "settings": first, "warnings": warnings}))
 }

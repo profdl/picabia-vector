@@ -657,3 +657,61 @@ pub fn body_at(s: &Session, at: vectorcraft_geom::Point) -> Option<NodeId> {
     }
     None
 }
+
+/// Whether a body built as `new` needs to start again from its rest pose rather than take `new`'s
+/// settings in the running world: another kind of body, collider or mass, a new mesh (spacing,
+/// cloth to cells, self-contact, pins), or a soft body's gravity or drag (rapier keeps those per
+/// particle from when the body was made).
+fn needs_restart(old: &WorldBody, new: &WorldBody) -> bool {
+    let (a, b) = (&old.settings, &new.settings);
+    if a.body_type != b.body_type || a.collider != b.collider || a.mass != b.mass || old.mesh.is_some() != new.mesh.is_some() {
+        return true;
+    }
+    match (a.soft_body(), b.soft_body()) {
+        (Some(x), Some(y)) => {
+            x.needs_new_mesh(&y) || a.gravity_scale != b.gravity_scale || a.linear_damping != b.linear_damping || old.pins != new.pins
+        }
+        _ => false,
+    }
+}
+
+/// `physics.set` changed the settings of `ids` in the active document (which was `before`): a
+/// session open on `before` takes them at its next step, recorded as events (so scrubbing back
+/// before the change replays the old settings): material, bounce, friction and damping retune the
+/// running body; a change that needs a new mesh or another kind of body restarts that body from its
+/// rest pose, with a note. When the bodies taking part change (settings turned on or off), the
+/// session starts again as after any edit.
+pub(crate) fn settings_changed(s: &mut Session, before: &Arc<Document>, ids: &[NodeId]) {
+    let Some(l) = live(s) else { return };
+    if !Arc::ptr_eq(&l.base, before) {
+        return;
+    }
+    let board = l.artboard;
+    let p = json!({"gravityX": l.params.gravity.x, "gravityY": l.params.gravity.y, "walls": l.params.walls.is_some(), "artboard": board});
+    let extra = l.defaulted.clone();
+    let Ok(g) = gather(s, &p, "physics.set", Some(&extra)) else { return };
+    let Ok(doc) = s.doc().map(|st| st.doc.clone()) else { return };
+    let Some(l) = live_mut(s) else { return };
+    if g.ids != l.ids {
+        return;
+    }
+    for id in ids {
+        let Some(i) = l.body_of(*id) else { continue };
+        let (Some(old), Some(new)) = (l.bodies.get(i), g.bodies.get(i)) else { continue };
+        let event = if needs_restart(old, new) {
+            l.notes.push(format!("object {}: its new settings need a new body: it started again from its rest pose", id.0));
+            Event::Restart { body: i, input: Box::new(new.clone()) }
+        } else {
+            Event::Retune { body: i, settings: Box::new(new.settings.clone()) }
+        };
+        if !l.sim.record(event) {
+            l.notes.push(format!("at most {MAX_EVENTS} changes are recorded: a setting change was left out"));
+            break;
+        }
+        if let Some(b) = l.bodies.get_mut(i) {
+            *b = new.clone();
+        }
+    }
+    l.base = doc;
+    bump(s);
+}
