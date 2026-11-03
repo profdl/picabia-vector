@@ -376,6 +376,8 @@ fn canvas_input(app: &mut VectorcraftApp, ui: &Ui, resp: &egui::Response, rect: 
     if app.ui.dialog.as_ref().is_some_and(crate::dialogs::revolve_gizmo::active) {
         // The artboard's 3D gizmo owns these gestures while its options are open.
         // Do not let a ring drag also move or deselect the editable source path.
+    } else if crate::picabia::sim_poke::poke(app, ui, resp, rect) {
+        // PICABIA: while a physics session is open, a Selection-tool drag on a moving body pokes it.
     } else if resp.context_menu_opened() && resp.hovered() && ui.input(|i| i.pointer.any_pressed()) {
         egui::Popup::close_all(ui.ctx());
     } else {

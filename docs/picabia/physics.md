@@ -338,6 +338,14 @@ The jelly scene is at the edge of the native budget even then (worst steps 2.7 f
   same motion. Playing or poking after scrubbing back drops what was recorded after that moment.
 - **Poke:** while the bar is open, dragging on a clone with the Selection tool pulls it by a spring
   (a soft body by its nearest particle, a rigid body by the grabbed point); letting go throws it.
+- **As built (PIC31.6):** `picabia/sim_poke.rs`, reached through one canvas seam before the
+  tool's input. While a session is open and the Selection tool is current, a press on a moving
+  body where it is shown now (`session::body_at`: a rigid body's bounds moved with it, a soft body's
+  particles' bounds grown by their radius) grabs it there and plays; each frame of the drag records
+  a pull to the pointer (a critically damped 4 Hz spring; a soft body by its nearest particle with
+  the geometric mean of its own mass and the body's); the release lets go, so the body is thrown.
+  A press anywhere else reaches the tool. `physics.poke` does the same for scripts. Deviation: the
+  hit test is by bounds, not the exact outline.
 - **Settings while playing:** a change in the physics row is applied to the running world at the
   next step (material, gravity, bounce, friction, damping). A change that needs a new mesh
   (resolution, cloth to cell body or back, self-collide, pins) restarts that body from its rest
@@ -437,7 +445,7 @@ do goes through these commands.
 | PIC31.3 | Pose to art: rigid, cloth and jelly warps; Apply as one undo step. **Done** (2026-11-02): warps and the bake; the `physics.apply` command comes with the session (PIC31.4) |
 | PIC31.4 | Session and clock: world, steps, snapshots, event log, `physics.session/play/pause/reset/seek/apply/cancel`, rest detection. **Done** (2026-11-02): commands above |
 | PIC31.5 | Transport bar and clones on the canvas; Simulate to Rest; rigid bodies on the same flow. **Done** (2026-11-02), checked headless only |
-| PIC31.6 | Poke (Selection tool drag while the session is open) and `physics.poke` |
+| PIC31.6 | Poke (Selection tool drag while the session is open) and `physics.poke`. **Done** (2026-11-02), checked headless only |
 | PIC31.7 | Settings while playing (applied next step; re-mesh restarts the body) |
 | PIC31.8 | Pins and attachments: Pin Points, Attach Points To…, canvas markers |
 

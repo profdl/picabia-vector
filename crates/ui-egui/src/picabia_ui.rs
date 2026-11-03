@@ -29,7 +29,7 @@ pub struct PicabiaUi {
     pub stencil_open: bool,
     /// The Appearance panel's physics row is open (`picabia::physics`).
     pub physics_open: bool,
-    /// A poke is held on the canvas (`picabia::sim_bar::poke`).
+    /// A poke is held on the canvas (`picabia::sim_poke::poke`).
     pub poking: bool,
     /// The Properties panel's Modifiers section is collapsed (`picabia::properties`).
     pub modifiers_collapsed: bool,
