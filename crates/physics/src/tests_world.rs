@@ -360,3 +360,30 @@ fn world_step_cost() {
         300.0 / total
     );
 }
+
+#[test]
+fn a_thick_self_colliding_cloth_keeps_its_length_and_folds_without_overlapping() {
+    // A 20 pt strip at the 6 pt default: rapier spares only direct neighbours from self-contact,
+    // so before the spacing was raised to the radius this stretched by 40% and stood stiff.
+    for path in [shapes::rectangle(Rect::new(150.0, 150.0, 450.0, 170.0)), shapes::rectangle(Rect::new(300.0, 10.0, 312.0, 380.0))] {
+        let mut s = Soft::of(Preset::Cloth);
+        s.self_collide = Some(true);
+        let body = soft(path, s);
+        let mesh = body.mesh.clone().unwrap();
+        assert!(mesh.spacing >= crate::mesh::SELF_CONTACT_SPACING * mesh.radius - 1e-9, "{} < {}", mesh.spacing, mesh.radius);
+        let rest_len = mesh.spacing * (mesh.rest.len() - 1) as f64;
+        let (mut w, _) = World::new(&[body], &params());
+        for _ in 0..600 {
+            w.step();
+        }
+        let p = particles(&w, 0);
+        let len: f64 = p.windows(2).map(|q| (q[1] - q[0]).hypot()).sum();
+        assert!(len < rest_len * 1.1, "keeps its length: {len:.0} vs {rest_len:.0}");
+        assert!(p.iter().all(|q| q.y > 300.0), "falls to the floor rather than standing: {p:?}");
+        for i in 0..p.len() {
+            for j in i + 3..p.len() {
+                assert!((p[i] - p[j]).hypot() > mesh.radius, "folds don't pass through each other: {i} {j}");
+            }
+        }
+    }
+}

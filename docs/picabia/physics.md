@@ -409,6 +409,11 @@ reaches objects that didn't override it. Fields (starting points, tuned in PIC31
 | `resolution` | 6 pt | 12 pt | 12 pt | particle spacing |
 | `selfCollide` | off | off | off | self-contact (PIC31.0: costly, so off by default for cloth too) |
 
+A self-colliding cloth's particles are at least 1.25 particle radii (half its thickness) apart,
+coarser than `resolution` when the strip is thick, with a note: rapier without its FEM solver
+spares only a particle's direct neighbours from self-contact, so particles closer than their skin
+pushed each other apart for ever (the strip stretched and stood stiff instead of falling).
+
 `null` for a field goes back to the preset's value; a change of `preset` keeps the overrides; an
 unknown preset (a later version's) is kept and simulated as jelly. Pins are stored as `u`, `v`:
 fractions of the object's geometric bounds (0,0 top left, 1,1 bottom right; ±4 at most), so they

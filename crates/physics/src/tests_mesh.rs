@@ -242,3 +242,19 @@ fn tiny_budgets_and_hand_made_junk_never_panic() {
         assert!(m.rest.len() <= 1_200 && !m.notes.is_empty());
     }
 }
+
+#[test]
+fn a_self_colliding_strip_is_spaced_at_least_its_radius_apart() {
+    let n = Node::path(NodeId(1), shapes::rectangle(Rect::new(0.0, 0.0, 300.0, 20.0)), Appearance::default_art());
+    let shape = body_shape(&n, None).unwrap();
+    let mut s = Soft::of(Preset::Cloth);
+    let plain = soft_mesh(&shape, &s, 5_000).unwrap();
+    assert!((plain.spacing - 6.0).abs() < 0.1, "self-collide off: the resolution asked for: {}", plain.spacing);
+    s.self_collide = Some(true);
+    let m = soft_mesh(&shape, &s, 5_000).unwrap();
+    assert!(m.spacing >= crate::mesh::SELF_CONTACT_SPACING * m.radius, "{} vs radius {}", m.spacing, m.radius);
+    assert!(m.notes.iter().any(|n| n.contains("self-collide")), "{:?}", m.notes);
+    // A thin strip keeps its finer spacing.
+    let thin = body_shape(&Node::path(NodeId(1), shapes::rectangle(Rect::new(0.0, 0.0, 300.0, 4.0)), Appearance::default_art()), None).unwrap();
+    assert!((soft_mesh(&thin, &s, 5_000).unwrap().spacing - 6.0).abs() < 0.1);
+}
