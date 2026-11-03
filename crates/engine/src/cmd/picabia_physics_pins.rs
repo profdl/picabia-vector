@@ -29,7 +29,9 @@ pub fn specs() -> Vec<CommandSpec> {
             "Pin Points",
             [],
             None,
-            "{id?: the soft object, points?: [[x, y] | {x, y}] (document space; default: the anchors selected with Direct Selection on soft objects), attachTo?: an object id (it must have physics settings and not be soft: the points move with it), attachToSelected?: attach to the other selected object instead} pin points of soft bodies, as one undo step ('Pin Points'); at most 64 pins an object → {pins: [{id, count}]}",
+            "{id?: the soft object, points?: [[x, y] | {x, y}] (document space; default: the anchors selected with Direct Selection on soft objects), attachTo?: an object id (it must have physics settings and not be soft: the points move with it; it wins over attachToSelected), attachToSelected?: attach to the other selected object with rigid physics settings} pin points of soft bodies, as one undo step ('Pin Points'; none when nothing changes); a point pinned again keeps its attachment unless one is given; at most 64 pins an object → {pins: [{id, count}], warnings}",
+            // Enabled with a document: `id` + `points` need no selection; with none chosen the
+            // command says what to select.
             has_doc,
             pin
         ),
@@ -38,18 +40,31 @@ pub fn specs() -> Vec<CommandSpec> {
             "Unpin Points",
             [],
             None,
-            "{id?, points?: [[x, y] | {x, y}] (pins within 4 pt of each go; default: the anchors selected with Direct Selection, or every pin of the selected soft objects when no anchor is selected)} remove pins, as one undo step ('Unpin Points') → {pins: [{id, count}]}",
+            "{id?, points?: [[x, y] | {x, y}] (pins within 4 pt of each go; with `id` and no points: all of that object's pins; default: the anchors selected with Direct Selection, or every pin of the selected soft objects when no anchor is selected)} remove pins, as one undo step ('Unpin Points') → {pins: [{id, count}]}",
+            // Enabled with a document: `id` + `points` need no selection; with none chosen the
+            // command says what to select.
             has_doc,
             unpin
         ),
     ]
 }
 
-/// The soft body holding object `id`: itself or the nearest container with soft settings.
+/// The soft body holding object `id`, as the simulation takes bodies: from the outside in, the first
+/// object (not a layer) with physics settings turned on is the body; it holds `id` when it is soft.
 fn soft_owner(doc: &Document, id: NodeId) -> Option<NodeId> {
     let paths = doc.index_paths([id]);
     let path = paths.get(&id)?;
-    (1..=path.len()).rev().filter_map(|k| path.get(..k)).filter_map(|p| doc.node_at(p)).find(|n| soft_settings(n).is_some()).map(|n| n.id)
+    let body = (1..=path.len())
+        .filter_map(|k| path.get(..k))
+        .filter_map(|p| doc.node_at(p))
+        .filter(|n| !n.is_layer())
+        .find(|n| vectorcraft_physics::node_settings(n).is_some_and(|r| r.is_ok_and(|(st, _)| st.enabled)))?;
+    soft_settings(body).map(|_| body.id)
+}
+
+/// An object's bounds as the simulation measures them (symbol instances by their art).
+fn bounds(doc: &Document, n: &vectorcraft_doc::Node) -> Option<Rect> {
+    n.geometric_bounds_with(&doc.symbol_boxes())
 }
 
 fn soft_settings(n: &vectorcraft_doc::Node) -> Option<Settings> {
@@ -124,10 +139,16 @@ pub(crate) fn at(b: Rect, pin: &Pin) -> Point {
 }
 
 /// Store `edits` (object, new soft settings) as one undo step.
-fn store(s: &mut Session, label: &str, edits: Vec<(NodeId, Settings)>) -> Result<Value> {
+fn store(s: &mut Session, label: &str, edits: Vec<(NodeId, Settings)>, warnings: Vec<String>) -> Result<Value> {
     let summary: Vec<Value> = edits.iter().map(|(id, st)| json!({"id": id.0, "count": st.soft.as_ref().map_or(0, |x| x.pins.len())})).collect();
+    // Only what changed is stored: no empty undo step, no restart.
+    let doc = &s.doc()?.doc;
+    let edits: Vec<(NodeId, Settings)> = edits
+        .into_iter()
+        .filter(|(id, st)| doc.node(*id).and_then(vectorcraft_physics::node_settings).and_then(|r| r.ok()).is_none_or(|(old, _)| old != *st))
+        .collect();
     if edits.is_empty() {
-        return Ok(json!({"pins": summary}));
+        return Ok(json!({"pins": summary, "warnings": warnings}));
     }
     let before = s.doc()?.doc.clone();
     let ids: Vec<NodeId> = edits.iter().map(|(id, _)| *id).collect();
@@ -141,7 +162,7 @@ fn store(s: &mut Session, label: &str, edits: Vec<(NodeId, Settings)>) -> Result
     })?;
     // A simulation open on the document restarts those bodies with their pins (PIC31.7's path).
     super::session::settings_changed(s, &before, &ids);
-    Ok(json!({"pins": summary}))
+    Ok(json!({"pins": summary, "warnings": warnings}))
 }
 
 fn pin(s: &mut Session, p: &Value) -> Result<Value> {
@@ -155,11 +176,17 @@ fn pin(s: &mut Session, p: &Value) -> Result<Value> {
     let attach = match p.get("attachTo").filter(|v| !v.is_null()) {
         Some(v) => Some(NodeId(v.as_u64().ok_or_else(|| bad(CMD, "`attachTo` must be an object id"))?)),
         None if to_selected => {
+            // The first other selected object with rigid physics settings turned on.
             let owners: Vec<NodeId> = list.iter().map(|(o, _)| *o).collect();
             let st = s.doc()?;
-            let other =
-                st.selection.objects.iter().copied().find(|id| !owners.contains(id) && soft_owner(doc, *id).is_none_or(|o| !owners.contains(&o)));
-            Some(other.ok_or_else(|| bad(CMD, "select the object to attach to as well"))?)
+            let rigid = |id: &NodeId| {
+                doc.node(*id)
+                    .and_then(vectorcraft_physics::node_settings)
+                    .and_then(|r| r.ok())
+                    .is_some_and(|(set, _)| set.enabled && set.body_type != BodyType::Soft)
+            };
+            let other = st.selection.objects.iter().copied().find(|id| !owners.contains(id) && rigid(id));
+            Some(other.ok_or_else(|| bad(CMD, "select the object to attach to as well (it needs physics settings and must not be soft)"))?)
         }
         None => None,
     };
@@ -177,24 +204,32 @@ fn pin(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let mut edits = Vec::new();
+    let mut warnings = Vec::new();
     for (owner, pts) in list.into_iter().filter(|(_, pts)| !pts.is_empty()) {
-        if Some(owner) == attach {
-            return Err(bad(CMD, "points can't be attached to their own object"));
-        }
         let Some(n) = doc.node(owner) else { continue };
-        let (Some(mut st), Some(b)) = (soft_settings(n), n.geometric_bounds()) else { continue };
+        let (Some(mut st), Some(b)) = (soft_settings(n), bounds(doc, n)) else { continue };
         let soft = st.soft.get_or_insert_with(Default::default);
+        let mut over = 0;
         for q in pts {
             let (u, v) = place(b, q);
-            if let Some(same) = soft.pins.iter_mut().find(|x| (x.u - u).abs() < 1e-9 && (x.v - v).abs() < 1e-9) {
-                same.attach_to = attach.map(|a| a.0);
+            // The same place (within a thousandth of a point) is the same pin.
+            let here = at(b, &Pin::new(u, v, None));
+            if let Some(same) = soft.pins.iter_mut().find(|x| (at(b, x) - here).hypot() < 1e-3) {
+                if let Some(a) = attach {
+                    same.attach_to = Some(a.0);
+                }
             } else if soft.pins.len() < MAX_PINS {
                 soft.pins.push(Pin::new(u, v, attach.map(|a| a.0)));
+            } else {
+                over += 1;
             }
+        }
+        if over > 0 {
+            warnings.push(format!("object {}: at most {MAX_PINS} pins: {over} points left out", owner.0));
         }
         edits.push((owner, st));
     }
-    store(s, "Pin Points", edits)
+    store(s, "Pin Points", edits, warnings)
 }
 
 fn unpin(s: &mut Session, p: &Value) -> Result<Value> {
@@ -210,7 +245,7 @@ fn unpin(s: &mut Session, p: &Value) -> Result<Value> {
     let mut edits = Vec::new();
     for (owner, pts) in list {
         let Some(n) = doc.node(owner) else { continue };
-        let (Some(mut st), Some(b)) = (soft_settings(n), n.geometric_bounds()) else { continue };
+        let (Some(mut st), Some(b)) = (soft_settings(n), bounds(doc, n)) else { continue };
         let Some(soft) = st.soft.as_mut() else { continue };
         let before = soft.pins.len();
         if all || pts.is_empty() {
@@ -222,7 +257,7 @@ fn unpin(s: &mut Session, p: &Value) -> Result<Value> {
             edits.push((owner, st));
         }
     }
-    store(s, "Unpin Points", edits)
+    store(s, "Unpin Points", edits, Vec::new())
 }
 
 /// Where pins show on the canvas, with whether each is attached: on the session's bodies where
@@ -247,10 +282,12 @@ pub fn markers(s: &Session) -> Vec<(Point, bool)> {
         return out;
     }
     let Some(st) = s.active() else { return out };
-    for id in st.selection.objects.iter().take(64) {
-        let Some(owner) = soft_owner(&st.doc, *id) else { continue };
+    let mut owners: Vec<NodeId> = st.selection.objects.iter().take(64).filter_map(|id| soft_owner(&st.doc, *id)).collect();
+    owners.sort_unstable();
+    owners.dedup();
+    for owner in owners {
         let Some(n) = st.doc.node(owner) else { continue };
-        let (Some(set), Some(b)) = (soft_settings(n), n.geometric_bounds()) else { continue };
+        let (Some(set), Some(b)) = (soft_settings(n), bounds(&st.doc, n)) else { continue };
         out.extend(set.soft.iter().flat_map(|x| x.pins.iter()).map(|pin| (at(b, pin), pin.attach_to.is_some())));
     }
     out

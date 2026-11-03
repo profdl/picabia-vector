@@ -102,3 +102,61 @@ fn pinned_cloth_hangs_in_a_session_and_the_markers_follow() {
     let b = s.doc().unwrap().doc.node(cloth).unwrap().geometric_bounds().unwrap();
     assert!(b.y0 < 55.0 && b.y1 > 80.0, "hangs between its pins: {b:?}");
 }
+
+// PIC31.8a (review).
+
+#[test]
+fn pins_go_on_the_body_the_simulation_takes() {
+    let mut s = session();
+    let a = shape(&mut s, "shape.rectangle", 100.0, 50.0, 100.0, 40.0);
+    let b = shape(&mut s, "shape.rectangle", 220.0, 50.0, 100.0, 40.0);
+    ex(&mut s, "select.set", json!({"ids": [a.0, b.0]}));
+    let g = NodeId(ex(&mut s, "object.group", json!({}))["id"].as_u64().unwrap());
+    // A soft path inside a rigid group: the group is the body, so the path can't be pinned.
+    ex(&mut s, "physics.set", json!({"ids": [a.0], "props": {"bodyType": "soft"}}));
+    ex(&mut s, "physics.set", json!({"ids": [g.0], "props": {"bodyType": "dynamic"}}));
+    assert!(s.execute("physics.pin", &json!({"id": a.0, "points": [[100, 50]]})).is_err());
+    // A soft group: pinning a member pins the group.
+    ex(&mut s, "physics.set", json!({"ids": [g.0], "props": {"bodyType": "soft"}}));
+    let out = ex(&mut s, "physics.pin", json!({"id": a.0, "points": [[100, 50]]}));
+    assert_eq!(out["pins"][0]["id"], g.0, "{out}");
+}
+
+#[test]
+fn over_the_cap_is_reported_and_nothing_new_makes_no_undo_step() {
+    let mut s = session();
+    let cloth = shape(&mut s, "shape.rectangle", 0.0, 0.0, 400.0, 4.0);
+    ex(&mut s, "physics.set", json!({"ids": [cloth.0], "props": {"bodyType": "soft", "soft": {"preset": "cloth"}}}));
+    let pts: Vec<[f64; 2]> = (0..70).map(|i| [f64::from(i) * 5.0, 2.0]).collect();
+    let out = ex(&mut s, "physics.pin", json!({"id": cloth.0, "points": pts}));
+    assert_eq!(out["pins"][0]["count"], 64);
+    assert!(out["warnings"][0].as_str().unwrap().contains("6 points left out"), "{out}");
+    let undo = s.doc().unwrap().history.undo.len();
+    ex(&mut s, "physics.pin", json!({"id": cloth.0, "points": [[0, 2]]}));
+    assert_eq!(s.doc().unwrap().history.undo.len(), undo, "the same pin again: no undo step");
+}
+
+#[test]
+fn attach_to_selected_takes_the_rigid_one() {
+    let mut s = session();
+    let cloth = shape(&mut s, "shape.rectangle", 100.0, 50.0, 200.0, 4.0);
+    ex(&mut s, "physics.set", json!({"ids": [cloth.0], "props": {"bodyType": "soft", "soft": {"preset": "cloth"}}}));
+    let plain = shape(&mut s, "shape.rectangle", 10.0, 10.0, 20.0, 20.0);
+    let carrier = shape(&mut s, "shape.rectangle", 280.0, 20.0, 40.0, 20.0);
+    ex(&mut s, "physics.set", json!({"ids": [carrier.0], "props": {"bodyType": "static"}}));
+    {
+        let st = s.doc_mut().unwrap();
+        st.selection.objects = vec![cloth, plain, carrier];
+        st.selection.anchors.insert(cloth, [(0, 1)].into_iter().collect());
+    }
+    ex(&mut s, "physics.pin", json!({"attachToSelected": true}));
+    assert_eq!(pins(&mut s, cloth)[0]["attachTo"], carrier.0);
+    // Pinning the same point again without an object keeps the attachment.
+    {
+        let st = s.doc_mut().unwrap();
+        st.selection.objects = vec![cloth];
+        st.selection.anchors.insert(cloth, [(0, 1)].into_iter().collect());
+    }
+    ex(&mut s, "physics.pin", json!({}));
+    assert_eq!(pins(&mut s, cloth)[0]["attachTo"], carrier.0);
+}

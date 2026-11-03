@@ -123,8 +123,8 @@ fn object_physics_menu_runs_its_commands() {
     for item in physics {
         if let Item::Cmd(label, cmd, p) = item {
             let p = if p.is_null() { json!({}) } else { p.clone() };
-            // Pinning needs anchors chosen with Direct Selection (tested in the engine).
-            if *cmd != "physics.clear" && *cmd != "physics.pin" {
+            // Pinning needs anchors chosen on a soft object (tested in the engine).
+            if !matches!(*cmd, "physics.clear" | "physics.pin") {
                 app.run(cmd, p).unwrap_or_else(|e| panic!("{label}: {e}"));
             }
         }

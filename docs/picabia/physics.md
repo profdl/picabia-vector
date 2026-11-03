@@ -464,7 +464,13 @@ Physics: Pin Points, Attach Points to Selected, Unpin Points. The canvas marks p
 in place, a dot attached) on the selected soft objects, and on every body where it is now while a
 simulation is open. A pin stores a place on the object (its bounds), and at build time takes the
 nearest particle; a pin attached to an object that isn't a rigid body in the simulation holds in
-place, with a warning.
+place, with a warning. PIC31.8a (review): pins go on the body the simulation takes (from the
+outside in, the first object with settings turned on; a soft path inside a rigid group can't be
+pinned), places are measured as the simulation measures bounds (symbol instances by their art),
+pins past 64 are reported, pinning what is already pinned makes no undo step and keeps its
+attachment unless one is given, Attach Points to Selected takes the first other selected object
+with rigid settings, and markers of a soft group show once. The commands are enabled with a
+document (`id` + `points` need no selection); with nothing chosen they say what to select.
 
 ### Commands (planned)
 
