@@ -134,7 +134,7 @@ pub fn section(app: &mut VectorcraftApp, ui: &mut Ui) {
     let br = Rect::from_min_size(pos2(r.right() - 84.0, r.center().y - 11.0), vec2(80.0, 22.0));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(br).layout(egui::Layout::right_to_left(egui::Align::Center)));
     if widgets::flat_button(&mut child, tl!("Simulate"), 76.0)
-        .on_hover_text(tl!("Simulate to Rest: run the physics until everything rests and show it; Apply or Cancel on the bar"))
+        .on_hover_text(tl!("Play the physics from the start; Pause, Apply or Cancel on the bar"))
         .clicked()
     {
         simulate(app);
@@ -150,16 +150,14 @@ pub fn section(app: &mut VectorcraftApp, ui: &mut Ui) {
     }
 }
 
-/// Run Simulate to Rest (the session shows the result; Apply or Cancel on the transport bar) and
-/// say what happened in the status line.
+/// Play the simulation from step 0 (a session already open, played or scrubbed, is rewound first)
+/// and say so in the status line: the bodies fall frame by frame, and Pause, Apply or Cancel are
+/// on the transport bar. Simulate to Rest (Object ▸ Physics) jumps straight to the end instead.
 fn simulate(app: &mut VectorcraftApp) {
-    match app.run("physics.toRest", json!({})) {
-        Ok(out) => {
-            let secs = out.get("seconds").and_then(Value::as_f64).unwrap_or(0.0);
-            let settled = out.get("settled").and_then(Value::as_bool).unwrap_or(false);
-            let state = if settled { tl!("settled") } else { tl!("still moving at the step limit") };
-            app.ui.status = format!("{secs:.1} s, {state}: {}", tl!("Apply or Cancel on the bar"));
-        }
+    let open = app.run("physics.session.info", json!({})).ok().and_then(|i| i.get("open").and_then(Value::as_bool)).unwrap_or(false);
+    let run = if open { app.run("physics.reset", json!({})) } else { Ok(Value::Null) };
+    match run.and_then(|_| app.run("physics.play", json!({}))) {
+        Ok(_) => app.ui.status = tl!("Playing: Pause, Apply or Cancel on the bar").to_string(),
         Err(e) => app.ui.status = e,
     }
 }

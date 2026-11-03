@@ -50,16 +50,28 @@ fn texts(app: &mut VectorcraftApp, ctx: &egui::Context) -> Vec<String> {
 }
 
 #[test]
-fn the_row_shows_for_objects_with_settings_and_simulate_drops_them() {
+fn the_row_shows_for_objects_with_settings_and_simulate_plays_from_the_start() {
     let (mut app, ctx, id) = with_physics();
     let shown = texts(&mut app, &ctx);
     assert!(shown.iter().any(|s| s == "Physics: Dynamic"), "{shown:?}");
     assert!(shown.iter().any(|s| s == "Simulate"));
-    // Simulate to Rest: the session shows the result; nothing moves until Apply (PIC31.5).
+    // Simulate plays from step 0: nothing has moved yet, and nothing moves in the art until Apply.
     let undo = app.session.active().unwrap().history.undo.len();
     click(&mut app, &ctx, "Simulate");
+    let info = app.run("physics.session.info", json!({})).unwrap();
+    assert_eq!((info["playing"].as_bool(), info["step"].as_u64()), (Some(true), Some(0)), "{info}");
     assert_eq!(app.session.active().unwrap().history.undo.len(), undo);
-    assert!(app.ui.status.contains("settled"), "{}", app.ui.status);
+    assert!(app.ui.status.starts_with("Playing"), "{}", app.ui.status);
+    let tick =
+        |app: &mut VectorcraftApp, n| (0..n).for_each(|_| _ = vectorcraft_engine::cmd::picabia_physics::session::tick(&mut app.session, 1.0 / 60.0));
+    tick(&mut app, 30);
+    let played = app.run("physics.session.info", json!({})).unwrap()["step"].as_u64().unwrap();
+    assert!(played > 0, "it plays forward");
+    // Simulate again rewinds to the start and plays.
+    click(&mut app, &ctx, "Simulate");
+    let info = app.run("physics.session.info", json!({})).unwrap();
+    assert_eq!((info["playing"].as_bool(), info["step"].as_u64()), (Some(true), Some(0)), "{info}");
+    app.run("physics.toRest", json!({})).unwrap();
     app.run("physics.apply", json!({})).unwrap();
     let b = app.session.active().unwrap().doc.node(vectorcraft_doc::NodeId(id)).unwrap().geometric_bounds().unwrap();
     assert!((b.y1 - 300.0).abs() < 2.0, "{b:?}");
