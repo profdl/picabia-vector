@@ -29,8 +29,15 @@ fn screen(app: &VectorcraftApp, p: Point) -> Pos2 {
 
 /// One frame: the canvas's response, then the poke; whether the poke took the input.
 fn frame(app: &mut VectorcraftApp, ctx: &egui::Context, events: Vec<egui::Event>) -> bool {
+    frame_with(app, ctx, events, egui::Modifiers::default())
+}
+
+/// [`frame`] with modifier keys held.
+fn frame_with(app: &mut VectorcraftApp, ctx: &egui::Context, events: Vec<egui::Event>, modifiers: egui::Modifiers) -> bool {
     let time = ctx.input(|i| i.time) + 1.0 / 60.0;
     let mut took = false;
+    let mut events = events;
+    events.insert(0, egui::Event::ModifiersChanged(modifiers));
     let mut out = ctx.run_ui(egui::RawInput { events, time: Some(time), ..Default::default() }, |ui| {
         let resp = ui.interact(CANVAS, Id::unique("canvas-test"), Sense::click_and_drag());
         took = super::sim_poke::poke(app, ui, &resp, CANVAS);
@@ -82,4 +89,35 @@ fn a_press_elsewhere_or_without_a_session_reaches_the_tool() {
     assert!(!frame(&mut app, &ctx, vec![egui::Event::PointerMoved(empty), button(empty, true)]), "not on a body");
     frame(&mut app, &ctx, vec![button(empty, false)]);
     assert!(!app.picabia.poking);
+}
+
+#[test]
+fn only_a_plain_primary_press_grabs_and_losing_the_drag_lets_go() {
+    let (mut app, ctx, _) = scene();
+    app.run("physics.session.open", json!({})).unwrap();
+    let at = screen(&app, Point::new(200.0, 220.0));
+    // A right click or a Shift-click on the body reaches the tool.
+    let right = egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() };
+    assert!(!frame(&mut app, &ctx, vec![egui::Event::PointerMoved(at), right]));
+    frame(
+        &mut app,
+        &ctx,
+        vec![egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() }],
+    );
+    let shift = egui::Modifiers { shift: true, ..Default::default() };
+    let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: shift };
+    assert!(!frame_with(&mut app, &ctx, vec![press(true)], shift));
+    frame_with(&mut app, &ctx, vec![press(false)], shift);
+    assert!(!app.picabia.poking);
+    // Grab, hold still (no more pulls recorded), then the session closes: let go.
+    assert!(frame(&mut app, &ctx, vec![button(at, true)]));
+    let n0 = app.run("physics.session.info", json!({})).unwrap()["events"].as_u64().unwrap();
+    for _ in 0..10 {
+        frame(&mut app, &ctx, vec![]);
+    }
+    let n1 = app.run("physics.session.info", json!({})).unwrap()["events"].as_u64().unwrap();
+    assert_eq!(n0, n1, "holding still records nothing");
+    app.run("physics.cancel", json!({})).unwrap();
+    assert!(!frame(&mut app, &ctx, vec![]));
+    assert!(!app.picabia.poking, "let go when the session closed");
 }

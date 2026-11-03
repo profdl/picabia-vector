@@ -31,6 +31,8 @@ pub struct PicabiaUi {
     pub physics_open: bool,
     /// A poke is held on the canvas (`picabia::sim_poke::poke`).
     pub poking: bool,
+    /// Where the pointer last pulled the poked body (screen), so holding still sends nothing.
+    pub poke_at: Option<egui::Pos2>,
     /// The Properties panel's Modifiers section is collapsed (`picabia::properties`).
     pub modifiers_collapsed: bool,
     /// The Properties panel's Modifiers section is to open and scroll into view on its next frame

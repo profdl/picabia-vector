@@ -353,7 +353,11 @@ The jelly scene is at the edge of the native budget even then (worst steps 2.7 f
   a pull to the pointer (a critically damped 4 Hz spring; a soft body by its nearest particle with
   the geometric mean of its own mass and the body's); the release lets go, so the body is thrown.
   A press anywhere else reaches the tool. `physics.poke` does the same for scripts. Deviation: the
-  hit test is by bounds, not the exact outline.
+  hit test is by bounds, not the exact outline. PIC31.6a (review): only a plain primary press
+  grabs (not another button, a modifier or Space held); a pull is sent only when the pointer moves;
+  the held body is let go when the session closes or the tool changes mid-drag; a release is never
+  refused (not even with a full log); `physics.poke` and `physics.seek` aren't journaled (they run
+  every frame of a drag or a scrub; the session keeps its own log).
 - **Settings while playing:** a change in the physics row is applied to the running world at the
   next step (material, gravity, bounce, friction, damping). A change that needs a new mesh
   (resolution, cloth to cell body or back, self-collide, pins) restarts that body from its rest

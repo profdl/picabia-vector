@@ -154,13 +154,15 @@ fn pulls_in_one_step_coalesce_and_events_are_capped() {
     }
     assert_eq!(s.events().len(), 2);
     let mut refused = false;
-    for k in 0..MAX_EVENTS + 5 {
-        if !s.record(if k % 2 == 0 { Event::Release } else { Event::Grab { body: 0, at: Point::ZERO } }) {
+    for _ in 0..MAX_EVENTS + 5 {
+        if !s.record(Event::Grab { body: 0, at: Point::ZERO }) {
             refused = true;
             break;
         }
     }
     assert!(refused && s.events().len() == MAX_EVENTS);
+    // A full log still takes a release: a held body is always let go.
+    assert!(s.record(Event::Release));
 }
 
 #[test]

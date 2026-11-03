@@ -157,7 +157,7 @@ pub fn specs() -> Vec<CommandSpec> {
             reset
         ),
         cmd!(
-            "physics.seek",
+            query "physics.seek",
             "Seek Simulation",
             [],
             None,
@@ -175,7 +175,7 @@ pub fn specs() -> Vec<CommandSpec> {
             to_rest
         ),
         cmd!(
-            "physics.poke",
+            query "physics.poke",
             "Poke",
             [],
             None,

@@ -183,7 +183,8 @@ impl SimSession {
         if matches!(event, Event::DragTo { .. }) && matches!(self.events.last(), Some((s, Event::DragTo { .. })) if *s == now) {
             self.events.pop();
         }
-        if self.events.len() >= MAX_EVENTS {
+        // A full log still takes a release: a held body must always be let go.
+        if self.events.len() >= MAX_EVENTS && !matches!(event, Event::Release) {
             return false;
         }
         self.events.push((now, event));
