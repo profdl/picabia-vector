@@ -65,9 +65,9 @@ impl Preset {
         match self {
             // Cloth: stretches little, bends easily; no self-contact by default (PIC31.0: a
             // self-colliding 400-particle strip cost 62 ms a step).
-            Preset::Cloth => SoftFields { stiffness: 0.85, bend: 0.1, shape_keep: 0.0, damping: 0.5, resolution: 6.0, self_collide: false },
+            Preset::Cloth => SoftFields { stiffness: 0.85, bend: 0.1, shape_keep: 0.0, damping: 0.3, resolution: 6.0, self_collide: false },
             Preset::Jelly | Preset::Other(_) => {
-                SoftFields { stiffness: 0.35, bend: 0.0, shape_keep: 0.4, damping: 0.15, resolution: 12.0, self_collide: false }
+                SoftFields { stiffness: 0.3, bend: 0.0, shape_keep: 0.4, damping: 0.1, resolution: 12.0, self_collide: false }
             }
             Preset::Rubber => SoftFields { stiffness: 0.85, bend: 0.0, shape_keep: 0.85, damping: 0.45, resolution: 12.0, self_collide: false },
         }

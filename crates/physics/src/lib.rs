@@ -71,6 +71,8 @@ mod tests_mesh;
 #[cfg(test)]
 mod tests_pose;
 #[cfg(test)]
+mod tests_presets;
+#[cfg(test)]
 mod tests_soft;
 #[cfg(test)]
 mod tests_soft_spike;

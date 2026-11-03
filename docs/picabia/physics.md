@@ -399,10 +399,10 @@ reaches objects that didn't override it. Fields (starting points, tuned in PIC31
 
 | Key | Cloth | Jelly | Rubber | rapier mapping |
 |---|---|---|---|---|
-| `stiffness` | 0.85 | 0.35 | 0.85 | edge and area springs, 1–60 Hz |
+| `stiffness` | 0.85 | 0.3 | 0.85 | edge and area springs, 1–60 Hz |
 | `bend` | 0.1 | — | — | bending edges, 0.2–20 Hz |
 | `shapeKeep` | — | 0.4 | 0.85 | shape matching, off at 0, else 0.5–20 Hz |
-| `damping` | 0.5 | 0.15 | 0.45 | damping ratio 0.05–1 of every spring (not squared; the three above are squared first, so the low end is finely graded) |
+| `damping` | 0.3 | 0.1 | 0.45 | damping ratio 0.05–1 of every spring (not squared; the three above are squared first, so the low end is finely graded) |
 | `resolution` | 6 pt | 12 pt | 12 pt | particle spacing |
 | `selfCollide` | off | off | off | self-contact (PIC31.0: costly, so off by default for cloth too) |
 
@@ -412,7 +412,16 @@ fractions of the object's geometric bounds (0,0 top left, 1,1 bottom right; ±4 
 follow the object when it moves, scales or is edited, plus `attachTo` (an object id); at most 64
 (so the largest settings stay well within the 16 KB the settings may take); a pin's unknown fields
 are kept.
-Soft settings are kept when the body type changes to rigid and back. Phase 1's Simulate (instant
+Soft settings are kept when the body type changes to rigid and back.
+
+**Tuned (PIC31.2b)**, measured in a running world (`tests_presets.rs`): a 100 × 80 ellipse dropped
+on the floor: jelly settles in about 330 steps (5.5 s), squashes to 0.77 of its height on landing
+and keeps 93% of its area at rest; rubber settles in about 610 steps, squashes to 0.83, keeps 99%;
+both rebound about 65 pt. Cloth pinned at both ends of a 300 pt strip sags about 58 pt and
+stretches about 11% under its own weight. Cloth stiffness peaks at 0.85: at 1.0 (60 Hz, past what
+the solver's substeps hold) the strip stretched 29%, at 0.5 80%; more damping stretched it more
+(0.3 is the least). Gap: rapier's particle chains stretch about a tenth under their weight; a
+stiffer cloth needs more solver iterations (a cost PIC31.0 measured). Phase 1's Simulate (instant
 drop and settle) leaves soft bodies in place; the live session (PIC31.4) moves them.
 
 The phase 1 fields still apply (gravity scale, bounce, friction, extra mass, sensor). Pins are stored
