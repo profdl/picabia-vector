@@ -321,3 +321,42 @@ fn a_grab_and_a_pull_recorded_at_the_same_step() {
     s.record(Event::Release);
     assert_eq!(s.held(), None);
 }
+
+/// The budget scene through the real pipeline (outline → mesh → world): 20 jelly bodies of about
+/// 400 particles and 200 boxes. Run in release:
+/// `cargo test --release -p vectorcraft-physics world_step_cost -- --ignored --nocapture`.
+#[test]
+#[ignore = "timing: run in release"]
+fn world_step_cost() {
+    let mut bodies = Vec::new();
+    for i in 0..20 {
+        let (x, y) = (60.0 + f64::from(i % 10) * 230.0, 60.0 + f64::from(i / 10) * 250.0);
+        let s = Soft { resolution: Some(11.5), ..Soft::of(Preset::Jelly) };
+        bodies.push(soft(shapes::ellipse(Rect::new(x, y, x + 180.0, y + 180.0)), s));
+    }
+    for i in 0..200 {
+        let (x, y) = (60.0 + f64::from(i % 40) * 58.0, 700.0 + f64::from(i / 40) * 50.0);
+        bodies.push(rigid(Rect::new(x, y, x + 30.0, y + 24.0), BodyType::Dynamic));
+    }
+    let most = bodies.iter().filter_map(|b| b.mesh.as_ref()).map(|m| m.rest.len()).max().unwrap_or(0);
+    let (mut w, _) =
+        World::new(&bodies, &WorldParams { gravity: Vec2::new(0.0, crate::sim::DEFAULT_GRAVITY), walls: Some(Rect::new(0.0, 0.0, 2400.0, 1400.0)) });
+    let t0 = std::time::Instant::now();
+    let mut worst = 0.0f64;
+    for _ in 0..300 {
+        let t = std::time::Instant::now();
+        w.step();
+        worst = worst.max(t.elapsed().as_secs_f64());
+    }
+    let total = t0.elapsed().as_secs_f64();
+    let snap = std::time::Instant::now();
+    let copies: Vec<World> = (0..10).map(|_| w.clone()).collect();
+    let snap_ms = snap.elapsed().as_secs_f64() * 100.0;
+    drop(copies);
+    println!(
+        "20 jelly bodies (largest {most} particles) + 200 boxes: {:.2} ms a step on average, worst {:.1} ms, {:.1} steps a second; snapshot {snap_ms:.2} ms",
+        total / 0.3,
+        worst * 1e3,
+        300.0 / total
+    );
+}

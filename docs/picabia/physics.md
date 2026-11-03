@@ -507,6 +507,15 @@ Budgets (targets, to be measured in PIC31.0 and kept by `vectorcraft-cli perf`):
 second natively with 20 soft bodies of up to 400 particles and 200 rigid bodies; the web build at
 least half that.
 
+**Measured (PIC31.4b, 2026-11-03)** with the real pipeline (outline → mesh → world;
+`tests_world.rs` `world_step_cost`, release, this 4-core container, load about 1): 20 jelly ellipses
+of up to 379 particles and 200 boxes take 20.6–21.9 ms a step (46–48 steps a second; worst step
+40 ms), so **the native budget is not met**: such a scene plays at about 0.8× real time (the clock
+takes at most 4 steps a frame, so the app stays responsive and the motion stays exact). A world
+snapshot costs 6.6–7.8 ms. The web build wasn't measured with the real pipeline (PIC31.0's spike:
+24.6 ms a step in wasm32 under Node for its similar scene, above half the native target). Not added
+to `vectorcraft-cli perf` (an upstream file); left as a follow-up.
+
 ### Open questions
 
 - Is the session saved with the file (settings, pins, recorded pokes and the current time), or is it
