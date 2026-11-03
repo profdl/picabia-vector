@@ -33,6 +33,10 @@ pub const MAX_PARTICLES_PER_RUN: usize = 12_000;
 pub const MIN_THICKNESS: f64 = 0.5;
 /// Points per ring a ball becomes.
 const BALL_POINTS: u32 = 32;
+/// A self-colliding strip's least spacing, in particle radii. rapier (without its FEM solver) only
+/// spares a particle's direct neighbours from self-contact, so particles closer than that would
+/// start inside each other's skin and push apart for ever: the cloth stretches and stands stiff.
+pub const SELF_CONTACT_SPACING: f64 = 1.25;
 /// Tries at a coarser spacing before giving up.
 const MAX_TRIES: usize = 8;
 /// The most separate outlines one cell body fills (the rest are left out, with a note).
@@ -117,8 +121,9 @@ pub fn soft_mesh(shape: &BodyShape, soft: &Soft, budget: usize) -> Result<SoftMe
     if cap < 2 {
         return Err(format!("over the {MAX_PARTICLES_PER_RUN}-particle limit for soft bodies in one run"));
     }
-    let spacing = soft.fields().params().spacing;
-    if soft.preset.is_strip() { strip(shape, spacing, cap) } else { cells(shape, spacing, cap) }
+    let fields = soft.fields();
+    let spacing = fields.params().spacing;
+    if soft.preset.is_strip() { strip(shape, spacing, fields.self_collide, cap) } else { cells(shape, spacing, cap) }
 }
 
 /// Every point of the outline (balls and boxes as points on their edges).
@@ -126,7 +131,7 @@ fn outline_points(shape: &BodyShape) -> Vec<Point> {
     shape.all_points().into_iter().filter(|p| p.x.is_finite() && p.y.is_finite()).collect()
 }
 
-fn strip(shape: &BodyShape, spacing: f64, cap: usize) -> Result<SoftMesh, String> {
+fn strip(shape: &BodyShape, spacing: f64, self_collide: bool, cap: usize) -> Result<SoftMesh, String> {
     let pts = outline_points(shape);
     let first = *pts.first().ok_or("it has no outline")?;
     // The principal axis of the outline as drawn: its edges' midpoints weighted by their lengths,
@@ -178,7 +183,14 @@ fn strip(shape: &BodyShape, spacing: f64, cap: usize) -> Result<SoftMesh, String
     let thickness = (t1 - t0).max(MIN_THICKNESS);
     let origin = first + axis * s0 + normal * ((t0 + t1) / 2.0);
     let mut notes = Vec::new();
-    let wanted = (length / spacing).round() as usize + 1;
+    let least = SELF_CONTACT_SPACING * thickness / 2.0;
+    let raised = self_collide && spacing < least;
+    if raised {
+        notes.push(format!("self-collide: spacing at least {least:.1} pt, so the strip's {thickness:.1} pt thickness doesn't push it apart"));
+    }
+    // Raised: rounded down, so the spacing used never goes back under the least.
+    let steps = length / if raised { least } else { spacing };
+    let wanted = (if raised { steps.floor() } else { steps.round() }) as usize + 1;
     let count = wanted.clamp(2, cap.max(2));
     if count < wanted {
         notes.push(format!("{wanted} particles (at most {cap}): spacing {:.1} pt", length / (count - 1) as f64));
