@@ -425,7 +425,7 @@ impl World {
     /// Grab body `body` at `at` (document space): a soft body by its nearest particle, a rigid one
     /// by that point. `false` when it can't be grabbed (static, unknown).
     pub fn grab(&mut self, body: usize, at: Point) -> bool {
-        if !self.movable(body) || !(at.x.is_finite() && at.y.is_finite()) {
+        if !(self.movable(body) && at.x.is_finite() && at.y.is_finite()) {
             return false;
         }
         // A new grab lets go of what was held (its spring force would stay otherwise).
