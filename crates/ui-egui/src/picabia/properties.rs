@@ -88,6 +88,9 @@ pub fn section(app: &mut VectorcraftApp, ui: &mut Ui) {
     }
     if !app.picabia.modifiers_collapsed {
         super::appearance::modifier_rows(app, ui);
+        // The physics row, as the Appearance panel shows it: Add Physics is on this section's
+        // menu, so its result shows here.
+        super::physics::section(app, ui);
         ui.add_space(4.0);
         let add = widgets::flat_button(ui, tl!("+ Add Modifier"), ui.available_width()).on_hover_text(tl!("Add a modifier to the selected objects"));
         egui::Popup::menu(&add).show(|ui| {

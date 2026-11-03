@@ -1,4 +1,5 @@
-//! PICABIA: the physics row in the Appearance panel and Object ▸ Physics, drawn headless.
+//! PICABIA: the physics row in the Appearance and Properties panels and Object ▸ Physics, drawn
+//! headless.
 
 use egui::Rect;
 use serde_json::json;
@@ -80,6 +81,25 @@ fn the_fields_open_and_edit_the_settings() {
     click(&mut app, &ctx, "Clear Physics");
     assert_eq!(app.run("physics.get", json!({"id": id})).unwrap()["settings"], serde_json::Value::Null);
     assert!(!texts(&mut app, &ctx).iter().any(|s| s.starts_with("Physics:")));
+}
+
+#[test]
+fn the_properties_panel_shows_the_row_under_add_modifier() {
+    // Add Physics is on the Properties panel's Add Modifier menu: its result shows there too.
+    let (mut app, ctx, _) = with_physics();
+    let time = ctx.input(|i| i.time) + 0.1;
+    let mut out = ctx.run_ui(egui::RawInput { time: Some(time), ..Default::default() }, |ui| crate::panels::properties::show(&mut app, ui));
+    out.textures_delta.clear();
+    let mut shown = vec![];
+    fn texts(s: &egui::Shape, out: &mut Vec<String>) {
+        match s {
+            egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| texts(s, out)),
+            _ => {}
+        }
+    }
+    out.shapes.iter().for_each(|c| texts(&c.shape, &mut shown));
+    assert!(shown.iter().any(|s| s == "Physics: Dynamic"), "{shown:?}");
 }
 
 #[test]
