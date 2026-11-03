@@ -24,9 +24,10 @@ static, so there is no clock and no live playback: nothing moves until Simulate 
   objects on locked layers) stay put as obstacles. Objects whose settings can't be read are skipped
   and reported.
 - **The world** is rapier2d 0.36.1 (Apache-2.0), rigid bodies only, with `enhanced-determinism`:
-  the same document simulates to the same bits on every machine and in the web build (checked: a
-  20-body scene gives the same FNV hash of every result coefficient natively and in
-  wasm32-unknown-unknown under Node). No threads, no `fem`.
+  the same document simulates to the same bits every time on one machine and build. Results may
+  differ in the last bits between platforms (macOS arm64 and x86_64 Linux do, measured 2026-11-03;
+  rapier calls the platform's `atan2`, see PIC31.0 below), and that is accepted: no test depends
+  on them matching. No threads, no `fem`.
 - **Steps.** 60 steps per simulated second (tlprocedural's update rate). The run stops when every
   dynamic body sleeps, or at the step cap (default 3,000 = 50 s; 1–20,000). One run may do at most 6
   million body-steps (1,000 bodies get at most 6,000 steps), and at most 1,000 bodies take part
@@ -155,7 +156,7 @@ objects change only on **Apply**.
 | First presets | **Cloth** and **Jelly / Rubber** (one elastic model, two presets: soft and wobbly, stiff and bouncy), each fine-tuned in the panel |
 | What bodies collide with | **Only objects with physics settings** (static, dynamic, kinematic, soft), as in phase 1. To drape over a drawing, give it Make Static |
 | Holding cloth up | **Pin chosen points** (fixed in place) and **attach points to an object** (they move with that body) |
-| Cross-platform bits for soft bodies (2026-11-02, after PIC31.0) | **Given up for soft bodies** (option 3 below). Picabia ships for the desktop; Apply bakes the result into the art, and scrubbing and replay happen on one machine, so a pose that differs slightly between platforms costs little. Soft bodies give the same bits on one machine and build (replay, scrubbing, snapshots: tested) and may differ between platforms and in wasm32. Rigid-only scenes keep phase 1's guarantee (its fingerprint is pinned in `tests.rs`). rapier isn't patched or vendored; cross-platform bits can come back when a rapier release carries the fix below (re-run PIC31.0's hash check then) |
+| Cross-platform bits for soft bodies (2026-11-02, after PIC31.0) | **Given up for soft bodies** (option 3 below). Picabia ships for the desktop; Apply bakes the result into the art, and scrubbing and replay happen on one machine, so a pose that differs slightly between platforms costs little. Soft bodies give the same bits on one machine and build (replay, scrubbing, snapshots: tested) and may differ between platforms and in wasm32. Rigid-only scenes don't match across platforms either (measured 2026-11-03, PIC31.9: macOS arm64 and x86_64 Linux differ in the last bits, which phase 1's claim missed). **Owner, 2026-11-03: results need not match across platforms**, and no test may depend on it; the fingerprint is printed, not pinned. rapier isn't patched or vendored; cross-platform bits can come back when a rapier release carries the fix below (re-run PIC31.0's hash check then) |
 | Rigid physics | **One flow**: rigid and soft bodies share one world, one transport bar, clones and Apply. Today's instant Simulate becomes **Simulate to Rest** (run to rest, show it, Apply); `physics.simulate` keeps working for scripts (runs to rest and applies, as now) |
 
 ### The engine

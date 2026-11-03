@@ -12,6 +12,7 @@ workspace = true
 vectorcraft-geom = { workspace = true }
 vectorcraft-doc = { workspace = true }
 serde_json = { workspace = true }
-# Rigid bodies only: no `parallel` (no threads), no `fem`. `enhanced-determinism`: libm maths, so
-# native and wasm builds give the same bits.
+# No `parallel` (no threads), no `fem`. `enhanced-determinism`: libm maths, so a run repeats
+# exactly on one machine and build. Results may differ in the last bits between platforms (rapier
+# still calls the platform's `atan2`, docs/picabia/physics.md › PIC31.0); that is accepted.
 rapier2d = { version = "0.36.1", default-features = false, features = ["dim2", "f32", "std", "block-solver", "enhanced-determinism"] }
