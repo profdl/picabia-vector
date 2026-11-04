@@ -410,6 +410,11 @@ paint command (and the eyedropper) feeds.
 `paint.proxies` returns what the proxies show: the fill and stroke, which one is active, and whether the selected
 objects' fills or strokes differ (`fillMixed` / `strokeMixed`, drawn as a "?" proxy).
 
+In the app's Color panel and Color Picker, RGB, HSB, hex and Web Safe RGB values describe the active working RGB
+space. RGB edits preserve the other native channels; HSB uses those same working RGB components. Colors outside
+display sRGB retain their native numeric values. `ui.colorPanel` selects the panel mode and `ui.colorPicker`
+opens the picker through `run_command` with the remote backend.
+
 | Tool | Arguments | Notes |
 |---|---|---|
 | `list_commands` | `{filter?, query?, menu?, enabledOnly?, brief?}` | The command catalogue: id, label, menu, shortcut, params doc (left out with `brief`), enablement. |
@@ -445,8 +450,9 @@ For example, create editable Japanese area type with the engine's vertical writi
 ```
 
 `vertical` also applies to point type and to `path` + `mode` (`area` or `onPath`). Omit it or pass `false`
-for horizontal writing. This is the same option as `text.create` / `text.createInPath`; it does not change
-the engine's existing glyph orientation or CJK composition.
+for horizontal writing. This is the same option as `text.create` / `text.createInPath`. Vertical text turns
+on the OpenType `vert` feature, so a font's vertical glyph alternates are used; it does not change the engine's
+CJK composition.
 
 For SVG/SVGZ, `export`'s top-level `outlineText: true` writes text as paths; DXF takes it too (its type is outlined anyway unless `preserve: editability`).
 PDF instead uses `options: {"advanced": {"outlineText": true}}`; its default is false (live text).
@@ -759,14 +765,21 @@ strokes, effects or a brush comes in as its drawn look (a group named after it).
 document, whole and editable: point type, area type (a story in several frames as threaded type) and type on a path,
 with its fonts, size, leading, tracking, scaling, baseline shift, fill and stroke (grey, RGB or CMYK), opacity, blend mode, alignment,
 indents and paragraph spacing. Where the text document can't say, type that shows is the page's, in its text object's
-place. A text object on a layer that shows and doesn't print keeps the type the text document makes for it, on that
+place. Where a layer's or group's drawn look draws a copy of art with type, the import puts the page's type that
+lies over that copy's other art into the copy's group, unless the file is past the import's text-object limits.
+A text object on a layer that shows and doesn't print keeps the type the text document makes for it, on that
 layer, even where the page doesn't draw it. A file whose editing data can't be decompressed or has symbols,
 pattern fills, placed files or anything else the reader doesn't read on a layer that shows, or whose layers look
 different from its page, opens as before: an EPS as its printed page, a `.ai` file from its PDF content (where plain
 groups open ungrouped), with a warning saying why. Layers look different when they draw an object the page doesn't (or
-miss one it draws), and, for an EPS whose page is the box of its art, when they print art outside it. A file whose
-editing data is for a page of another size opens the same way, and its warning gives both sizes in points, with the
-scale of the editing data's page to the file's page (1:10 for a tenth of its size) when their sides are in proportion.
+miss one it draws), and, for an EPS whose page is the box of its art, when they print art outside it. When the PDF
+content of a `.ai` has a page for each artboard, the layers are compared with each page on its artboard, until the
+pages compared take 8,388,608 pixels at the comparison's scale (about 67 letter-size pages, or 4 when the PDF content
+is only images) or number 128; when it has pages for some of the artboards, or its pages are cropped to the art, they
+are compared with the first page only. An artboard, or the page of an EPS's editing data, whose sides are within half
+a point of its page's is compared on an area of the page's size. A file whose editing data is for a page of another
+size opens the same way, and its warning gives both sizes in points, with the scale of the editing data's page to the
+file's page (1:10 for a tenth of its size) when their sides are in proportion.
 With `textAs: "outlines"` a `.ai` file whose type shows opens from its PDF content, which has the type's outlines. A PDF
 saved with Illustrator's editing data holds it in `AIPDFPrivateData` streams and opens from it as a `.ai` file does.
 
@@ -1445,6 +1458,18 @@ several runs, one run has to match both: type with the fill in one run and the s
 and stroke of other objects are not compared. Without type among the selected objects it returns the error "select a
 text object", and it records no undo step.
 
+The font and text color commands (`select.same.fontFamily`, `fontFamilyStyle`, `fontFamilyStyleSize`, `fontSize`,
+`textFillColor`, `textStrokeColor` and `textFillAndStrokeColor`) take the first character of the first type among the
+selected objects and the objects inside them, in selection order, as the one to match. Type that is hidden or locked,
+inside a hidden or locked group or layer, on a template layer, or outside the isolated group is passed over. When the
+selection holds no other type, they return the error "select a text object".
+
+`select.same.fillColor`, `strokeColor`, `fillAndStroke`, `strokeWeight`, `opacity`, `blendingMode`, `appearance`,
+`shapeType`, `graphicStyle` and `appearanceAttribute` compare the other objects with the first selected object, in
+selection order, that these commands could select. A selected object that is hidden or locked, inside a hidden or
+locked group or layer, on a template layer, or outside the isolated group is passed over. When the selection holds no other
+object, they return the error "nothing selected".
+
 ## Shaper Groups
 
 `shaper.releaseSource {source, group?}` takes the original shape `source` out of its Shaper Group: the shape becomes a
@@ -1595,7 +1620,7 @@ already walks Image Trace. Short agent entry points:
   a symbol with guides keeps its corners at their size, and `symbol.breakLink` gives its art as it draws; dragging a
   guide on the canvas in symbol editing mode sends `nineSliceGuides` in one undo step; `type` is
   Symbol Type, `static` by default for the command and `dynamic` by default in the Symbol Options dialog),
-  `symbol.place {name?, x?, y?}`, `symbol.breakLink {ids?}`, `symbol.replace`,
+  `symbol.place {name?, x?, y?}`, `symbol.breakLink {ids?}` (the art keeps the instance's opacity mask), `symbol.replace`,
   `symbol.edit {id?, ids?, name?, x?, y?, artboard?, viewCenter?}` (symbol editing mode: the symbol's art on a temporary
   isolated layer, where the instance `id` shows it or centered on (x, y), by default on the center of artboard
   `artboard`, the active one the app passes, or in a document without artboards on `viewCenter`, the view's center the
@@ -1685,11 +1710,11 @@ already walks Image Trace. Short agent entry points:
   `dataset.delete`, `dataset.capture`, `dataset.update`, `dataset.select {name}`, `dataset.next` /
   `dataset.prev` (each `dataset.select` / next / prev is one undo step over every bound object), `dataset.import {path|data|dataBase64|csv}` /
   `dataset.export {path?}` (CSV: one column per variable, and no column of data set names). `dataset.import` also
-  reads tab-separated files. Every header cell is a variable, whatever its case (`name` and `Name` included), as the
+  reads tab-separated files. Every header cell is a variable, whatever its case (`name` and `Name` included). The
+  first row holds the field names, as the
   [set-up page](https://helpx.adobe.com/illustrator/desktop/automate-visualize-data/automate-actions/set-up-data-source-files.html)
-  describes the first row: "Specify your data field name in the first row of your spreadsheet." The rows replace every
-  data set of the document and are named `Data Set 1`, `Data Set 2` and so on, in file order; the document's variables
-  and their bindings stay, and the reply's `deletedDataSets` lists the data sets that were replaced. An import error
+  describes. The rows replace every data set of the document and are named `Data Set 1`, `Data Set 2` and so on, in file order;
+  the document's variables and their bindings stay, and the reply's `deletedDataSets` lists the data sets that were replaced. An import error
   about a row's values gives the file line the row starts on. A header cell that names no variable defines one, unbound, in the same undo step as the
   rows. `#Shown` defines a visibility variable `Shown`, `@Photo` defines an image variable `Photo`, and a cell without
   a prefix defines a text variable. `dataset.export` writes a visibility variable's header as `#Shown` and an image
@@ -1751,15 +1776,48 @@ already walks Image Trace. Short agent entry points:
   the file at `path`, else a picked one, or the file's text `data`, adds its set after the other sets and returns
   `{set, name, actions}`. A set named like one already in the panel gets the next free number (`Print 2`), and the
   other sets and the current set stay as they are. An action set file (`.vcactions`) is JSON:
-  `{"format": "vcactions", "version": 1, "name", "actions": [{"name", "steps": [{"command", "params"}]}]}`, each step
-  a command id and its params as `command.batch` takes them. A file with another `format` or a `version` other than
-  1, a file larger than 8 MiB, one with more than 1,000 actions and one with an action of more than 10,000 steps are
+  `{"format": "vcactions", "version": 1 or 2, "name", "actions": [{"name", "steps": [{"command", "params", "excluded"?}]}]}`, each step
+  a command id and its params as `command.batch` takes them. `excluded: true` preserves a step but omits it from playback;
+  an absent or false flag includes the step. Files with excluded steps use version 2, so older builds refuse them
+  instead of playing the excluded steps; files without exclusions use version 1. A file with another `format` or a `version` other than
+  1 or 2, a file larger than 8 MiB, one with more than 1,000 actions and one with an action of more than 10,000 steps are
   refused, and no set is added. The Actions panel menu's Save Actions… and Load Actions… run these; Load Actions… is
   disabled where there is no open dialog (the web).
 - Actions: `ui.action.rename {set, action, name}` renames the Actions panel's action at `action` in set `set` (0 is
-  the top set) to `name` with spaces trimmed from both ends, keeps its steps, and returns `{name}`. An index past the
-  last set or action, or an empty name, is an error, and then nothing is renamed. The panel menu's Action Options…
-  runs this for the selected action.
+  the top set) to `name` with spaces trimmed from both ends, keeps its steps, function key and color, and returns
+  `{name}`. An index past the last set or action, or an empty name, is an error, and then nothing is renamed.
+- Actions: `ui.action.stepsIncluded {set, action?, step?, included, others?}` includes or excludes all steps of a set,
+  one action, or one step. With `step` and `others: true`, it leaves that step as it was and applies `included` to the
+  other steps of its action (the panel's Alt/Option-click). An invalid set, action or step changes nothing. The panel's
+  checkmarks run this command; normal playback and Batch… skip excluded steps.
+- Actions: `ui.action.new {set, name, key?, cmd?, shift?, color?}` adds an action named `name` (spaces
+  trimmed) after the last action of set `set` (0 is the top set), starts recording into it and returns
+  `{set, action}`; Stop Playing/Recording (`ui.action.stop`) ends the recording. `key` 1 to 15 is the function key F1 to F15 that plays the
+  action (0 or null for none), with `cmd` (Ctrl, Command on macOS) and `shift`. `color` is its Button Mode color
+  (`red`, `yellow`, `green`, `blue` or `violet`; null or `""` for none), which the panel does not show. Action function
+  keys take priority over command shortcuts and preserve the command's binding. On Windows F1, Ctrl+F4 and Ctrl+F6
+  cannot be used. While an action is recording, and for an index past the last set,
+  an empty name, or a key or color that is not one of these, it is an error and nothing is added. The panel's Create
+  New Action button and menu's New Action… open the `actionNew` dialog, whose Record runs this.
+- Actions: `ui.action.record {set?}` starts recording a new action in the chosen set, or the current set when `set`
+  is left out, and returns `{set, name}`. With no sets, it creates Set 1. The action gets the next available
+  `Action N` name in that set. The Actions panel's Begin Recording button runs this command. An invalid set or an
+  existing recording is an error and leaves the sets and recording unchanged.
+- Actions: `ui.action.options {set, action, name?, key?, cmd?, shift?, color?}` changes the action at
+  `action` in set `set` and keeps its steps: `name` renames it, `key` with `cmd` and `shift` sets its function key,
+  and `color` its Button Mode color, as `ui.action.new` takes them; a param left out keeps what the action has, and
+  `cmd` or `shift` alone changes that modifier of its key. It
+  returns `{name, key, color}`. The panel menu's Action Options… runs this for the selected action. A function key
+  plays its action from the keyboard; like command shortcuts, it does nothing while a dialog, the command palette or
+  a text field has the keyboard, or while a tool is busy. Editing command shortcuts (`shortcuts.set`, Keyboard Shortcuts), loading preferences and
+  `ui.actionSet.load` preserve action function keys. When several actions have the same key, the first in panel order
+  plays. A stored key reserved on the current platform does not play an action.
+- Actions: `ui.action.play {action, set?}` plays the action named `action` as one undoable batch; `set` names the set
+  to look in (default: every set), and a `set` that is not a string is an error. A name that no action has, or that
+  more than one action in the sets looked in has, or whose every step is excluded, is an error, and then nothing plays.
+- Actions: `ui.action.stop {}` ends the recording in progress and keeps its steps, in the action `ui.action.new` made
+  for it, else in a new action after the last action of its set, and returns `{stopped}`. With nothing recording it
+  changes nothing. The panel's Stop Playing/Recording button runs this.
 - Action sets: `ui.actionSet.delete {sets?: [index], ids?: [id]}` deletes the Actions panel's sets at these indexes
   (0 is the top set) with their actions, by default the current set, and returns `{deleted}`. An index past the last
   set is an error, and then no set is deleted. `ids` holds the panel's own set ids, which its question passes: the
@@ -1770,8 +1828,8 @@ already walks Image Trace. Short agent entry points:
   not restore a deleted set.
   `ui.actionSet.duplicate {set?: index, action?: index}` copies the action at `action` in set `set` to right after it
   in the same set, and returns `{set, action}`; without `action` it copies the set with all its actions to right after
-  it, by default the current set, and returns `{set}`. The copy is named after the original with " copy" added, a
-  copied set gets an id of its own, and the copy is selected. An index past the last set or action is an error. The
+  it, and returns `{set}`. In both cases `set` defaults to the current set. The copy is named after the original with
+  " copy" added, a copied set gets an id of its own, and the copy is selected. An index past the last set or action is an error. The
   panel menu's Duplicate runs this for the selected action, else the current set.
 - Image Trace: `imageTrace.presets`, `imageTrace.make {id?, preset?, params?, view?}` (or `imageTrace.makeAndExpand`),
   `imageTrace.setView`, `imageTrace.expand`, `imageTrace.release`. A key inside `params` that is not one of the trace
@@ -1788,7 +1846,9 @@ already walks Image Trace. Short agent entry points:
   `ui.imageTracePresetDialog {params?, rename?}` opens the Image Trace panel's Save as New Preset… or Rename… dialog.
 - Live Paint: `livePaint.make`, `livePaint.merge`, `livePaint.fill {group?, point}`, `livePaint.strokeEdge`,
   `livePaint.info {group}`, `livePaint.release`, `livePaint.expand`, and `livePaint.gapOptions {ids?, detect?, size?,
-  color?, closeGaps?}` (Object › Live Paint › Gap Options). With `detect: true`, paint stops at the gaps that run
+  color?, closeGaps?}` (Object › Live Paint › Gap Options). Make gives each covered face the fill of its front-most
+  covering source, including compound paths with shared curved boundaries. Expand keeps those face fills.
+  With `detect: true`, paint stops at the gaps that run
   from a loose end of a path to the nearest path, up to `size` wide (`small` 3 pt, `medium` 6 pt, `large` 12 pt, or a
   number of points up to 72); `closeGaps: true` adds an unpainted path across each of them. The options are saved with the group, and the reply
   and `livePaint.info` list the gaps up to `size` wide that no path closes, as `[x0, y0, x1, y1]`. `livePaint.merge`
@@ -1915,6 +1975,10 @@ it (Alt-drag). `appearance.duplicateItem {index, to?}` / `{indices}` and `appear
 act on several fills/strokes at once, and `appearance.showAllHidden` makes every hidden fill, stroke and effect
 visible again. In remote mode, `effect.dialog {effect, index, item}` opens an applied effect's dialog prefilled
 (`ui.dialog.confirm` runs `effect.setParams`); see the control protocol for the "already applied" question.
+
+Effect dialogs use the targeted object, group, or layer shown in Appearance. The Transform dialog previews valid
+numbers as they are typed, including Copies, distances with units, and rotation. With Preview off, changes apply
+on OK. Cancel restores the original artwork.
 
 ## Overprint
 
@@ -2365,6 +2429,8 @@ dash?, dashOffset?, alignDashes?}}`. `text.setStyle {ids?, stroke?, strokeWidth?
 and weight of the characters of each object given (without `start` and `end`: all of its text), with its other keys in
 one undo step; `strokeWidth` is in document points, as `stroke.set` gives the weight of scaled type. A `stroke` color
 without `strokeWidth` gives characters that have no stroke weight 1 pt, as `paint.setStroke` does.
+`text.setRangeStyle` does the same for its range, and its `strokeWidth` and `strokeOptions` lengths are in document
+points too. The 1 pt default of both commands is in the type's own units, so on type scaled to 200% it draws 2 pt wide.
 `align: "inside"|"outside"` keeps the characters' stroke on that side of the
 glyph outlines, drawn at twice the weight and clipped, while the type stays editable (beyond Illustrator); SVG export
 writes the text live and that stroke as glyph outlines over it. `inspect_document` reports each object's stroke as `strokeOptions` (type: its first
@@ -2541,7 +2607,9 @@ and `layerRows`, the rows highlighted in the panel.
   while a symbol is edited only the editing layer or art on it) / `object.exitIsolation`.
 - **Dialogs and panel state** (control channel and the app's MCP): `ui.layerOptions {ids?}` and `ui.newLayer
   {sublayer?}` open Layer Options (dialog `layerOptions`: name, color, template, locked, visible, printable, preview,
-  dimImages, dimPercent; OK is one undo step; Cmd/Ctrl+Alt+L runs `ui.newLayer` for a new layer), `ui.layersPanelOptions` opens Panel Options (`layersPanelOptions`:
+  dimImages, dimPercent; OK is one undo step; `ui.dialog.set` of `template` also sets `locked` and `dimImages`, as the
+  checkbox does, except a Dim Images set before it; for several `ids` the dialog shows the first row's settings, and OK sends only the fields set with a
+  control or `ui.dialog.set`; Cmd/Ctrl+Alt+L runs `ui.newLayer` for a new layer), `ui.layersPanelOptions` opens Panel Options (`layersPanelOptions`:
   layersOnly, locateSelected, rowSize small|medium|large|other, otherSize, thumbLayers, thumbGroups, thumbObjects), and
   `ui.layersExpand {ids?, open?}` opens or closes rows as their triangles do (Alt-click: everything inside).
   With `locateSelected` on (Locate Selected Objects, off by default), when the last selected object changes on the canvas
@@ -3181,7 +3249,9 @@ for `edit.pasteInPlace`, `edit.pasteInFront` and `edit.pasteInBack`, and to each
 none, when the step runs. When the document a step runs in has no artboard at that index (for example, after an
 earlier step deleted the active artboard when it was the last one), the step gets that document's last artboard. In
 remote mode, MCP's `run_command` calls and each step of the `command_batch` tool get the active artboard too. The
-Actions panel plays an action as a `command.batch`. The Actions panel menu's Batch… runs
+Actions panel plays an action as a `command.batch`, omitting steps whose playback checkmarks are
+cleared. An action set saved as `.vcactions` keeps each excluded step with `excluded: true`; loading
+an earlier version 1 set without that flag includes every step. The Actions panel menu's Batch… runs
 `action.batch`: the same steps on every readable file in a folder (or every data set of the open document), with
 destination `none` | `saveAndClose` | `folder` and Override Open / Save / Export. For a Data Sets source,
 `datasetFileNaming?: fileNumber | fileDataSetName | dataSetName` chooses File + Number (`source001`),
@@ -3665,6 +3735,17 @@ it returns `{tiled, floating}`. An `index` that names no open document fails wit
 is not saved. `ui.inspect` reports `tiled`, `panes` (each pane's `document` index, `rect` and
 whether it is `active`) and `floating`; canvas coordinates map to the current document's pane or window
 (`canvasRect`), in that window's coordinates while it floats.
+`window.newWindow` (Window › New Window) opens another view of the current document, with its own zoom, center,
+rotation, artboard and Outline or Preview, makes it the current window and returns `{index, view}`, the view's number.
+Each view has a tab of its own; while a document has more than one view, its tabs and windows show the view's number
+after the name ("Name:2"). It opens in a floating window when the view it came from is in one. With no document open
+it fails with "no document open". The Arrange commands treat each view as a window: `floatInWindow` and
+`consolidateAllWindows` take `view` beside `index` (the document's current view without it), and Tile and Cascade
+count views. `file.close` without an `index` closes the current view, and the document's last view closes the document;
+with an `index` it closes the document and all its views. `window.nextDocument` and `window.previousDocument` step
+through the views in tab order and add `view` to their reply for a document with more than one view. `ui.inspect`
+reports `windows` (every window as `[document index, view number]`, in tab order), `currentWindow` and each pane's
+`view`. Views are not saved.
 
 ```json
 {"name":"run_command","arguments":{"command":"file.new","params":{"preset":"A4","orientation":"landscape","artboards":4,"artboardLayout":{"columns":2},"bleed":9}}}
@@ -4216,7 +4297,9 @@ file is missing stays linked: relink it first); `links.unembed {id, path}` write
 clip?}` decides how a relinked or updated file takes an image's place (default `bounds`: stretched into the old
 bounds; `clip` puts it in a clip group of the old bounds when it is larger). The UI commands `links.editOriginal` and
 `links.reveal` open the linked file in its app or show it in its folder (desktop). Edit Original runs only from the app's window,
-except for a placed document, which opens in a tab.
+except for a placed document, which opens in a tab. With the preference `editOriginalSystemDefaults` (Preferences ›
+File Handling › Use System Defaults for Edit Original, on by default) off, Edit Original opens a raster image in the app
+that made it, PhotoCraft, where it is installed, and anything else in the system's default app (#5236).
 
 ```json
 {"name":"run_command","arguments":{"command":"links.list","params":{"show":"missing"}}}
@@ -6148,7 +6231,8 @@ Envelope Options.
 
 The Mesh tool and Direct Selection pick mesh points on gradient meshes and mesh envelopes. A click picks one point
 (its handles show); Shift-click adds a point or takes a picked one away. Direct Selection's marquee picks the points
-inside it (Shift toggles them) and selects their meshes; its click on a gradient mesh's line picks the line's two
+inside it (Shift toggles them) and selects their meshes, as does a Lasso loop round them (Shift adds, Alt takes
+away); its click on a gradient mesh's line picks the line's two
 ends, and a click inside a patch picks the four points around it. The picked points show filled. Dragging one of them
 moves them all as one undo step (`object.mesh.movePoints`), a click on one of several picked points picks it alone,
 and the arrow keys nudge them by the keyboard increment. The active tool lists them in its options
@@ -6774,4 +6858,32 @@ there is no step. → `{symbols: [name…], ids: [instance id…], skipped: [{la
 
 ```json
 {"name":"run_command","arguments":{"command":"addon.document.symbolsFromLayers","params":{"replace":true}}}
+```
+
+## Type Tools add-on
+
+Type Tools is a built-in add-on for type: its command is `addon.type.textTweaker`, and in the desktop app it lives in
+Object › Plug-ins › Type Tools (#4924). Text Tweaker gives one character attribute to the characters letter by letter,
+from a start value to an end value along a shape, as one undo step; the text stays live and editable. Each value is set
+as `text.setRangeStyle` sets it (the Character panel), in its units and ranges ([formatting type](https://helpx.adobe.com/illustrator/using/formatting-type.html)), so on scaled
+type it is the size shown.
+It changes the range of `id` (`start`/`end` bytes), else all the text of the type objects in `ids`, else the text the
+Type tool has selected (at a caret: all of that object's text), else all the text of every selected type object; each
+object gets its own ramp, and at most 100000 characters change in one run. A run that changes nothing makes no step.
+
+| Parameter | Values (default) |
+|---|---|
+| `attribute` | `size` (pt 0.1…1296), `baselineShift` (pt −1296…1296), `rotation` (° −360…360), `hScale`, `vScale` (% 1…10000), `tracking` (1/1000 em −1000…10000), `leading` (pt 0.1…5000), `strokeWidth` (pt 0…1000; shows only on characters with a stroke) (`size`) |
+| `from`, `to` | the first and last character's values, in the attribute's units and range (size 12 → 36, baselineShift 0 → 12, rotation 0 → 30, hScale and vScale 100 → 150, tracking 0 → 200, leading 12 → 36, strokeWidth 0 → 2) |
+| `shape` | `straight` (an even ramp), `ease` (slow at both ends), `bow` (`from` at both ends, rising smoothly to `to` in the middle), `spike` (the same, in straight lines), `random` (each character anywhere from `from` to `to`) (`straight`) |
+| `seed` | whole number (0): `random` with the same seed and text gives the same values |
+| `skipSpaces` | true: spaces and line breaks keep their values and don't count |
+
+→ `{count (characters changed), ids}`. Text Tweaker… opens a dialog (`ui.menuDialog {command}`, dialog kind
+`textTweaker`) whose fields are the command's parameters, with Preview; another attribute starts from its own
+default values, and the seed starts new whenever the document has changed.
+
+```json
+{"name":"run_command","arguments":{"command":"addon.type.textTweaker","params":{"attribute":"baselineShift","from":0,"to":18,"shape":"bow"}}}
+{"name":"run_command","arguments":{"command":"addon.type.textTweaker","params":{"attribute":"rotation","from":-15,"to":15,"shape":"random","seed":4}}}
 ```

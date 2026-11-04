@@ -304,21 +304,16 @@ fn same(s: &mut Session, cmd: &str, eq: fn(&Node, &Node) -> bool) -> Result<Valu
     finish_same(s, cmd, ids)
 }
 
+/// The first character style of the first type object [`each_selected_text`] gives.
 fn first_text_style(s: &Session) -> Option<CharStyle> {
     let st = s.active()?;
     let mut out = None;
-    for id in &st.selection.objects {
-        st.doc.node(*id)?.walk(&mut |n| {
-            if out.is_none()
-                && let NodeKind::Text(t) = &n.kind
-            {
-                out = Some(t.first_style());
-            }
-        });
-        if out.is_some() {
-            break;
+    each_selected_text(s, |id| {
+        if let Some(NodeKind::Text(t)) = st.doc.node(id).map(|n| &n.kind) {
+            out = Some(t.first_style());
         }
-    }
+        out.is_none()
+    });
     out
 }
 
@@ -333,8 +328,9 @@ fn same_text(s: &mut Session, cmd: &str, eq: fn(&CharStyle, &CharStyle) -> bool)
 
 /// Call `f` with each type object among the selected objects and inside them, in selection order,
 /// keeping only those [`walk_selectable`] visits: none that is hidden, locked, on a hidden, locked
-/// or template layer, or outside the isolated group. A type object inside two selected objects is
-/// given twice. The walk stops when `f` returns false.
+/// or template layer, or outside the isolated group. A selected layer or sublayer, or a selected
+/// group that holds the isolated group, gives the type in it that passes the same test. A type
+/// object inside two selected objects is given twice. The walk stops when `f` returns false.
 fn each_selected_text(s: &Session, mut f: impl FnMut(NodeId) -> bool) {
     fn inside(n: &Node, f: &mut impl FnMut(NodeId) -> bool) -> bool {
         if !n.visible || n.locked {
@@ -345,12 +341,23 @@ fn each_selected_text(s: &Session, mut f: impl FnMut(NodeId) -> bool) {
         }
         n.children().into_iter().flatten().all(|c| inside(c, f))
     }
+    fn from(n: &Node, selectable: &impl Fn(NodeId) -> bool, holds_isolated: &[NodeId], f: &mut impl FnMut(NodeId) -> bool) -> bool {
+        if selectable(n.id) {
+            return inside(n, f);
+        }
+        if n.is_layer() || holds_isolated.contains(&n.id) {
+            return n.children().into_iter().flatten().all(|c| from(c, selectable, holds_isolated, f));
+        }
+        true
+    }
     let Some(st) = s.active() else { return };
     let locks = st.doc.locked_artboards();
+    let selectable = |id| is_selectable(&st.doc, st.isolation, &locks, id);
+    // The isolated group and the groups and layers that hold it.
+    let holds_isolated = st.isolation.and_then(|i| st.doc.ancestry(i)).unwrap_or_default();
     for id in &st.selection.objects {
-        if is_selectable(&st.doc, st.isolation, &locks, *id)
-            && let Some(n) = st.doc.node(*id)
-            && !inside(n, &mut f)
+        if let Some(n) = st.doc.node(*id)
+            && !from(n, &selectable, &holds_isolated, &mut f)
         {
             return;
         }
