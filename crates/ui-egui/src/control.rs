@@ -10,7 +10,8 @@
 //! - `ui.contextMenu.list`: the canvas context menu for the current selection, flattened
 //! - `ui.tool.select {tool}`, `ui.tool.list`
 //! - `ui.pointer {events:[{kind: down|drag|up|move|doubleclick, x, y, backquote?, space?: "doc"|"screen"}], mods?, backquote?}`:
-//!   drive the active tool through the same path as the mouse
+//!   drive the active tool through the same path as the mouse, after the synthetic input sent
+//!   before it was applied
 //! - `ui.key {key, shift?, alt?, cmd?}` / `ui.text {text}`: synthetic keyboard input
 //! - `ui.move {x, y}` / `ui.click {x, y, button?, count?, shift?…}` / `ui.drag {x, y, toX, toY, steps?}`:
 //!   real egui pointer input in screen points (reaches every widget: panels, flyouts, dialogs)
@@ -539,7 +540,13 @@ fn pointer_events(app: &mut VectorcraftApp, ctx: &egui::Context, req: &ControlRe
     let base_mods: Mods = p.get("mods").and_then(|m| serde_json::from_value(m.clone()).ok()).unwrap_or_default();
     let view = app.view_info();
     let xf = app.canvas_rect.zip(app.view().copied()).map(|(rect, v)| Xf::new(rect, &v));
-    for e in events {
+    let held =
+        PointerEvent::json_backquote(p, false).and_then(|d| events.iter().map(|e| PointerEvent::json_backquote(e, d)).collect::<Result<Vec<_>, _>>());
+    let held = match held {
+        Ok(held) => held,
+        Err(e) => return err(e),
+    };
+    for (e, backquote) in events.iter().zip(held) {
         let kind = match e.get("kind").and_then(Value::as_str).unwrap_or("") {
             "down" => PointerKind::Down,
             "drag" => PointerKind::Drag,
@@ -565,7 +572,6 @@ fn pointer_events(app: &mut VectorcraftApp, ctx: &egui::Context, req: &ControlRe
             Some(xf) if screen => crate::canvas::pose_on_page(q, &xf),
             _ => q,
         });
-        let backquote = e.get("backquote").and_then(Value::as_bool).unwrap_or_else(|| p.get("backquote").and_then(Value::as_bool).unwrap_or(false));
         crate::canvas::dispatch(app, &PointerEvent { kind, pos, mods, backquote, pressure: PointerEvent::json_pressure(e), pen }, view);
         let hold = PointerEvent::json_hold(e);
         if hold > 0.0 {

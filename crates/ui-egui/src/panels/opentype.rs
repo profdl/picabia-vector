@@ -4,6 +4,7 @@
 
 use egui::Ui;
 use serde_json::json;
+use vectorcraft_doc::{CharStyle, NodeKind};
 use vectorcraft_text::{EXTRA_FEATURES, FontDb, OtFeatures, StylisticSet};
 
 use super::character::{shared, text_editing, text_style};
@@ -135,14 +136,22 @@ impl Change {
 }
 
 /// Make `change` to the features of each character the panel acts on, from the character's own
-/// features (`featureChanges`), unless it changes none of them.
+/// features (`featureChanges`), unless it changes none of them. At a Type tool caret the
+/// command styles all the text, so every character of the text is checked.
 fn edit(app: &mut VectorcraftApp, change: Change) {
-    let unchanged = shared(app, |s| {
+    let same = |s: &CharStyle| {
         let before = OtFeatures::from_tags(s.features.iter().map(String::as_str));
         let mut after = before;
         change.apply(&mut after);
         after == before
-    });
+    };
+    let unchanged = match text_editing(app) {
+        Some((id, a, b)) if b <= a => match app.session.active().and_then(|st| st.doc.node(id)).map(|n| &n.kind) {
+            Some(NodeKind::Text(t)) => Some(t.runs.iter().all(|r| same(&r.style))),
+            _ => None,
+        },
+        _ => shared(app, same),
+    };
     if unchanged != Some(true) {
         run_features(app, "featureChanges", OtFeatures::changes(|f| change.apply(f)));
     }
@@ -156,10 +165,13 @@ fn set(app: &mut VectorcraftApp, f: OtFeatures) {
 /// Send `tags` as the `key` param (`features` or `featureChanges`) for the Type tool's range or
 /// caret, or else for the selected type.
 fn run_features(app: &mut VectorcraftApp, key: &str, tags: Vec<String>) {
-    let (cmd, mut p) = match text_editing(app) {
-        Some((id, a, b)) if b > a => ("text.setRangeStyle", json!({ "id": id.0, "start": a, "end": b })),
-        Some((id, _, _)) => ("text.setRangeStyle", json!({ "id": id.0 })),
-        None => ("text.setStyle", json!({})),
+    // After Select All in threaded text: every frame of the story.
+    let story = super::character::text_story(app).and_then(|story| story.first().copied());
+    let (cmd, mut p) = match (text_editing(app), story) {
+        (Some(_), Some(first)) => ("text.setRangeStyle", json!({ "id": first.0, "story": true })),
+        (Some((id, a, b)), None) if b > a => ("text.setRangeStyle", json!({ "id": id.0, "start": a, "end": b })),
+        (Some((id, _, _)), None) => ("text.setRangeStyle", json!({ "id": id.0 })),
+        (None, _) => ("text.setStyle", json!({})),
     };
     p[key] = json!(tags);
     if let Err(e) = app.run(cmd, p) {
@@ -521,5 +533,27 @@ mod tests {
                 ("3".to_string(), none)
             ]
         );
+    }
+
+    /// At a caret whose insertion style is already a denominator, Denominator still reaches the
+    /// characters the command styles at a caret (all of them) in one undo step; chosen again once
+    /// every character has it, it adds no undo step.
+    #[test]
+    fn caret_with_the_same_position_still_applies_it() {
+        let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", &json!({"width": 100, "height": 100})).unwrap();
+        app.session.select_tool("type", Default::default()).unwrap();
+        let id = app.session.execute("text.create", &json!({"x": 10, "y": 40, "text": "1/23"})).unwrap()["id"].clone();
+        app.session.execute("text.setRangeStyle", &json!({"id": id, "start": 0, "end": 1, "features": ["dnom"]})).unwrap();
+        app.session.apply_actions(vec![vectorcraft_tools::Action::Notify("text.editNew".into())]).unwrap();
+        app.session.set_tool_option("select", &json!({"start": 1, "end": 1}));
+        assert_eq!(text_editing(&app).map(|(_, a, b)| (a, b)), Some((1, 1)));
+        assert_eq!(shown_position(&app), Some(4));
+        let undo = undo_steps(&app);
+        edit(&mut app, Change::Position(4));
+        assert_eq!(undo_steps(&app), undo + 1);
+        assert_eq!(run_features(&mut app, &id, 4), [("1/23".to_string(), json!(["dnom"]))]);
+        edit(&mut app, Change::Position(4));
+        assert_eq!(undo_steps(&app), undo + 1);
     }
 }
