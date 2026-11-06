@@ -1469,7 +1469,9 @@ digits	Malayalam	Malajalam
 	Standard Vertical Roman Alignment	Standardno okomito latinično poravnanje
 	Strikethrough	Precrtano
 	Character:	Znak:
+	Paragraph:	Pasus:
 	Character options	Opcije znakova
+	Paragraph options	Opcije pasusa
 	Subscript	Indeks
 	Subscript (on the roadmap)	Indeks (u planu)
 	Superscript	Eksponent
@@ -4589,6 +4591,8 @@ imageTrace	Outline	Obris
 @msg	no such saved selection	nema takvog sačuvanog odabira
 @msg	no such segment	nema takvog segmenta
 @msg	no such spine point	nema takve tačke kičme
+@msg	`with` must be a list of at most 10000 spine point indexes	`with` mora biti lista od najviše 10000 indeksa tačaka kičme
+@msg	`with` moves points, not a handle	`with` pomjera tačke, ne ručicu
 @msg	no such spine segment	nema takvog segmenta kičme
 @msg	no such subpath	nema takve podputanje
 @msg	no such user library	nema takve korisničke biblioteke
@@ -4923,6 +4927,9 @@ imageTrace	Outline	Obris
 @msg	an image VectorCraft can't read was left out	izostavljena je slika koju VectorCraft ne može pročitati
 @msg	an image whose data is cut short was left out	izostavljena je slika čiji su podaci skraćeni
 @msg	linked pictures show the low-resolution preview saved in the file until their files are found: relink them in the Links panel	povezane slike prikazuju pregled niske rezolucije sačuvan u datoteci dok se njihove datoteke ne pronađu: ponovo ih povežite u panelu Veze
+@msg	linked type areas past VectorCraft's limits were left out	povezana područja teksta izvan ograničenja programa VectorCraft su izostavljena
+@msg	type used as a mask in linked areas, wraparound text or a compound path doesn't clip	tekst korišten kao maska u povezanim područjima, omotanom tekstu ili složenoj putanji ne odsijeca
+@msg	linked pictures with no preview in the file show a placeholder until their files are found: relink them in the Links panel	povezane slike bez pregleda u datoteci prikazuju čuvar mjesta dok se njihove datoteke ne pronađu: ponovo ih povežite u panelu Veze
 @msg	area type in frames too short for a line of the font it shows in got taller frames ({_1}): their type wouldn't show otherwise	tekst u području u okvirima prekratkim za red fonta u kojem se prikazuje dobio je više okvire ({_1}): inače se tekst ne bi prikazao
 @msg	its editing data doesn't say where its art is	njeni podaci za uređivanje ne govore gdje joj je crtež
 @msg	this file was saved without PDF compatibility, and its editing data can't be read ({why})	ova datoteka je sačuvana bez PDF kompatibilnosti, a njeni podaci za uređivanje se ne mogu pročitati ({why})
@@ -6075,6 +6082,9 @@ shape	Open	Otvoren
 	Find Nearest Swatch…	Pronađi najbliži uzorak boje…
 	Find Nearest Swatch	Pronađi najbliži uzorak boje
 	Apply Nearest Swatch	Primijeni najbliži uzorak boje
+# Color Effects add-on: Apply Fill to Stroke and Apply Stroke to Fill (Object › Plug-ins › Color Effects, #5530).
+	Apply Fill to Stroke	Primijeni ispunu na potez
+	Apply Stroke to Fill	Primijeni potez na ispunu
 	Select objects to find the swatches nearest their colors.	Odaberite objekte da pronađete uzorke boja najbliže njihovim bojama.
 @msg	select objects or give `color`	odaberite objekte ili navedite `color`
 @msg	`color` is not a colour	`color` nije boja
@@ -6272,3 +6282,7 @@ shape	Open	Otvoren
 # Compound Shapes add-on
 	Compound Shapes	Složeni oblici
 	Shape Mode Buttons Make Compound Shapes	Tasteri načina oblika prave složene oblike
+
+# 3D Box add-on
+	3D Box	3D kutija
+	3D Box Tool	Alat za 3D kutiju

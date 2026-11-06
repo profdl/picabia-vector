@@ -6423,6 +6423,7 @@ dependencies = [
  "serde_json",
  "smithay-clipboard",
  "socket2",
+ "tempfile",
  "vectorcraft-engine",
  "vectorcraft-render",
  "vectorcraft-text",
@@ -6486,6 +6487,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-text",
  "serde_json",
+ "tempfile",
  "vectorcraft-color",
  "vectorcraft-doc",
  "vectorcraft-engine",
@@ -6841,6 +6843,7 @@ dependencies = [
  "vectorcraft-doc",
  "vectorcraft-effects",
  "vectorcraft-geom",
+ "vectorcraft-pathops",
  "vectorcraft-testkit",
  "vectorcraft-text",
 ]
