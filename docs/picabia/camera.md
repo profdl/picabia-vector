@@ -1,11 +1,9 @@
 # Camera link (Panasonic Lumix GX85)
 
-**Status:** 2026-11-07. The probe (PIC34.0) ran on the owner's DMC-GX85: handshake, record mode,
-live view (640×360 JPEGs) and the shutter all work, and the protocol below is measured, not guessed.
-The link was corrected to match (the plain-text handshake reply, waiting for the camera to accept a
-new computer, re-sending live view every 5 s). **The app itself hasn't been connected to the camera
-yet**: that's the next check. Full-resolution download (PIC34.7) and lock focus and exposure
-(PIC34.8) are still to do.
+**Status:** 2026-11-07. **Works with the owner's DMC-GX85**: Picabia connected, did the handshake and
+streamed live view at 27 fps (4,103 frames, none dropped) from the camera's own Wi-Fi, with the setup
+below. The protocol below is measured, not guessed. Full-resolution download (PIC34.7) and lock focus
+and exposure (PIC34.8) are still to do.
 
 Use a Lumix GX85, mounted once, as a fixed animation-stand camera: see its live view in a Camera
 window, fire the shutter from Picabia, and collect numbered frames in a folder you choose,
@@ -52,10 +50,34 @@ From the control channel or MCP:
    datagrams at all, check System Settings ▸ Privacy & Security ▸ Local Network.
 4. Bring back `probe.log` and the `frame_*.jpg` files beside it.
 
-## On a shared Wi-Fi network
+## The setup that works
 
-The Mac can't stay on the camera's own Wi-Fi (it loses the internet, and Claude with it), so the
-camera joins the shared network instead:
+The camera hosts its own Wi-Fi ("Direct"), and the Mac gets the internet from somewhere else:
+
+1. **Internet through a second connection**: Ethernet, or an iPhone over USB (Personal Hotspot on,
+   then Trust this computer). In System Settings ▸ Network ▸ ⋯ ▸ Set Service Order, put it above Wi-Fi.
+2. **Stop the Mac from leaving the camera's network**: System Settings ▸ Wi-Fi ▸ Details… on the
+   usual network ▸ turn off Auto-Join. Otherwise macOS soon moves back to a known network that has
+   internet.
+3. **On the GX85**: Wi-Fi ▸ Remote Shooting & View, **Direct**. Join the camera's network from the
+   Mac's Wi-Fi menu.
+4. **Local Network permission**: macOS lets an app reach devices on the local network only once it
+   has been allowed under System Settings ▸ Privacy & Security ▸ Local Network. Without it,
+   connections to 192.168.54.1 time out. Apple's own tools such as `curl` are exempt, so they still
+   work and are no test. A program started from a terminal or an editor counts as that terminal or
+   editor (Terminal, Visual Studio Code), so allow that one.
+5. In Picabia: Window ▸ Camera…, Connect (192.168.54.1), choose a folder, Capture.
+
+With an iPhone hotspot, a host name or `curl http://192.168.54.1/` can go out over the phone's IPv6
+translation instead of to the camera (`curl -4` doesn't). Picabia always connects to the IPv4 address.
+
+## On a shared Wi-Fi network (not working yet)
+
+Tried on 2026-11-07, not working yet: in **Via Network** mode the GX85 joins the network (it got an
+address, answered ping, and the router named it `lumix`) but opens no ports. Instead it searches with
+SSDP for a `urn:schemas-upnp-org:device:MediaRenderer:1`, the phone app, and waits until its
+connection screen times out. Answering that search means imitating the phone app's discovery, which
+isn't worked out. Use the setup above instead. The steps as far as they go:
 
 1. On the GX85: Wi-Fi ▸ Wi-Fi Function ▸ New Connection ▸ Remote Shooting & View, then choose
    **Via Network** (not Direct) and pick the shared network (from the list, or WPS on the router).
