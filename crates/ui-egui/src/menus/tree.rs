@@ -684,6 +684,7 @@ pub fn menu_tree_named(english_names: bool) -> Vec<(&'static str, Vec<Item>)> {
                 }),
                 panel("Variables", crate::panels::variables::ID),
                 c("Stencil Settings…", crate::picabia_ui::STENCIL_SETTINGS), // PICABIA: the Stencil window
+                c("Camera…", crate::picabia_camera_window::CAMERA_PANEL),    // PICABIA: the Camera window
             ];
             sort_by_localized_label(&mut panels, lang);
             window_items.extend(panels);
