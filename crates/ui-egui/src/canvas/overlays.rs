@@ -21,7 +21,9 @@ pub(super) fn hover_highlight(app: &VectorcraftApp, p: &egui::Painter, xf: &Xf) 
     }
     if let Some(n) = st.doc.node(id).filter(|n| !too_many_anchors([*n])) {
         let color = c32(st.doc.layer_color(id));
-        stroke_path(p, &node_outline(n, &st.doc.symbol_boxes()), xf, Stroke::new(1.5, color));
+        let outline = node_outline(n, &st.doc.symbol_boxes());
+        stroke_path(p, &outline, xf, Stroke::new(1.5, color));
+        super::picabia::copy_outlines(p, &st.doc, n, &outline, xf, Stroke::new(1.5, color)); // PICABIA: the hover outline on every copy
     }
 }
 
@@ -161,6 +163,15 @@ pub(super) fn selection_overlay(app: &mut VectorcraftApp, p: &egui::Painter, xf:
         stroke_path(p, &vectorcraft_geom::shapes::rectangle(b).to_bezpath(), xf, Stroke::new(KEY_OUTLINE, c32(st.doc.layer_color(k))));
     }
     marks.paint(st, p, xf, &options, key_outline, if big { &[] } else { &st.selection.objects });
+    // PICABIA: a faint outline on the selected objects' copies (View › Show Modifier Copy Outlines); a stencil's ties and repeat cell
+    let copies = app.ui.view.modifier_copy_outlines;
+    for (id, n) in st.selection.objects.iter().filter(|_| !big).filter_map(|id| Some((id, st.doc.node(*id)?))) {
+        if !matches!(n.kind, NodeKind::Text(ref tx) if matches!(tx.kind, vectorcraft_doc::TextKind::Point)) {
+            // The outline is only moved onto the copies, so it's made only when they show.
+            let outline = if copies { node_outline(n, &symbols) } else { vectorcraft_geom::BezPath::new() };
+            super::picabia::selected_outlines(p, &st.doc, n, &outline, xf, c32(st.doc.layer_color(*id)), copies);
+        }
+    }
     // The spine of each selected blend (or of the blend a selected key object belongs to).
     let mut spines = vec![];
     for id in &st.selection.objects {
