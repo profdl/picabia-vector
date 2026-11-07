@@ -3,7 +3,13 @@
 //!
 //! ```text
 //! cargo run -p vectorcraft-lumix --example probe -- [--ip 192.168.54.1] [--port 49199] [--out DIR]
-//!     [--frames 10] [--seconds 6] [--handshake] [--capture] [--measure-timeout] [--discover]
+//!     [--frames 10] [--seconds 6] [--handshake] [--no-capture] [--no-measure-timeout] [--discover]
+//! ```
+//!
+//! Without `--ip` it searches the network first (SSDP) and uses the camera it finds, else
+//! 192.168.54.1 (the camera's own Wi-Fi).
+//!
+//! ```text
 //! ```
 //!
 //! Steps: (`--discover`: SSDP search first, saving each answer and device description), `getstate`,
@@ -23,6 +29,8 @@ use vectorcraft_lumix::{Reply, Transport, extract_jpeg};
 
 struct Args {
     ip: String,
+    /// `--ip` was given (else the camera is searched for first).
+    ip_given: bool,
     port: u16,
     out: PathBuf,
     frames: usize,
@@ -36,6 +44,7 @@ struct Args {
 fn args() -> Result<Args, String> {
     let mut a = Args {
         ip: vectorcraft_lumix::DEFAULT_IP.into(),
+        ip_given: false,
         port: vectorcraft_lumix::DEFAULT_UDP_PORT,
         // Double-clicking the tool runs it with no options: put the results on the Desktop.
         out: std::env::var_os("HOME")
@@ -52,7 +61,10 @@ fn args() -> Result<Args, String> {
     while let Some(k) = it.next() {
         let mut val = || it.next().ok_or_else(|| format!("{k} needs a value"));
         match k.as_str() {
-            "--ip" => a.ip = val()?,
+            "--ip" => {
+                a.ip = val()?;
+                a.ip_given = true;
+            }
             "--port" => a.port = val()?.parse().map_err(|_| "--port takes a number")?,
             "--out" => a.out = PathBuf::from(val()?),
             "--frames" => a.frames = val()?.parse().map_err(|_| "--frames takes a number")?,
@@ -83,13 +95,27 @@ impl Log {
 }
 
 fn main() -> Result<(), String> {
-    let a = args()?;
+    let mut a = args()?;
     std::fs::create_dir_all(&a.out).map_err(|e| format!("can't make {}: {e}", a.out.display()))?;
     let log_path = a.out.join("probe.log");
     let mut log = Log(std::fs::File::create(&log_path).map_err(|e| format!("can't write {}: {e}", log_path.display()))?);
     log.line(&format!("Lumix probe, camera {} , live view port {}, output {}", a.ip, a.port, a.out.display()));
-    if a.discover {
-        discover(&a, &mut log);
+    // Without --ip, search the network first: on a shared network the camera's address isn't
+    // known (and the search saves the device descriptions phase 2 needs).
+    if a.discover || !a.ip_given {
+        let found = discover(&a, &mut log);
+        if !a.ip_given {
+            match found {
+                Some(ip) => {
+                    log.line(&format!("using the camera found at {ip}"));
+                    a.ip = ip;
+                }
+                None => log.line(&format!(
+                    "no camera answered the search; trying {} (the camera's own Wi-Fi). On a shared network, find the camera's address in the router's device list and run again with --ip ADDRESS",
+                    a.ip
+                )),
+            }
+        }
     }
     let ip = net::parse_ip(&a.ip)?;
     let mut t = NetTransport::open(ip, a.port)?;
@@ -247,21 +273,37 @@ fn measure_timeout(t: &mut NetTransport, log: &mut Log, start: &str) {
     log.line(&format!("live view stopped about {} ms after startstream", last.duration_since(began).as_millis()));
 }
 
-/// SSDP search; save each answer's device description.
-fn discover(a: &Args, log: &mut Log) {
+/// SSDP search; save each answer's device description. The first likely camera's address.
+fn discover(a: &Args, log: &mut Log) -> Option<String> {
     log.line("\nSSDP search (3 s)…");
     match net::discover(3000) {
-        Err(e) => log.line(&format!("! {e}")),
+        Err(e) => {
+            log.line(&format!("! {e}"));
+            None
+        }
         Ok(found) => {
             log.line(&format!("{} answered", found.len()));
-            for (i, f) in found.iter().enumerate() {
+            let mut camera = None;
+            // A shared network can have many devices: at most 20 descriptions are fetched.
+            for (i, f) in found.iter().enumerate().take(20) {
                 log.line(&format!("- {} lumix={} server={} st={} usn={} location={}", f.ip, f.likely_lumix, f.server, f.st, f.usn, f.location));
+                let mut lumix = f.likely_lumix;
                 if let Ok(r) = net::fetch(&f.location) {
                     let p = a.out.join(format!("device_{}.xml", i + 1));
                     let _ = std::fs::write(&p, &r.body); // the log line above already has the location
                     log.line(&format!("  description saved: {}", p.display()));
+                    // The description names the maker even when the search answer doesn't.
+                    let text = String::from_utf8_lossy(&r.body).to_ascii_lowercase();
+                    if text.contains("panasonic") || text.contains("lumix") {
+                        log.line("  its description names Panasonic");
+                        lumix = true;
+                    }
+                }
+                if lumix && camera.is_none() {
+                    camera = Some(f.ip.clone());
                 }
             }
+            camera
         }
     }
 }

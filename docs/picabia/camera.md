@@ -52,6 +52,23 @@ From the control channel or MCP:
    datagrams at all, check System Settings ▸ Privacy & Security ▸ Local Network.
 4. Bring back `probe.log` and the `frame_*.jpg` files beside it.
 
+## On a shared Wi-Fi network
+
+The Mac can't stay on the camera's own Wi-Fi (it loses the internet, and Claude with it), so the
+camera joins the shared network instead:
+
+1. On the GX85: Wi-Fi ▸ Wi-Fi Function ▸ New Connection ▸ Remote Shooting & View, then choose
+   **Via Network** (not Direct) and pick the shared network (from the list, or WPS on the router).
+   The camera then waits for a device, as it does on its own Wi-Fi.
+2. Find its address: Window ▸ Camera… ▸ **Find**, or the probe with no `--ip` (both search with
+   SSDP). If nothing is found (some shared networks block the search), the camera shows its address
+   under Wi-Fi Setup ▸ Network Address Display, and the router's device list has it too. Type it into
+   the Camera window, or run the probe with `--ip ADDRESS`.
+3. Live view needs the camera's UDP datagrams to reach the Mac. Networks that keep their devices
+   apart ("client isolation", common on guest and campus Wi-Fi) block that and the HTTP commands
+   too: then the camera answers nothing, and the network needs a different setting or a small
+   router of its own.
+
 ## Protocol (measured on the owner's GX85, firmware D2.91, 2026-11-07)
 
 Probe runs on 2026-11-07 with the Mac on the camera's own Wi-Fi (camera at `192.168.54.1`, the camera
