@@ -1,0 +1,221 @@
+//! PIC34.0: probe a real Lumix camera and record what it does, so `docs/picabia/camera.md` can say
+//! what the camera does instead of what community notes guess.
+//!
+//! ```text
+//! cargo run -p vectorcraft-lumix --example probe -- [--ip 192.168.54.1] [--port 49199] [--out DIR]
+//!     [--frames 10] [--seconds 6] [--handshake] [--capture] [--measure-timeout] [--discover]
+//! ```
+//!
+//! Steps: (`--discover`: SSDP search first, saving each answer and device description), `getstate`,
+//! the access handshake (when asked for, or when the camera refuses), `recmode`, `startstream`,
+//! live view for `--seconds` (the first datagrams' headers hex-dumped, `--frames` frames saved as
+//! JPEGs, the time between frames), (`--measure-timeout`: how long the stream lasts with no
+//! further command), (`--capture`: fire the shutter), `stopstream`. Everything goes to the terminal
+//! and to `DIR/probe.log`.
+
+use std::io::Write as _;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+use vectorcraft_lumix::frame::{MAX_DATAGRAM, hex_dump};
+use vectorcraft_lumix::net::{self, NetTransport};
+use vectorcraft_lumix::{Reply, Transport, extract_jpeg};
+
+struct Args {
+    ip: String,
+    port: u16,
+    out: PathBuf,
+    frames: usize,
+    seconds: u64,
+    handshake: bool,
+    capture: bool,
+    measure_timeout: bool,
+    discover: bool,
+}
+
+fn args() -> Result<Args, String> {
+    let mut a = Args {
+        ip: vectorcraft_lumix::DEFAULT_IP.into(),
+        port: vectorcraft_lumix::DEFAULT_UDP_PORT,
+        out: std::env::temp_dir().join("lumix-probe"),
+        frames: 10,
+        seconds: 6,
+        handshake: false,
+        capture: false,
+        measure_timeout: false,
+        discover: false,
+    };
+    let mut it = std::env::args().skip(1);
+    while let Some(k) = it.next() {
+        let mut val = || it.next().ok_or_else(|| format!("{k} needs a value"));
+        match k.as_str() {
+            "--ip" => a.ip = val()?,
+            "--port" => a.port = val()?.parse().map_err(|_| "--port takes a number")?,
+            "--out" => a.out = PathBuf::from(val()?),
+            "--frames" => a.frames = val()?.parse().map_err(|_| "--frames takes a number")?,
+            "--seconds" => a.seconds = val()?.parse().map_err(|_| "--seconds takes a number")?,
+            "--handshake" => a.handshake = true,
+            "--capture" => a.capture = true,
+            "--measure-timeout" => a.measure_timeout = true,
+            "--discover" => a.discover = true,
+            "-h" | "--help" => return Err(include_str!("probe.rs").lines().take(12).collect::<Vec<_>>().join("\n")),
+            _ => return Err(format!("unknown option {k} (--help lists them)")),
+        }
+    }
+    a.frames = a.frames.min(1000);
+    a.seconds = a.seconds.clamp(1, 600);
+    Ok(a)
+}
+
+/// Prints to the terminal and the log file.
+struct Log(std::fs::File);
+
+impl Log {
+    fn line(&mut self, s: &str) {
+        println!("{s}");
+        let _ = writeln!(self.0, "{s}"); // the terminal has it even if the log write fails
+    }
+}
+
+fn main() -> Result<(), String> {
+    let a = args()?;
+    std::fs::create_dir_all(&a.out).map_err(|e| format!("can't make {}: {e}", a.out.display()))?;
+    let log_path = a.out.join("probe.log");
+    let mut log = Log(std::fs::File::create(&log_path).map_err(|e| format!("can't write {}: {e}", log_path.display()))?);
+    log.line(&format!("Lumix probe, camera {} , live view port {}, output {}", a.ip, a.port, a.out.display()));
+    if a.discover {
+        discover(&a, &mut log);
+    }
+    let ip = net::parse_ip(&a.ip)?;
+    let mut t = NetTransport::open(ip, a.port)?;
+    log.line(&format!("live view will come in on UDP port {}", t.udp_port()));
+
+    let state = cmd(&mut t, &mut log, "/cam.cgi?mode=getstate")?;
+    if a.handshake || state.wants_handshake() {
+        let path = format!("/cam.cgi?mode=accctrl&type=req_acc&value={}&value2=Picabia", "4D454930-0100-1000-8000-PICABIA00001");
+        cmd(&mut t, &mut log, &path)?;
+        cmd(&mut t, &mut log, "/cam.cgi?mode=getstate")?;
+    }
+    cmd(&mut t, &mut log, "/cam.cgi?mode=camcmd&value=recmode")?;
+    let start = format!("/cam.cgi?mode=startstream&value={}", t.udp_port());
+    cmd(&mut t, &mut log, &start)?;
+    stream(&a, &mut t, &mut log, &start);
+    if a.measure_timeout {
+        measure_timeout(&mut t, &mut log, &start);
+    }
+    if a.capture {
+        cmd(&mut t, &mut log, "/cam.cgi?mode=camcmd&value=capture")?;
+    }
+    cmd(&mut t, &mut log, "/cam.cgi?mode=stopstream")?;
+    log.line(&format!("done: send {} and the frames beside it", log_path.display()));
+    Ok(())
+}
+
+/// Send one command and log the answer in full.
+fn cmd(t: &mut NetTransport, log: &mut Log, path: &str) -> Result<Reply, String> {
+    log.line(&format!("\n> GET {path}"));
+    let started = Instant::now();
+    match t.get(path) {
+        Ok(r) => {
+            log.line(&format!("< HTTP {} in {} ms, {} bytes", r.status, started.elapsed().as_millis(), r.body.len()));
+            log.line(&String::from_utf8_lossy(&r.body));
+            Ok(Reply::parse(&r.body))
+        }
+        Err(e) => {
+            log.line(&format!("! {e}"));
+            Err(e)
+        }
+    }
+}
+
+/// Live view for `a.seconds`, refreshing every 5 s.
+fn stream(a: &Args, t: &mut NetTransport, log: &mut Log, start: &str) {
+    log.line(&format!("\nlive view for {} s", a.seconds));
+    let mut buf = vec![0u8; MAX_DATAGRAM];
+    let began = Instant::now();
+    let mut last_refresh = Instant::now();
+    let (mut datagrams, mut saved, mut bad, mut last_at) = (0usize, 0usize, 0usize, None::<Instant>);
+    let mut gaps = Vec::new();
+    while began.elapsed() < Duration::from_secs(a.seconds) {
+        if last_refresh.elapsed() > Duration::from_secs(5) {
+            let _ = cmd(t, log, "/cam.cgi?mode=getstate"); // logged; a failed refresh shows in the frame count
+            let _ = cmd(t, log, start);
+            last_refresh = Instant::now();
+        }
+        let Ok(Some(n)) = t.recv(&mut buf, 200) else { continue };
+        let d = buf.get(..n).unwrap_or_default();
+        datagrams += 1;
+        if let Some(prev) = last_at {
+            gaps.push(prev.elapsed().as_millis());
+        }
+        last_at = Some(Instant::now());
+        if datagrams <= 3 {
+            log.line(&format!("datagram {datagrams}: {n} bytes\n{}", hex_dump(d, 64)));
+        }
+        match extract_jpeg(d) {
+            Ok(f) => {
+                if datagrams <= 3 {
+                    log.line(&format!("  header {} bytes, JPEG {} bytes", f.header_len, f.jpeg.len()));
+                }
+                if saved < a.frames {
+                    let p = a.out.join(format!("frame_{:03}.jpg", saved + 1));
+                    if std::fs::write(&p, &f.jpeg).is_ok() {
+                        saved += 1;
+                    }
+                }
+            }
+            Err(e) => {
+                bad += 1;
+                if bad <= 3 {
+                    log.line(&format!("  no frame in datagram {datagrams}: {e}\n{}", hex_dump(d, 96)));
+                }
+            }
+        }
+    }
+    let avg = if gaps.is_empty() { 0 } else { gaps.iter().sum::<u128>() / gaps.len() as u128 };
+    log.line(&format!(
+        "live view: {datagrams} datagrams in {} s ({:.1}/s), {saved} frames saved, {bad} without a frame, {avg} ms apart on average, longest gap {} ms",
+        a.seconds,
+        datagrams as f64 / a.seconds as f64,
+        gaps.iter().max().copied().unwrap_or(0)
+    ));
+    if datagrams == 0 {
+        log.line("no datagrams: on macOS, allow the terminal under System Settings › Privacy & Security › Local Network, and check the firewall");
+    }
+}
+
+/// How long the stream lasts with no further command (at most 60 s).
+fn measure_timeout(t: &mut NetTransport, log: &mut Log, start: &str) {
+    log.line("\nmeasuring how long live view lasts with no further command (up to 60 s)…");
+    let _ = cmd(t, log, start); // a fresh start to time from
+    let began = Instant::now();
+    let mut buf = vec![0u8; MAX_DATAGRAM];
+    let mut last = Instant::now();
+    while began.elapsed() < Duration::from_secs(60) {
+        if let Ok(Some(_)) = t.recv(&mut buf, 200) {
+            last = Instant::now();
+        } else if last.elapsed() > Duration::from_secs(2) {
+            break;
+        }
+    }
+    log.line(&format!("live view stopped about {} ms after startstream", last.duration_since(began).as_millis()));
+}
+
+/// SSDP search; save each answer's device description.
+fn discover(a: &Args, log: &mut Log) {
+    log.line("\nSSDP search (3 s)…");
+    match net::discover(3000) {
+        Err(e) => log.line(&format!("! {e}")),
+        Ok(found) => {
+            log.line(&format!("{} answered", found.len()));
+            for (i, f) in found.iter().enumerate() {
+                log.line(&format!("- {} lumix={} server={} st={} usn={} location={}", f.ip, f.likely_lumix, f.server, f.st, f.usn, f.location));
+                if let Ok(r) = net::fetch(&f.location) {
+                    let p = a.out.join(format!("device_{}.xml", i + 1));
+                    let _ = std::fs::write(&p, &r.body); // the log line above already has the location
+                    log.line(&format!("  description saved: {}", p.display()));
+                }
+            }
+        }
+    }
+}

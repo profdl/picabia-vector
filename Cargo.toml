@@ -61,6 +61,8 @@ vectorcraft-stencil = { path = "crates/stencil" }
 vectorcraft-grbl = { path = "crates/grbl" }
 # PICABIA: physics (L2): rigid-body settings and the drop-and-settle simulation (rapier2d).
 vectorcraft-physics = { path = "crates/physics" }
+# PICABIA: the Lumix camera link (standalone): protocol, simulator, std::net transport, SSDP.
+vectorcraft-lumix = { path = "crates/lumix" }
 
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }
