@@ -80,6 +80,7 @@ impl VectorcraftApp {
                 print_tiling: None,
                 live_paint_gaps: None,
                 hidden_chars: Default::default(),
+                selection_marks: Default::default(),
                 selection_box: None,
                 selection_bounds: None,
                 content_bounds: None,
@@ -558,6 +559,7 @@ impl VectorcraftApp {
         plugin_runs::show(self, &ctx);
         trace_runs::show(self, &ctx);
         crate::picabia_ui::show(self, &ctx); // PICABIA: the Laser window (or its Stop bar), the Stencil window, stencil markers
+        opening::show(self, &ctx);
         palette::show(self, &ctx);
         if self.custom_titlebar {
             titlebar::resize_zones(ui);
