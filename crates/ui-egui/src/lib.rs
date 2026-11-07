@@ -58,6 +58,7 @@ mod panel_docking;
 pub mod panels;
 pub mod picabia; // PICABIA: Picabia's name, app id and About credits
 // PICABIA: the laser export dialogs, the Laser window, the stencil settings and Picabia's UI state.
+pub mod picabia_camera_window; // PICABIA: the Camera window (picabia_ui shows it)
 pub mod picabia_laser_export;
 pub mod picabia_laser_window;
 pub mod picabia_stencil_panel;

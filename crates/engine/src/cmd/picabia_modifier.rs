@@ -34,6 +34,8 @@ pub(crate) struct PicabiaState {
     pub(crate) handles: handles::HandleState,
     /// The live physics session, when one is open (`picabia_physics::session`).
     pub(crate) physics: Option<Box<super::picabia_physics::session::Live>>,
+    /// The camera link (`camera.*`, [`super::picabia_camera`]).
+    pub(crate) camera: super::picabia_camera::CameraLink,
 }
 
 /// What a connected laser machine reports ([`PicabiaState::laser_machine`]). The G-code commands

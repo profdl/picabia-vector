@@ -1,5 +1,6 @@
-//! PICABIA: what Picabia's laser and stencil UI shares, and its few ties to the app: its state in
-//! [`crate::VectorcraftApp::picabia`], its UI commands (`laser.panel`, `ui.stencilSettings`), the
+//! PICABIA: what Picabia's laser, stencil and camera UI shares, and its few ties to the app: its state in
+//! [`crate::VectorcraftApp::picabia`], its UI commands (`laser.panel`, `ui.stencilSettings`, the
+//! camera's in `picabia_camera_window`), the
 //! dialog a laser export command asks for when it is run without a path, what it draws each frame
 //! (the Laser window, its bar and checklist, the Stencil window and the stencil's canvas markers)
 //! and small widgets in VectorCraft's look. Upstream files reach these through one-line
@@ -25,6 +26,8 @@ pub const PHYSICS_SETTINGS: &str = "ui.physicsSettings";
 pub struct PicabiaUi {
     /// The Laser window.
     pub laser: crate::picabia_laser_window::LaserPanel,
+    /// The Camera window.
+    pub camera: crate::picabia_camera_window::CameraPanel,
     /// The Stencil window is open.
     pub stencil_open: bool,
     /// The Appearance panel's physics row is open (`picabia::physics`).
@@ -42,6 +45,9 @@ pub struct PicabiaUi {
 
 /// Picabia's UI commands (seam in `menus::run_ui_command`); `None`: not one of them.
 pub fn command(app: &mut VectorcraftApp, id: &str, _p: &Value) -> Option<Result<Value, String>> {
+    if let Some(r) = crate::picabia_camera_window::command(app, id) {
+        return Some(r);
+    }
     match id {
         LASER_PANEL => {
             crate::picabia_laser_window::open(app);
@@ -79,6 +85,7 @@ pub fn show(app: &mut VectorcraftApp, ctx: &egui::Context) {
     crate::picabia::badge::show(app, ctx);
     crate::picabia_stencil_panel::window(app, ctx);
     crate::picabia_laser_window::show(app, ctx);
+    crate::picabia_camera_window::show(app, ctx);
     crate::picabia::sim_bar::show(app, ctx);
 }
 

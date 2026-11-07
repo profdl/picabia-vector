@@ -6589,6 +6589,7 @@ dependencies = [
  "vectorcraft-format",
  "vectorcraft-geom",
  "vectorcraft-grbl",
+ "vectorcraft-lumix",
  "vectorcraft-metafile",
  "vectorcraft-modifiers",
  "vectorcraft-pathops",
@@ -6665,6 +6666,10 @@ version = "0.21.0"
 dependencies = [
  "serialport",
 ]
+
+[[package]]
+name = "vectorcraft-lumix"
+version = "0.21.0"
 
 [[package]]
 name = "vectorcraft-mcp"

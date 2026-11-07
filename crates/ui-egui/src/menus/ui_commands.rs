@@ -1581,4 +1581,23 @@ pub const UI_COMMANDS: &[(&str, &str, &str, &str)] = &[
         "",
         "{} give the selected objects that have none physics settings (physics.set, dynamic with the defaults; one undo step) and open them in the Appearance panel",
     ),
+    // PICABIA: the Camera window and its capture (`picabia_camera_window::command`).
+    (
+        crate::picabia_camera_window::CAMERA_PANEL,
+        "Camera…",
+        "",
+        "{} open the Camera window: connect to a Lumix camera (or \"sim\"), live view, the capture folder and prefix, Capture",
+    ),
+    (
+        crate::picabia_camera_window::CAMERA_CAPTURE,
+        "Capture Frame to Folder",
+        "",
+        "{} capture (camera.capture) into the capture folder, asking for the folder first when none is chosen; with the Camera window's Place option, also places the frame on the active artboard as a linked image (file.place) → camera.capture's reply, or {saved: false, cancelled: true}",
+    ),
+    (
+        crate::picabia_camera_window::CAMERA_FOLDER,
+        "Choose Capture Folder…",
+        "",
+        "{} choose the camera's capture folder with the folder picker (camera.settings) → {folder | null}",
+    ),
 ];
