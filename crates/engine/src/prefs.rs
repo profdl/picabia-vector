@@ -323,6 +323,9 @@ pub struct Prefs {
     pub picabia_laser: Value,
     #[serde(skip_serializing_if = "Value::is_null")]
     pub picabia_machine: Value,
+    /// PICABIA: the camera link's settings (address, capture folder, prefix, place option).
+    #[serde(skip_serializing_if = "Value::is_null")]
+    pub picabia_camera: Value,
 }
 
 impl Default for Prefs {
@@ -488,6 +491,7 @@ impl Default for Prefs {
             import_matches: vec![],
             picabia_laser: Value::Null,   // PICABIA: the laser export's settings.
             picabia_machine: Value::Null, // PICABIA: the laser machine profile.
+            picabia_camera: Value::Null,  // PICABIA: the camera link's settings.
         }
     }
 }

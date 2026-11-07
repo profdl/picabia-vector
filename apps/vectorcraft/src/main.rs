@@ -391,6 +391,7 @@ fn main() -> std::process::ExitCode {
                 if vectorcraft_ui_egui::picabia_laser_window::hardware_allowed(control_port.is_some()) {
                     session.laser_enable_hardware();
                 }
+                session.camera_enable_network(); // PICABIA: the desktop app reaches real Lumix cameras.
                 // The profiles loaded before come back before the preferences name any of them.
                 prefs_dir::attach_profile_store(&mut session);
                 prefs_dir::attach_plugin_store(&mut session);

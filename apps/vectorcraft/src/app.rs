@@ -88,6 +88,7 @@ impl eframe::App for App {
     }
     fn on_exit(&mut self) {
         self.app.session.laser_shutdown(); // PICABIA: quitting stops a running laser job and closes the port.
+        self.app.session.camera_shutdown(); // PICABIA: quitting ends the camera link (never waits on the camera).
         file_access::unconfined(|| save_prefs(&self.app));
         end_before_teardown(self.frames);
     }
