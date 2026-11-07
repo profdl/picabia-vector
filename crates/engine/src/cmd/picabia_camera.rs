@@ -151,7 +151,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Camera Status",
             [],
             None,
-            "{} → {connected, phase (closed|connecting|connected|streaming|lost), ip, sim, network (real cameras allowed), liveView, fps, frames (received so far), dropped (datagrams without a frame), lastDrop, noFrames (streaming but nothing arriving), hint (what to try, plain) | null, lastError, failures, retryInSec | null, handshaken, camera {batt, cammode, …: the camera's last getstate} , folder | null, prefix, nextFile | null, place, log [the last 50 requests and answers]}",
+            "{} → {connected, phase (closed|connecting|connected|streaming|lost), ip, sim, network (real cameras allowed), liveView, fps, frames (received so far), dropped (datagrams without a frame), lastDrop, noFrames (streaming but nothing arriving), hint (what to try, plain) | null, lastError, failures, retryInSec | null, handshaken, awaitingAccept (a new computer waits for the camera to take it on), camera {batt, cammode, …: the camera's last getstate} , folder | null, prefix, nextFile | null, place, log [the last 50 requests and answers]}",
             always,
             status
         ),
@@ -160,7 +160,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Connect to Camera",
             [],
             None,
-            "{ip? (the camera's IP address; default the last one, else 192.168.54.1, the camera's own Wi-Fi; \"sim\": the simulated camera), sim? (ip \"sim\" only: {requireHandshake, offline, refuseCapture, fps (1-60), streamTimeoutMs})} (starts the link and live view; poll camera.status until phase is streaming; a camera that doesn't answer is tried again with a backoff until camera.disconnect; real cameras only from the desktop app or with PICABIA_CAMERA_NETWORK=1) → camera.status",
+            "{ip? (the camera's IP address; default the last one, else 192.168.54.1, the camera's own Wi-Fi; \"sim\": the simulated camera), sim? (ip \"sim\" only: {requireHandshake, acceptAfterMs (a new device is taken on only this long after its first handshake, as a camera confirming it), offline, refuseCapture, fps (1-60), streamTimeoutMs})} (starts the link and live view; poll camera.status until phase is streaming; a camera that doesn't answer is tried again with a backoff until camera.disconnect; real cameras only from the desktop app or with PICABIA_CAMERA_NETWORK=1) → camera.status",
             always,
             connect
         ),
@@ -241,7 +241,7 @@ fn link_json(s: &Session) -> Value {
     json!({
         "connected": false, "phase": "closed", "ip": null, "sim": false, "liveView": false, "fps": 0, "frames": 0,
         "dropped": 0, "lastDrop": null, "noFrames": false, "hint": null, "lastError": null, "failures": 0,
-        "retryInSec": null, "handshaken": false, "camera": {}, "log": [],
+        "retryInSec": null, "handshaken": false, "awaitingAccept": false, "camera": {}, "log": [],
     })
 }
 

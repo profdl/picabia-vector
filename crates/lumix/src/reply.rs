@@ -4,8 +4,11 @@
 //! `<camrply><result>ok</result>…</camrply>`, where `result` is `ok` or an `err_*` code
 //! (`err_reject`, `err_busy`, `err_unsuitable_app`, `err_non_support`, …), and `getstate` adds a
 //! `<state>` element of leaf values (`batt`, `cammode`, `sdcardstatus`, `rec`, …). The reply is
-//! read leniently: every leaf element's text is kept by name, and a reply that isn't XML at all
-//! still gives its text for the log.
+//! read leniently: every leaf element's text is kept by name.
+//!
+//! `accctrl` answers in plain text instead (seen on a GX85, 2026-11-07):
+//! `ok,GX85-B3B1DA,remote,encrypted`, or `ok_under_research,GX85-B3B1DA,remote,open` for a device the
+//! camera hasn't taken on yet. Its fields are kept as `result`, `device`, `access`, `link`.
 
 /// The most of a reply that is read.
 pub const MAX_REPLY: usize = 16 * 1024;
@@ -26,7 +29,10 @@ impl Reply {
     pub fn parse(body: &[u8]) -> Reply {
         let body = body.get(..MAX_REPLY.min(body.len())).unwrap_or_default();
         let text = String::from_utf8_lossy(body);
-        let fields = leaves(&text);
+        let mut fields = leaves(&text);
+        if fields.is_empty() && !text.trim_start().starts_with('<') {
+            fields = plain(&text);
+        }
         let result = fields.iter().find(|(k, _)| k == "result").map(|(_, v)| v.trim().to_ascii_lowercase());
         Reply { result, fields }
     }
@@ -40,6 +46,11 @@ impl Reply {
     /// firmware answers `err_unsuitable_app` or `err_reject` until `accctrl` is sent).
     pub fn wants_handshake(&self) -> bool {
         matches!(self.result.as_deref(), Some("err_unsuitable_app" | "err_reject" | "err_non_support_app"))
+    }
+
+    /// The camera has the request but hasn't taken this device on yet (`ok_under_research`).
+    pub fn pending(&self) -> bool {
+        self.result.as_deref().is_some_and(|r| r.starts_with("ok_under_research"))
     }
 
     /// The first leaf named `name`.
@@ -72,6 +83,16 @@ fn leaves(text: &str) -> Vec<(String, String)> {
     out
 }
 
+/// A plain-text reply's comma-separated fields.
+fn plain(text: &str) -> Vec<(String, String)> {
+    let line = text.lines().next().unwrap_or_default().trim();
+    let first = line.split(',').next().unwrap_or_default();
+    if first.is_empty() || !first.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+        return Vec::new();
+    }
+    ["result", "device", "access", "link"].iter().zip(line.split(',')).map(|(k, v)| (k.to_string(), v.trim().to_string())).collect()
+}
+
 /// The five predefined XML entities.
 fn unescape(s: &str) -> String {
     s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
@@ -98,6 +119,17 @@ mod tests {
         assert!(!r.ok());
         assert!(r.wants_handshake());
         assert!(!Reply::parse(b"<camrply><result>err_busy</result></camrply>").wants_handshake());
+    }
+
+    #[test]
+    fn reads_the_plain_handshake_reply() {
+        let r = Reply::parse(b"ok,GX85-B3B1DA,remote,encrypted");
+        assert!(r.ok() && !r.pending());
+        assert_eq!(r.field("device"), Some("GX85-B3B1DA"));
+        assert_eq!(r.field("link"), Some("encrypted"));
+        let r = Reply::parse(b"ok_under_research,GX85-B3B1DA,remote,open\r\n");
+        assert!(!r.ok() && r.pending());
+        assert_eq!(r.field("access"), Some("remote"));
     }
 
     #[test]

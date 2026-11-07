@@ -86,6 +86,19 @@ fn handshake_when_the_camera_wants_one() {
 }
 
 #[test]
+fn a_new_computer_waits_for_the_camera_to_accept_it() {
+    let mut s = Session::new();
+    s.execute("camera.connect", &json!({"ip": "sim", "sim": {"requireHandshake": true, "acceptAfterMs": 1500}})).unwrap();
+    let st = wait_for(&mut s, |st| st["awaitingAccept"] == true);
+    assert_eq!(st["phase"], "connecting", "{st}");
+    assert!(st["hint"].as_str().unwrap().contains("accept"), "{st}");
+    let st = wait_for(&mut s, |st| st["phase"] == "streaming");
+    assert_eq!(st["phase"], "streaming", "{st}");
+    assert_eq!(st["awaitingAccept"], false);
+    assert_eq!(st["handshaken"], true);
+}
+
+#[test]
 fn captures_numbered_frames_into_the_folder() {
     let mut s = Session::new();
     let dir = folder("numbered");

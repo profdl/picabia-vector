@@ -66,9 +66,43 @@ fn handshakes_when_refused() {
 }
 
 #[test]
+fn waits_for_the_camera_to_accept_a_new_device() {
+    // As a GX85 did the first time: ok_under_research, then err_reject until it takes us on.
+    let mut r = Rig::new(|o| {
+        o.require_handshake = true;
+        o.accept_after_ms = Some(12_000);
+    });
+    r.ctl.connect(r.now());
+    r.run(3_000);
+    let s = r.ctl.snapshot(r.now());
+    assert_eq!(s.phase, Phase::Connecting, "{:?}", s.log);
+    assert!(s.awaiting_accept);
+    r.run(12_000);
+    let s = r.ctl.snapshot(r.now());
+    assert_eq!(s.phase, Phase::Streaming, "{:?}", s.log);
+    assert!(!s.awaiting_accept);
+    assert!(s.handshaken);
+    assert!(r.cam.stats().handshakes >= 2, "asked again while waiting");
+}
+
+#[test]
+fn gives_up_when_never_accepted() {
+    let mut r = Rig::new(|o| {
+        o.require_handshake = true;
+        o.accept_after_ms = Some(10_000_000);
+    });
+    r.ctl.connect(r.now());
+    r.run(95_000);
+    let s = r.ctl.snapshot(r.now());
+    assert!(matches!(s.phase, Phase::Lost | Phase::Connecting), "{:?}", s.log);
+    assert!(s.last_error.as_deref().is_some_and(|e| e.contains("didn't accept")), "{:?}", s.last_error);
+}
+
+#[test]
 fn keep_alive_keeps_the_stream() {
-    // The camera stops after 3 s without a command; the link must keep it going for a minute.
-    let mut r = Rig::new(|o| o.stream_timeout_ms = 3_000);
+    // A GX85 stops about 11.3 s after the last startstream (measured); the link must keep it going
+    // for a minute.
+    let mut r = Rig::new(|o| o.stream_timeout_ms = 11_000);
     r.ctl.connect(r.now());
     r.run(60_000);
     let s = r.ctl.snapshot(r.now());

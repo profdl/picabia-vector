@@ -154,6 +154,7 @@ impl Worker {
             "failures": s.failures,
             "retryInSec": s.retry_in_ms.map(|ms| (ms as f64 / 100.0).ceil() / 10.0),
             "handshaken": s.handshaken,
+            "awaitingAccept": s.awaiting_accept,
             "camera": camera,
             "log": s.log,
         })
@@ -170,6 +171,9 @@ impl Drop for Worker {
 fn hint(s: &Snapshot, ip: &str, ended: Option<&str>) -> Option<String> {
     if ended.is_some() {
         return Some("Connect again.".into());
+    }
+    if s.awaiting_accept {
+        return Some("Look at the camera: if it asks whether to connect to Picabia, accept. (The camera takes a new computer on once; after that it connects at once.)".into());
     }
     if s.phase == Phase::Lost {
         return Some(format!(
@@ -290,6 +294,9 @@ pub fn sim_options(p: Option<&Value>) -> Result<SimOptions, String> {
     }
     if let Some(ms) = num("streamTimeoutMs", 500.0, 600_000.0)? {
         o.stream_timeout_ms = ms as u64;
+    }
+    if let Some(ms) = num("acceptAfterMs", 0.0, 600_000.0)? {
+        o.accept_after_ms = Some(ms as u64);
     }
     Ok(o)
 }

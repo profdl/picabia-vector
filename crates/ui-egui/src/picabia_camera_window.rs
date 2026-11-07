@@ -252,7 +252,7 @@ fn live_view(ui: &mut Ui, panel: &CameraPanel, st: &Value, t: &Tokens) {
 
 fn status_line(ui: &mut Ui, st: &Value, t: &Tokens) {
     let phase = s(st, "phase").unwrap_or_default();
-    let mut line = phase_label(&phase).to_string();
+    let mut line = if st["awaitingAccept"] == true { tl!("Waiting for the camera to accept…") } else { phase_label(&phase) }.to_string();
     if phase == "streaming" {
         line.push_str(&format!(" · {} fps · {} {}", f(st, "fps").unwrap_or(0.0), f(st, "frames").unwrap_or(0.0), tl!("frames")));
     }

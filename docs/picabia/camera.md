@@ -1,10 +1,11 @@
 # Camera link (Panasonic Lumix GX85)
 
-**Status:** 2026-11-06. Built and tested against the simulated camera (PIC34.1 to PIC34.6, PIC34.9),
-**not yet tried on a real camera**: the protocol below is still a set of hypotheses from community
-notes on Panasonic's Wi-Fi remote control. The probe (PIC34.0) is written; running it on the owner's
-DMC-GX85 is the next step, and this page is rewritten from its log. Full-resolution download
-(PIC34.7) and lock focus and exposure (PIC34.8) wait for that log.
+**Status:** 2026-11-07. The probe (PIC34.0) ran on the owner's DMC-GX85: handshake, record mode,
+live view (640×360 JPEGs) and the shutter all work, and the protocol below is measured, not guessed.
+The link was corrected to match (the plain-text handshake reply, waiting for the camera to accept a
+new computer, re-sending live view every 5 s). **The app itself hasn't been connected to the camera
+yet**: that's the next check. Full-resolution download (PIC34.7) and lock focus and exposure
+(PIC34.8) are still to do.
 
 Use a Lumix GX85, mounted once, as a fixed animation-stand camera: see its live view in a Camera
 window, fire the shutter from Picabia, and collect numbered frames in a folder you choose,
@@ -42,7 +43,7 @@ From the control channel or MCP:
    the Mac to the camera's Wi-Fi network.
 2. Run:
    ```
-   cargo run -p vectorcraft-lumix --example probe -- --out ~/Desktop/gx85-probe --capture --measure-timeout
+   cargo run -p vectorcraft-lumix --example probe
    ```
    Add `--handshake` if the commands are refused, and `--ip …` if the camera is on another network.
    With the camera on the studio network, `--discover` also searches with SSDP and saves each
@@ -51,37 +52,36 @@ From the control channel or MCP:
    datagrams at all, check System Settings ▸ Privacy & Security ▸ Local Network.
 4. Bring back `probe.log` and the `frame_*.jpg` files beside it.
 
-## Protocol (hypotheses until PIC34.0)
+## Protocol (measured on the owner's GX85, firmware D2.91, 2026-11-07)
 
-- **Commands** are HTTP GETs on port 80 of the camera:
-  - `/cam.cgi?mode=camcmd&value=recmode` switches to record mode.
-  - `/cam.cgi?mode=camcmd&value=capture` fires the shutter.
-  - `/cam.cgi?mode=startstream&value=<udpPort>` starts live view to that UDP port.
-  - `/cam.cgi?mode=stopstream` stops it.
-  - `/cam.cgi?mode=getstate` returns status and also serves as the keep-alive.
+Probe runs on 2026-11-07 with the Mac on the camera's own Wi-Fi (camera at `192.168.54.1`, the camera
+naming itself `GX85-B3B1DA`). What they showed:
 
-  Replies are small XML documents, `<camrply><result>ok</result>…</camrply>`.
-- **Access handshake.** Some firmware refuses commands until it gets
-  `/cam.cgi?mode=accctrl&type=req_acc&value=<uuid>&value2=<deviceName>`. The controller tries the
-  commands without it first, and sends it once if one is refused with `err_unsuitable_app`,
-  `err_reject` or `err_non_support_app`. The uuid is made once and kept in the preferences, so the
-  camera sees the same device every time.
-- **Live view** arrives as UDP datagrams sent to the Mac's address on the port we asked for. Each
-  one is a binary header followed by a JPEG; the frame is taken from the first `FF D8` through the
-  last `FF D9`. The probe hex-dumps the first headers.
-- **Keep-alive.** The stream stops after a few seconds unless it's refreshed. The link sends
-  `getstate` every 5 s and `startstream` every 10 s, and sends `startstream` again at once when no
-  frame has come for 3 s. PIC34.0 measures the real timeout.
-- **Full resolution (phase 2).** After a capture the JPEG is on the SD card. It can be fetched
-  through the camera's DLNA/UPnP ContentDirectory service (port 60606 on many Lumix bodies).
-- **Camera settings (phase 2).** Focus and exposure through `mode=setsetting` calls.
-- **Discovery.** When the camera joins another network, it should answer an SSDP M-SEARCH as a
-  media server, naming Panasonic in its `SERVER` header. Find lists everything that answers, the
-  likely cameras first.
+- **Commands** are HTTP GETs on port 80, answered in 13–90 ms (`recmode` about 0.7 s), as XML
+  `<camrply><result>ok</result>…</camrply>`:
+  - `/cam.cgi?mode=getstate`: battery, `cammode` (`play`, then `rec`), card status, remaining
+    shots, firmware `version` and more. It's also the keep-alive.
+  - `/cam.cgi?mode=camcmd&value=recmode`: switches to record mode.
+  - `/cam.cgi?mode=startstream&value=<udpPort>`: starts live view to that port.
+  - `/cam.cgi?mode=camcmd&value=capture`: fires the shutter (answered in 56 ms).
+  - `/cam.cgi?mode=stopstream`: stops live view.
+- **The access handshake is required.** Before it, `getstate` answers `err_unsuitable_app`.
+  `/cam.cgi?mode=accctrl&type=req_acc&value=<uuid>&value2=<name>` answers in **plain text, not
+  XML**:
+  - On the first run it answered `ok_under_research,GX85-B3B1DA,remote,open`, and every command
+    after it got `err_reject`. The probe didn't wait then.
+  - On the next run it answered `ok,GX85-B3B1DA,remote,encrypted`, and everything worked.
 
-Sources: the public community notes this page relies on are cited by URL here once PIC34.0 has
-checked them. This is Panasonic's protocol, not Adobe's, so the clean-room rule doesn't apply to
-it. Still, only public notes and our own probe of the owner's camera are used.
+  So the camera takes a new device on once. The link now waits for that: it tries `getstate`
+  every second and sends the handshake again every 5 s, for up to 90 s, and the window says to look
+  at the camera.
+- **Live view**: UDP datagrams from the camera, each a **178-byte header** followed by one JPEG of
+  **640×360** (16:9) and about 23–25 KB. All 66 datagrams in 6 s held a frame. The header's first
+  two bytes change from frame to frame; the rest of its layout isn't needed.
+- **Stream timeout**: live view stops about **11.3 s** after the last `startstream`. The link sends
+  `startstream` and `getstate` every 5 s.
+- **Still to learn**: full-resolution download over DLNA (`--discover`, with the camera on the
+  studio network) and the `setsetting` values (PIC34.8).
 
 ## How it's built
 
@@ -147,7 +147,7 @@ Find waits for its 1.5 s search, so the window pauses that long.
 
 | Task | What | Status |
 |---|---|---|
-| **PIC34.0** | The probe example. | Written. Runs, and fails cleanly with no camera. **Next: run it on the GX85** (see above). |
+| **PIC34.0** | The probe example. | Done: ran on the GX85 on 2026-11-07 (see Protocol). Double-clicking the built probe runs it with capture and the timeout measurement, and saves to `~/Desktop/gx85-probe`. |
 | **PIC34.1** | Crate: controller, frame, reply, simulator. | Done. Unit tests and random-input tests (no panics, sizes capped). |
 | **PIC34.2** | Native transport, keep-alive, reconnect, timeouts. | Done. Tested on loopback and with the simulator, including a minute of keep-alive with a 3 s camera timeout and a camera that goes offline and comes back. Not yet on a camera. |
 | **PIC34.3** | Engine `camera.*`, preferences, numbered frames. | Done. Engine tests; the every-command sweep passes. |

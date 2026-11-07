@@ -2,14 +2,18 @@
 //!
 //! # Connecting
 //! `getstate` first (is anyone there?). If the camera refuses us as a client, the access handshake
-//! (`accctrl`) goes out once and the refused step is tried again. Then record mode, then live view
+//! (`accctrl`) goes out and the refused step is tried again. Seen on a GX85 (firmware D2.91,
+//! 2026-11-07): `getstate` answers `err_unsuitable_app` until the handshake; `accctrl` answers in
+//! plain text, `ok,GX85-B3B1DA,remote,encrypted` for a device it knows, and for a new one
+//! `ok_under_research,…` while every command is refused with `err_reject`, until the camera takes it
+//! on. While it is pending ([`Snapshot::awaiting_accept`]) `getstate` is tried every second and the
+//! handshake sent again every 5 s, for at most 90 s. Then record mode, then live view
 //! when it is wanted. A connect that gets no answer goes to [`Phase::Lost`] and is tried again
 //! after a backoff (1 s, doubling, at most 30 s), for as long as the link is open.
 //!
 //! # Keeping live view going
-//! *Hypothesis* (community notes): the camera stops streaming a few seconds after the last
-//! command. So `getstate` goes out every `keepalive_ms` and `startstream` again every
-//! `restream_ms`; when no frame has come for `frame_timeout_ms`, `startstream` goes out at once
+//! Measured on a GX85: live view stops about 11.3 s after the last `startstream`. So `getstate`
+//! goes out every `keepalive_ms` and `startstream` again every `restream_ms` (5 s each); when no frame has come for `frame_timeout_ms`, `startstream` goes out at once
 //! and [`Snapshot::no_frames`] says so (the usual cause on macOS is a refused Local Network
 //! permission). Several unanswered requests in a row count as the camera gone.
 
@@ -36,6 +40,8 @@ pub struct Options {
     pub keepalive_ms: u64,
     pub restream_ms: u64,
     pub frame_timeout_ms: u64,
+    /// The longest wait for the camera to accept a new device.
+    pub accept_timeout_ms: u64,
     /// Unanswered requests in a row before the camera counts as gone.
     pub max_failures: u32,
     pub backoff_min_ms: u64,
@@ -49,8 +55,9 @@ impl Default for Options {
             device_id: "4D454930-0100-1000-8000-PICABIA00001".into(),
             device_name: "Picabia".into(),
             keepalive_ms: 5_000,
-            restream_ms: 10_000,
+            restream_ms: 5_000,
             frame_timeout_ms: 3_000,
+            accept_timeout_ms: 90_000,
             max_failures: 3,
             backoff_min_ms: 1_000,
             backoff_max_ms: 30_000,
@@ -106,6 +113,8 @@ pub struct Snapshot {
     /// Live view is wanted (it streams once connected).
     pub live_view: bool,
     pub handshaken: bool,
+    /// The camera hasn't taken this device on yet (`ok_under_research`, then `err_reject`).
+    pub awaiting_accept: bool,
     /// Frames received so far, and the last one's number (the same; 0: none yet).
     pub frame_seq: u64,
     /// Datagrams that held no frame.
@@ -137,6 +146,11 @@ pub struct Controller {
     handshaken: bool,
     /// What to send again once the handshake is through.
     after_handshake: Option<RequestKind>,
+    /// Waiting for the camera to accept us, since (ms).
+    accept_since: Option<u64>,
+    /// While waiting: the next try, and the last handshake sent.
+    accept_retry_at: u64,
+    accept_last_ask: u64,
     last_keepalive: u64,
     last_restream: u64,
     stream_since: u64,
@@ -169,6 +183,9 @@ impl Controller {
             handshake_tried: false,
             handshaken: false,
             after_handshake: None,
+            accept_since: None,
+            accept_retry_at: 0,
+            accept_last_ask: 0,
             last_keepalive: 0,
             last_restream: 0,
             stream_since: 0,
@@ -269,6 +286,7 @@ impl Controller {
             phase: self.phase,
             live_view: self.live_view,
             handshaken: self.handshaken,
+            awaiting_accept: self.accept_since.is_some(),
             frame_seq: self.frame_seq,
             dropped: self.dropped,
             last_drop: self.last_drop.clone(),
@@ -356,12 +374,18 @@ impl Controller {
         self.queue.clear();
         self.retry_at = None;
         self.after_handshake = None;
+        self.accept_since = None;
+        self.handshake_tried = false;
         self.stream_since = now;
         self.push(RequestKind::Probe);
     }
 
     /// Periodic requests while connected.
     fn schedule(&mut self, now: u64) {
+        if self.phase == Phase::Connecting && self.accept_since.is_some() {
+            self.schedule_accept(now);
+            return;
+        }
         if !self.phase.ready() {
             return;
         }
@@ -384,6 +408,33 @@ impl Controller {
         if now.saturating_sub(self.last_keepalive) >= self.opts.keepalive_ms {
             self.push(RequestKind::KeepAlive);
         }
+    }
+
+    /// Waiting to be accepted: `getstate` every second, the handshake again every 5 s.
+    fn schedule_accept(&mut self, now: u64) {
+        if now < self.accept_retry_at {
+            return;
+        }
+        if now.saturating_sub(self.accept_last_ask) >= 5_000 {
+            self.accept_last_ask = now;
+            self.after_handshake = Some(RequestKind::Probe);
+            self.push(RequestKind::Handshake);
+        } else {
+            self.push(RequestKind::Probe);
+        }
+    }
+
+    /// Still not accepted: try again in a second, or give up after `accept_timeout_ms`.
+    fn keep_waiting(&mut self, now: u64) {
+        let since = *self.accept_since.get_or_insert(now);
+        if now.saturating_sub(since) >= self.opts.accept_timeout_ms {
+            self.accept_since = None;
+            self.last_error =
+                Some("the camera didn't accept this computer: on the camera, allow the connection from Picabia, then connect again".into());
+            self.lose(now);
+            return;
+        }
+        self.accept_retry_at = now + 1_000;
     }
 
     fn push(&mut self, kind: RequestKind) {
@@ -442,16 +493,24 @@ impl Controller {
         }
         if kind != RequestKind::Handshake && kind != RequestKind::Capture && r.wants_handshake() && !self.handshake_tried {
             self.after_handshake = Some(kind);
+            self.accept_last_ask = now;
             self.queue.push_front(RequestKind::Handshake);
             return;
         }
         match kind {
+            RequestKind::Probe if !r.ok() && self.handshake_tried && (r.wants_handshake() || self.accept_since.is_some()) => {
+                self.keep_waiting(now);
+            }
             RequestKind::Probe => {
+                if self.accept_since.take().is_some() {
+                    self.handshaken = true;
+                    self.note("the camera accepted this computer");
+                }
                 self.state = r.fields.clone();
                 self.backoff_ms = self.opts.backoff_min_ms;
                 self.push(RequestKind::RecMode);
             }
-            RequestKind::Handshake => self.on_handshake(r),
+            RequestKind::Handshake => self.on_handshake(r, now),
             RequestKind::RecMode => {
                 self.refused(kind, r);
                 self.phase = Phase::Connected;
@@ -471,9 +530,14 @@ impl Controller {
         }
     }
 
-    fn on_handshake(&mut self, r: &Reply) {
+    fn on_handshake(&mut self, r: &Reply, now: u64) {
         self.handshake_tried = true;
         self.handshaken = r.ok();
+        if r.pending() {
+            self.keep_waiting(now);
+            self.after_handshake = None;
+            return;
+        }
         if !r.ok() {
             self.last_error = Some(format!("the camera refused the access request ({})", r.result.as_deref().unwrap_or("no result")));
         }

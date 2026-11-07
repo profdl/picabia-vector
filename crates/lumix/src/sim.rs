@@ -1,8 +1,10 @@
 //! A simulated Lumix camera behind the same [`Transport`] as the real one, for tests and for
 //! trying the app without a camera (address `sim`).
 //!
-//! It answers `cam.cgi` as the community notes describe the real camera (see the crate docs):
-//! `getstate`, `accctrl` (required first when [`SimOptions::require_handshake`]), `recmode`,
+//! It answers `cam.cgi` as a GX85 did when probed (firmware D2.91, 2026-11-07): `getstate`,
+//! `accctrl` in plain text (required first when [`SimOptions::require_handshake`]; with
+//! [`SimOptions::accept_after_ms`] it is `ok_under_research` and commands are refused with
+//! `err_reject` until that long after the first request), `recmode`,
 //! `startstream` (it then streams for [`SimOptions::stream_timeout_ms`] after the last command,
 //! unless refreshed), `capture` and `stopstream`. Each frame is a 32-byte header and a JPEG from
 //! [`SimOptions::frame`]. It can be taken offline (every request times out) and back.
@@ -21,6 +23,9 @@ pub type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
 pub struct SimOptions {
     /// Commands are refused (`err_unsuitable_app`) until the access handshake.
     pub require_handshake: bool,
+    /// A new device is taken on only this long after its first `accctrl` (the camera's own
+    /// confirmation); `None`: at once.
+    pub accept_after_ms: Option<u64>,
     /// Every request times out.
     pub offline: bool,
     /// Frames per second while streaming (1-60).
@@ -42,6 +47,7 @@ impl Default for SimOptions {
     fn default() -> Self {
         SimOptions {
             require_handshake: false,
+            accept_after_ms: None,
             offline: false,
             fps: 30,
             stream_timeout_ms: 8_000,
@@ -87,6 +93,8 @@ pub struct SimStats {
 #[derive(Debug, Default)]
 struct State {
     handshaken: bool,
+    /// When the pending device is taken on (ms).
+    accepted_at: Option<u64>,
     rec_mode: bool,
     /// Streaming until this time (ms).
     streaming_until: Option<u64>,
@@ -142,12 +150,17 @@ impl SimCamera {
         let arg = |k: &str| query.split('&').find_map(|kv| kv.strip_prefix(k).and_then(|v| v.strip_prefix('=')));
         let mode = arg("mode").unwrap_or_default();
         if mode == "accctrl" {
-            st.handshaken = true;
             st.stats.handshakes += 1;
-            return Ok(reply("ok", ""));
+            let at = *st.accepted_at.get_or_insert(now + opts.accept_after_ms.unwrap_or(0));
+            st.handshaken = true;
+            let body = if now < at { "ok_under_research,SIM-000000,remote,open" } else { "ok,SIM-000000,remote,encrypted" };
+            return Ok(HttpReply { status: 200, body: body.as_bytes().to_vec() });
         }
         if opts.require_handshake && !st.handshaken {
             return Ok(reply("err_unsuitable_app", ""));
+        }
+        if st.accepted_at.is_some_and(|t| now < t) {
+            return Ok(reply("err_reject", ""));
         }
         // Any command keeps a stream going.
         if st.streaming_until.is_some_and(|t| now < t) {

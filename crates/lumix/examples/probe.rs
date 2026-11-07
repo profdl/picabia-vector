@@ -37,12 +37,15 @@ fn args() -> Result<Args, String> {
     let mut a = Args {
         ip: vectorcraft_lumix::DEFAULT_IP.into(),
         port: vectorcraft_lumix::DEFAULT_UDP_PORT,
-        out: std::env::temp_dir().join("lumix-probe"),
+        // Double-clicking the tool runs it with no options: put the results on the Desktop.
+        out: std::env::var_os("HOME")
+            .map(|h| PathBuf::from(h).join("Desktop").join("gx85-probe"))
+            .unwrap_or_else(|| std::env::temp_dir().join("lumix-probe")),
         frames: 10,
         seconds: 6,
         handshake: false,
-        capture: false,
-        measure_timeout: false,
+        capture: true,
+        measure_timeout: true,
         discover: false,
     };
     let mut it = std::env::args().skip(1);
@@ -56,7 +59,9 @@ fn args() -> Result<Args, String> {
             "--seconds" => a.seconds = val()?.parse().map_err(|_| "--seconds takes a number")?,
             "--handshake" => a.handshake = true,
             "--capture" => a.capture = true,
+            "--no-capture" => a.capture = false,
             "--measure-timeout" => a.measure_timeout = true,
+            "--no-measure-timeout" => a.measure_timeout = false,
             "--discover" => a.discover = true,
             "-h" | "--help" => return Err(include_str!("probe.rs").lines().take(12).collect::<Vec<_>>().join("\n")),
             _ => return Err(format!("unknown option {k} (--help lists them)")),
@@ -91,10 +96,8 @@ fn main() -> Result<(), String> {
     log.line(&format!("live view will come in on UDP port {}", t.udp_port()));
 
     let state = cmd(&mut t, &mut log, "/cam.cgi?mode=getstate")?;
-    if a.handshake || state.wants_handshake() {
-        let path = format!("/cam.cgi?mode=accctrl&type=req_acc&value={}&value2=Picabia", "4D454930-0100-1000-8000-PICABIA00001");
-        cmd(&mut t, &mut log, &path)?;
-        cmd(&mut t, &mut log, "/cam.cgi?mode=getstate")?;
+    if a.handshake || state.wants_handshake() || state.result.as_deref() == Some("err_reject") {
+        wait_for_acceptance(&mut t, &mut log)?;
     }
     cmd(&mut t, &mut log, "/cam.cgi?mode=camcmd&value=recmode")?;
     let start = format!("/cam.cgi?mode=startstream&value={}", t.udp_port());
@@ -109,6 +112,49 @@ fn main() -> Result<(), String> {
     cmd(&mut t, &mut log, "/cam.cgi?mode=stopstream")?;
     log.line(&format!("done: send {} and the frames beside it", log_path.display()));
     Ok(())
+}
+
+/// The access handshake, then wait (at most 90 s) until the camera takes commands.
+///
+/// Seen on a GX85 (2026-11-07): `accctrl` answers `ok_under_research,GX85-B3B1DA,remote,open` (not
+/// XML), and every command right after it is refused with `err_reject`: the request seems to wait
+/// for a person to accept it on the camera. So: ask, then try `getstate` every second, asking again
+/// every 5 s, logging every change.
+fn wait_for_acceptance(t: &mut NetTransport, log: &mut Log) -> Result<(), String> {
+    let path = "/cam.cgi?mode=accctrl&type=req_acc&value=4D454930-0100-1000-8000-PICABIA00001&value2=Picabia";
+    log.line("\n*** LOOK AT THE CAMERA'S SCREEN: if it asks whether to connect to \"Picabia\", accept. Waiting up to 90 s. ***");
+    let began = Instant::now();
+    let mut last_ask = None::<Instant>;
+    let mut last_seen = String::new();
+    while began.elapsed() < Duration::from_secs(90) {
+        if last_ask.is_none_or(|t| t.elapsed() >= Duration::from_secs(5)) {
+            last_ask = Some(Instant::now());
+            match t.get(path) {
+                Ok(r) => note_change(log, &mut last_seen, "accctrl", &String::from_utf8_lossy(&r.body), &began),
+                Err(e) => note_change(log, &mut last_seen, "accctrl", &format!("! {e}"), &began),
+            }
+        }
+        std::thread::sleep(Duration::from_millis(1000));
+        let r = t.get("/cam.cgi?mode=getstate")?;
+        let reply = Reply::parse(&r.body);
+        note_change(log, &mut last_seen, "getstate", reply.result.as_deref().unwrap_or("(no result)"), &began);
+        if reply.ok() {
+            log.line(&format!("accepted after {} s", began.elapsed().as_secs()));
+            log.line(&String::from_utf8_lossy(&r.body));
+            return Ok(());
+        }
+    }
+    log.line("the camera never accepted within 90 s; carrying on anyway, to log what it says");
+    Ok(())
+}
+
+/// Log `what`'s answer when it differs from the last one logged.
+fn note_change(log: &mut Log, last: &mut String, what: &str, answer: &str, began: &Instant) {
+    let line = format!("{what}: {}", answer.trim());
+    if line != *last {
+        log.line(&format!("[{:>2} s] {line}", began.elapsed().as_secs()));
+        *last = line;
+    }
 }
 
 /// Send one command and log the answer in full.
