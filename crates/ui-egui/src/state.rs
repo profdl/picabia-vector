@@ -204,6 +204,7 @@ pub const ICON_PANELS: &[(&str, &str, &str)] = &[
     (crate::panels::links::ID, "Links", "link"),
     (crate::panels::asset_export::ID, "Asset Export", "share-2"),
     (crate::panels::css_properties::ID, "CSS Properties", "globe"),
+    (crate::panels::three_d::ID, "3D and Materials", "dc-cube"),
     (crate::panels::variables::ID, "Variables", "chart-column"),
     (crate::addons::cleanup::ID, "Artwork Cleanup", "sparkles"),
     (crate::addons::color::ID, "Color Effects", "sun"),
@@ -375,6 +376,9 @@ pub struct UiState {
     #[serde(skip)]
     pub transient_focus: bool,
     pub control_bar: bool,
+    /// The Control bar is docked to the bottom of the window instead of the top
+    /// (`window.control.dock`).
+    pub control_bar_bottom: bool,
     pub toolbar: bool,
     pub toolbar_double: bool,
     /// Advanced toolbar (every tool group) instead of the categorized Basic toolbar.
@@ -966,6 +970,7 @@ impl Default for UiState {
             transient_panel: None,
             transient_focus: false,
             control_bar: false,
+            control_bar_bottom: false,
             toolbar: true,
             toolbar_double: false,
             toolbar_advanced: false,

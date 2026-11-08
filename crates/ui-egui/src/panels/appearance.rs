@@ -1333,7 +1333,7 @@ fn swatch_button(app: &mut VectorcraftApp, ui: &mut Ui, r: Rect, paint: &Paint, 
         open_popup(app, ui.ctx(), "color");
     }
     egui::Popup::menu(&resp).open_memory((resp.clicked() && !mixer).then_some(egui::SetOpenCommand::Toggle)).show(|ui| {
-        swatch_picker(app, ui, target);
+        widgets::menu_scroll(ui, |ui| swatch_picker(app, ui, target));
     });
 }
 
@@ -1609,18 +1609,20 @@ pub(crate) fn fx_menu(app: &mut VectorcraftApp, ui: &mut Ui) {
             None => groups.push((g, vec![(id.clone(), label.to_string())])),
         }
     }
-    for (g, items) in groups {
-        ui.menu_button(tl!(&g), |ui| {
-            crate::widgets::menu_scroll(ui, |ui| {
-                for (id, label) in items {
-                    if ui.button(format!("{label}…")).clicked() {
-                        app.run("effect.dialog", json!({"effect": id})).ok();
-                        ui.close();
+    crate::widgets::menu_scroll(ui, |ui| {
+        for (g, items) in groups {
+            ui.menu_button(tl!(&g), |ui| {
+                crate::widgets::menu_scroll(ui, |ui| {
+                    for (id, label) in items {
+                        if ui.button(format!("{label}…")).clicked() {
+                            app.run("effect.dialog", json!({"effect": id})).ok();
+                            ui.close();
+                        }
                     }
-                }
+                });
             });
-        });
-    }
+        }
+    });
     crate::picabia::appearance::add_menu(app, ui); // PICABIA: modifier kinds
 }
 

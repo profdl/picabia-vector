@@ -31,8 +31,9 @@ pub const FIT_ACTIVE_ARTBOARD: [&str; 2] = ["artboard.fitToArt", "artboard.fitTo
 /// [`ON_ACTIVE_ARTBOARD`] and [`FIT_ACTIVE_ARTBOARD`] commands and to a batch; the artboards the
 /// Artboard tool had selected for its commands; the view's center the app passes to Edit Symbol);
 /// an action leaves them out ([`Session::journal_for_action`]).
-const REPLAY_ONLY: [(&str, &str); 25] = [
+const REPLAY_ONLY: [(&str, &str); 26] = [
     ("file.new", "created"),
+    ("edit.newDocumentFromState", "created"),
     ("document.save", "modified"),
     ("file.saveAs", "modified"),
     ("edit.pasteInPlace", "artboard"),
