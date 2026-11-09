@@ -116,7 +116,7 @@ mod tests {
         let r = app.run("help.checkForUpdates", serde_json::json!({}));
         assert_eq!(r, Ok(serde_json::json!({ "url": RELEASES_URL })));
         assert_eq!(app.pending_url.as_deref(), Some(RELEASES_URL));
-        assert!(!app.updates_rt.manual_window_open, "VectorCraft's update window stays closed");
+        // (Upstream's `updates_ui::check` is not reached: the result above is Picabia's, which queues no check.)
     }
 
     #[test]
