@@ -1103,7 +1103,7 @@ impl Session {
         if let Some(c) = self.picabia_handles_cursor(p, mods, view) {
             return c; // PICABIA: the cursor over a modifier handle
         }
-                // While an edit is computed, a Cmd press is held for the active tool, which shows it is busy.
+        // While an edit is computed, a Cmd press is held for the active tool, which shows it is busy.
         let lent = if mods.cmd && self.lender.is_none() && !self.tool_editing() { self.lent_tool(self.tool.id(), &mods) } else { None };
         let c = match lent {
             Some(id) => {
