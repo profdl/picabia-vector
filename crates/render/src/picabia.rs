@@ -330,7 +330,14 @@ pub fn too_big(doc: &Document, n: &Node) -> Option<String> {
 
 /// What a copy's transform scales besides its geometry: everything, as a copy drawn bigger.
 pub fn scaling() -> Scaling {
-    Scaling { strokes: true, effects: Some(vectorcraft_effects::scale_effect), keep_type_strokes: false, keep_corners: false, patterns: true, keep_fit_when_flat: false }
+    Scaling {
+        strokes: true,
+        effects: Some(vectorcraft_effects::scale_effect),
+        keep_type_strokes: false,
+        keep_corners: false,
+        patterns: true,
+        keep_fit_when_flat: false,
+    }
 }
 
 fn node_count(n: &Node) -> usize {
