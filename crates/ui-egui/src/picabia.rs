@@ -116,7 +116,9 @@ mod tests {
         let r = app.run("help.checkForUpdates", serde_json::json!({}));
         assert_eq!(r, Ok(serde_json::json!({ "url": RELEASES_URL })));
         assert_eq!(app.pending_url.as_deref(), Some(RELEASES_URL));
-        assert!(!app.updates_rt.manual_window_open, "VectorCraft's update window stays closed");
+        // A frame runs any check the command queued: none starts, so no update window opens.
+        crate::updates_ui::tick(&mut app, &egui::Context::default());
+        assert!(!crate::updates_ui::blocks_input(&app), "VectorCraft's update window stays closed");
     }
 
     #[test]

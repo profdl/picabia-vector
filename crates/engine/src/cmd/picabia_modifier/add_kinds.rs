@@ -42,7 +42,7 @@ fn add_as(s: &mut Session, p: &Value, cmd: &str, label: &str, kind: &str, preset
 
 /// One spec: `id`, `label` and what it runs.
 fn spec(id: &'static str, label: &'static str, run: crate::cmd::Run) -> CommandSpec {
-    CommandSpec { id, label, menu: MENU, shortcut: None, params: PARAMS, enabled: has_selection, run, journal: true }
+    CommandSpec { id, label, menu: MENU, shortcut: None, params: PARAMS, enabled: has_selection, run, journal: true, schema: None }
 }
 
 /// The commands, one per kind (`modifier.add.<kind>`) and screen preset (`modifier.add.<preset>`).

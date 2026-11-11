@@ -271,7 +271,7 @@ mod tests {
             * Affine::scale(key.zoom * f64::from(key.ppp))
             * Affine::translate((-key.cx, -key.cy));
         let doc = app.session.active().unwrap().doc.clone();
-        let changed = |k: &CacheKey| super::super::raster::changed_pixels(&app, k, &doc, &opts, view, k.w, k.h);
+        let mut changed = |k: &CacheKey| super::super::raster::changed_pixels(&mut app, k, &doc, &opts, view, k.w, k.h);
         assert_eq!(changed(&key), Some(None), "nothing changed: nothing to render again");
         let sheet = CacheKey { stencil: key.stencil.wrapping_add(1), ..key.clone() };
         assert_eq!(changed(&sheet), None, "a new sheet: the whole frame");
