@@ -19,6 +19,7 @@
 //! [`reviewed::ALLOWED`] lists it, so a command added to the registry later is refused until
 //! someone decides.
 
+mod picabia; // PICABIA: Picabia's commands in the review, apart from upstream's lists.
 mod reviewed;
 
 use std::sync::Arc;
@@ -134,10 +135,12 @@ pub(crate) fn denied(spec: &CommandSpec) -> Option<&'static str> {
     if let Some(why) = denied_by_rule(spec) {
         return Some(why);
     }
-    if reviewed::DENIED.binary_search(&spec.id).is_ok() {
+    // PICABIA: and Picabia's list.
+    if reviewed::DENIED.binary_search(&spec.id).is_ok() || picabia::DENIED.binary_search(&spec.id).is_ok() {
         return Some("reviewed");
     }
-    if reviewed::ALLOWED.binary_search(&spec.id).is_err() {
+    // PICABIA: and Picabia's list.
+    if reviewed::ALLOWED.binary_search(&spec.id).is_err() && picabia::ALLOWED.binary_search(&spec.id).is_err() {
         return Some("not reviewed");
     }
     None
@@ -489,16 +492,22 @@ mod tests {
     /// registry fails here until someone puts it in one.
     #[test]
     fn every_command_is_reviewed() {
-        for list in [reviewed::ALLOWED, reviewed::DENIED] {
+        // PICABIA: and Picabia's lists.
+        for list in [reviewed::ALLOWED, reviewed::DENIED, picabia::ALLOWED, picabia::DENIED] {
             assert!(list.windows(2).all(|w| w[0] < w[1]), "a reviewed list is out of order or names a command twice");
         }
-        let (allowed, refused) = (|id: &str| reviewed::ALLOWED.binary_search(&id).is_ok(), |id: &str| reviewed::DENIED.binary_search(&id).is_ok());
+        // PICABIA: an id in Picabia's lists counts as in upstream's.
+        let (allowed, refused) = (
+            |id: &str| reviewed::ALLOWED.binary_search(&id).is_ok() || picabia::ALLOWED.binary_search(&id).is_ok(),
+            |id: &str| reviewed::DENIED.binary_search(&id).is_ok() || picabia::DENIED.binary_search(&id).is_ok(),
+        );
         let unreviewed: Vec<&str> =
             crate::cmd::command_specs().iter().filter(|c| denied_by_rule(c).is_none() && allowed(c.id) == refused(c.id)).map(|c| c.id).collect();
         assert!(unreviewed.is_empty(), "commands in neither or both of reviewed::ALLOWED and reviewed::DENIED: {unreviewed:?}");
         let stale: Vec<&str> = reviewed::ALLOWED
             .iter()
             .chain(reviewed::DENIED)
+            .chain(picabia::ALLOWED.iter().chain(picabia::DENIED)) // PICABIA: and Picabia's lists
             .copied()
             .filter(|id| crate::cmd::find_command(id).is_none_or(|c| denied_by_rule(c).is_some()))
             .collect();

@@ -955,6 +955,9 @@ picabia-craft's `LASER_CONTROL.md` and the safety review of the port:
 | A person clicking in the desktop app's Laser window | everything | everything; Start and Resume only after the safety checklist |
 | Scripts, agents, MCP, the control channel, `command.batch`, plug-ins, accessibility clients | everything (injected clicks may arm the simulator, for tests and screenshots) | connect, disconnect, status, ports, exports (`laser.gcode`, the stencil exports), profile, `laser.jogCancel`, pause and stop only: `laser.home`, `laser.jog`, `laser.unlock`, `laser.setOrigin` and `laser.frame` are refused, and so are `laser.start` and `laser.resume` (they need the arm) |
 
+- **Filter plug-ins calling commands** (`vc_call`, upstream's review in `cmd/plugin_call.rs`) call
+  no `laser.*` or `camera.*` command at all, not even on the simulator: Picabia's commands are
+  placed in `cmd/plugin_call/picabia.rs`, where the hardware links are denied.
 - **Arming** (`laser.start`, a beam `laser.frame`, `laser.resume`) goes through
   `Session::laser_execute_armed`, the **motion commands** through `Session::laser_execute_person`.
   Neither is a command; the app calls them only from the Laser window (`picabia_laser_window/run.rs`).

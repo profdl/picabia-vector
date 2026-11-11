@@ -113,7 +113,8 @@ const WAIT_FOR_TOOL_EDIT: &[&str] = &[
 /// them). A frontend that adds params from
 /// its own state (the active artboard) applies them first itself.
 pub fn waits_for_tool_edit(id: &str) -> bool {
-    find_command(id).is_some_and(|spec| spec.journal || WAIT_FOR_TOOL_EDIT.contains(&id))
+    // PICABIA: and Picabia's queries that write files, as a save does.
+    find_command(id).is_some_and(|spec| spec.journal || WAIT_FOR_TOOL_EDIT.contains(&id)) || cmd::picabia_modifier::WAITS_FOR_TOOL_EDIT.contains(&id)
 }
 
 /// Journaled commands that write a file and change nothing in the document: with an object of a

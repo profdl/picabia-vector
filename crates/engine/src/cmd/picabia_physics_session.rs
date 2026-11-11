@@ -142,7 +142,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Play Simulation",
             [],
             None,
-            "{} play the session (the app steps it at 60 steps a second); opens one when none is",
+            "{gravityX?, gravityY?, walls?, artboard? (as physics.session.open, when it opens one)} play the session (the app steps it at 60 steps a second); opens one when none is",
             has_doc,
             play
         ),
@@ -170,7 +170,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Simulate to Rest",
             [],
             None,
-            "{steps? (most steps to run, 1-36000; default 3000)} run until every body rests (or the cap), opening a session when none is, then pause: the result shows until Apply or Cancel → {step, seconds, settled}",
+            "{steps? (most steps to run, 1-36000; default 3000), gravityX?, gravityY?, walls?, artboard? (as physics.session.open, when it opens one)} run until every body rests (or the cap), opening a session when none is, then pause: the result shows until Apply or Cancel → {step, seconds, settled}",
             has_doc,
             to_rest
         ),

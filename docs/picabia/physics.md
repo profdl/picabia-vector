@@ -449,10 +449,10 @@ must have physics settings; a rigid body carries the pinned points with it).
 | `physics.session.open` | `gravityX?`, `gravityY?`, `walls?`, `artboard?` (as Simulate) | Opens a live session in the active document at step 0, paused (replaces one already open) → bodies, soft, skipped, warnings, notes, artboard |
 | `physics.session.close`, `physics.cancel` | — | Closes it; the art is untouched |
 | `physics.session.info` | — | `{open, step, seconds, playing, settled, bodies: [{id, kind}], events, notes, skipped, warnings, artboard}` (query) |
-| `physics.play`, `physics.pause` | — | Play opens a session when none is; the app steps it each frame (at most 4 steps a frame) |
+| `physics.play`, `physics.pause` | Play: `gravityX?`, `gravityY?`, `walls?`, `artboard?` (as `physics.session.open`, when it opens one) | Play opens a session when none is; the app steps it each frame (at most 4 steps a frame) |
 | `physics.reset` | — | Step 0, paused; recorded pokes kept |
 | `physics.seek` | `step` (0–36,000) | Back from the nearest snapshot, forward by stepping |
-| `physics.toRest` | `steps?` (default 3,000) | Simulate to Rest: runs until every body sleeps (or the cap), opening a session when none is; the result shows until Apply or Cancel |
+| `physics.toRest` | `steps?` (default 3,000); `gravityX?`, `gravityY?`, `walls?`, `artboard?` (as `physics.session.open`, when it opens one) | Simulate to Rest: runs until every body sleeps (or the cap), opening a session when none is; the result shows until Apply or Cancel |
 | `physics.poke` | `id` + `point` (grab), `to?` (pull), `release?` | Records a poke at the current step |
 | `physics.apply` | `patterns?` | Bakes every body's shown pose, one undo step ("Apply Physics"), and closes the session |
 

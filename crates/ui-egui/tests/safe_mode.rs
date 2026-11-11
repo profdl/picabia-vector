@@ -125,7 +125,7 @@ fn disable_and_continue_loads_every_plug_in_but_the_one_that_was_loading() {
     dialogs::confirm(&mut app).unwrap();
     assert!(!safe_mode::active() && kind(&app).is_none());
     assert!(registry::get("test.ui.x").is_none() && registry::get("test.ui.y").is_some(), "only the one that was loading is off");
-    assert_eq!(chrome::window_title(&app), "VectorCraft");
+    assert_eq!(chrome::window_title(&app), vectorcraft_ui_egui::picabia::APP_NAME); // PICABIA: the window is titled Picabia
     assert!(dir.join("disabled.json").is_file(), "kept off at later launches");
     ui::end_launch();
 

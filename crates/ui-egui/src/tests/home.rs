@@ -465,14 +465,14 @@ fn text_centre_x(app: &mut VectorcraftApp, text: &str) -> Option<(f32, f32)> {
 #[test]
 fn home_welcome_and_community_are_centred() {
     let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), crate::Services::default());
-    for text in ["Welcome to VectorCraft", "Community", "ArtCraft website", "VectorCraft on getartcraft.com", "Source code on GitHub"] {
+    // PICABIA: the community block shows Picabia's and VectorCraft's links (`picabia::links`), with
+    // no ArtCraft links and no Discord button.
+    let upstream = format!("{}, the open-source app {} is built on", crate::picabia::UPSTREAM_NAME, crate::picabia::APP_NAME);
+    for text in ["Welcome to VectorCraft", "Community", "github.com/profdl/picabia-vector", upstream.as_str()] {
         let (x, centre) = text_centre_x(&mut app, text).unwrap_or_else(|| panic!("{text} is drawn"));
         assert!((x - centre).abs() < 6.0, "{text} is centred: {x} vs {centre}");
     }
-    // The Discord button is centred; its label lies right of its icon, 0.375 of the button's 36 pt
-    // height right of the middle.
-    let (x, centre) = text_centre_x(&mut app, "Join our Discord").unwrap();
-    assert!((x - centre - 0.375 * 36.0).abs() < 2.0, "the Discord button is centred: label at {x} about {centre}");
+    assert!(text_centre_x(&mut app, "Join our Discord").is_none(), "no Discord button");
     // The two buttons (a label's width plus 32, at least 72, each) lie symmetrically about the
     // centre: the first one's left edge and the second one's right edge are equally far from it.
     let width = |label: &str| {
