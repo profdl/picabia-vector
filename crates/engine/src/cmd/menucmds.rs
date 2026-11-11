@@ -106,7 +106,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Reset Bounding Box",
             ["Object", "Transform"],
             None,
-            "{} square the bounding box of the selected objects to the page again after a rotation (their geometry stays; one undo step, none when no box is rotated) → {changed: objects reset}",
+            "{} square the bounding box of the selected objects, and of every object inside them (the children of groups, compound paths, clip groups, blends, envelopes, repeats and intertwines, and the art of linked opacity masks), to the page again after a rotation (their geometry stays; one undo step, none when no box is rotated) → {changed: objects reset, the objects inside included}",
             has_selection,
             reset_bounding_box
         ),
@@ -178,7 +178,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Rearrange All Artboards…",
             ["Object", "Artboards"],
             None,
-            "{layout?: gridByRow|gridByColumn|row|column (gridByRow; byColumn?: true is gridByColumn), order?: leftToRight|rightToLeft (leftToRight: right-to-left mirrors the order along the rows), columns?: n (2; the rows for gridByColumn; row and column ignore it), spacing?: pt (20), moveArtwork?: true (each object of a layer or sublayer moves with the artboard its center is on; locked and hidden art, and art on a locked artboard, only with prefs moveLockedWithArtboard), patterns?: bool (Transform Patterns: pattern fills and strokes transform with the art; default: prefs transformPatternTiles), byColumn?: bool (an older way to ask for layout gridByColumn)} lay the artboards out in their order, the grid's top-left at the first artboard's; a locked artboard stays where it is → {artboards, rows, columns}",
+            "{layout?: gridByRow|gridByColumn|row|column (gridByRow; byColumn?: true is gridByColumn), order?: leftToRight|rightToLeft (leftToRight: right-to-left mirrors the order along the rows), columns?: n (2; the rows for gridByColumn; row and column ignore it), spacing?: pt (20), moveArtwork?: true (each object of a layer or sublayer moves with the artboard its center is on; locked and hidden art, and art on a locked artboard, only with lockedAndHidden), patterns?: bool (Transform Patterns: pattern fills and strokes transform with the art; default: prefs transformPatternTiles), lockedAndHidden?: bool (default: prefs moveLockedWithArtboard), byColumn?: bool (an older way to ask for layout gridByColumn)} lay the artboards out in their order, the grid's top-left at the first artboard's; a locked artboard stays where it is → {artboards, rows, columns}",
             has_doc,
             rearrange_artboards
         ),
@@ -203,10 +203,11 @@ pub(crate) fn whole_or(p: &Value, key: &str, default: u64, cmd: &str) -> Result<
     }
 }
 
-/// Run a command's implementation without the enablement check or journaling.
+/// Run a command's implementation without the enablement check or journaling. A command with a
+/// parameter schema runs with its params checked ([`super::run_checked`]).
 pub(crate) fn run_raw(s: &mut Session, id: &str, p: &Value) -> Result<Value> {
     let c = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.into()))?;
-    (c.run)(s, p)
+    super::run_checked(s, c, p)
 }
 
 /// Merge the undo entries pushed since the history had `from` entries into one labelled step.
@@ -223,21 +224,63 @@ pub(crate) fn squash(s: &mut Session, from: usize, label: &str) {
 
 // ---------- Reset Bounding Box ----------
 
+/// Squares each selected object and every object inside it: the children of groups, compound paths,
+/// clip groups, blends, envelopes, repeats and intertwines, and the art of linked opacity masks.
 fn reset_bounding_box(s: &mut Session, _: &Value) -> Result<Value> {
     let ids = selected_roots(s)?;
     let d = &s.doc()?.doc;
-    let turned: Vec<NodeId> = ids.into_iter().filter(|id| d.node(*id).is_some_and(|n| n.bbox_angle != 0.0)).collect();
-    if !turned.is_empty() {
+    let mut changed = 0;
+    let squared: Vec<(NodeId, Node)> = ids
+        .into_iter()
+        .filter_map(|id| {
+            let (n, count) = squared(d.node(id)?);
+            changed += count;
+            Some((id, n?))
+        })
+        .collect();
+    if !squared.is_empty() {
         s.edit("Reset Bounding Box", |d, _| {
-            for id in &turned {
-                if let Some(n) = d.node_mut(*id) {
-                    n.bbox_angle = 0.0;
+            for (id, n) in squared {
+                if let Some(slot) = d.node_mut(id) {
+                    *slot = n;
                 }
             }
             Ok(())
         })?;
     }
-    Ok(json!({ "changed": turned.len() }))
+    Ok(json!({ "changed": changed }))
+}
+
+/// A copy of `n` with the angle of every object in its subtree set to 0, or `None` when no box in
+/// it stands at an angle, and the number of objects squared. The subtree takes in children and the
+/// art of linked opacity masks (an unlinked mask's art turns on its own); layers have no box. Only
+/// the nodes on the way to a turned object are copied.
+fn squared(n: &Node) -> (Option<Node>, usize) {
+    let mut out = (!n.is_layer() && n.bbox_angle != 0.0).then(|| {
+        let mut c = n.clone();
+        c.bbox_angle = 0.0;
+        c
+    });
+    let mut count = usize::from(out.is_some());
+    for (i, c) in n.children().into_iter().flatten().enumerate() {
+        let (child, k) = squared(c);
+        count += k;
+        if let Some(child) = child
+            && let Some(slot) = out.get_or_insert_with(|| n.clone()).children_mut().and_then(|ch| ch.get_mut(i))
+        {
+            *slot = Arc::new(child);
+        }
+    }
+    if let Some(m) = n.extras().mask.as_ref().filter(|m| m.linked) {
+        let (art, k) = squared(&m.art);
+        count += k;
+        if let Some(art) = art
+            && let Some(m) = out.get_or_insert_with(|| n.clone()).extras_if_any().and_then(|e| e.mask.as_mut())
+        {
+            m.art = Arc::new(art);
+        }
+    }
+    (out, count)
 }
 
 // ---------- Lock / Hide ----------
@@ -578,6 +621,9 @@ fn transform_each_as(s: &mut Session, p: &Value, label: &str) -> Result<Value> {
             if let Some(n) = d.node_mut(*id) {
                 super::object::transform_node(n, m, sc, objects);
             }
+            if objects {
+                super::object::keep_compound_aligned(d, *id, sc);
+            }
         }
         Ok(targets)
     })?;
@@ -907,6 +953,40 @@ fn polygon_path(pts: &[Point]) -> PathData {
     PathData::single(vectorcraft_geom::SubPath::new(pts.iter().map(|p| Anchor::corner(*p)).collect(), true))
 }
 
+/// The part of an image under `r` (in document space) copied out of its pixels, as PNG bytes, with its size and
+/// placement. `None` when the image can't be cut that way (turned or skewed, CMYK, pixels that can't be read, or
+/// `r` not on the pixel grid), so the caller draws it instead.
+fn crop_pixels(doc: &vectorcraft_doc::Document, im: &ImageObject, r: Rect) -> Option<(Vec<u8>, u32, u32, Affine)> {
+    let blob = doc.images.get(&im.key)?;
+    let [a, b, c, d, _, _] = im.xf.as_coeffs();
+    if blob.is_cmyk() || b.abs() > 1e-9 || c.abs() > 1e-9 || a.abs() < 1e-9 || d.abs() < 1e-9 {
+        return None;
+    }
+    let inv = im.xf.inverse();
+    let (p0, p1) = (inv * Point::new(r.x0, r.y0), inv * Point::new(r.x1, r.y1));
+    // Only a rect on the pixel grid is cut from the pixels; one between pixels keeps its exact bounds by being drawn.
+    // Checked before decoding, so an off-grid crop of a large image doesn't decode it for nothing.
+    let on_grid = |v: f64| (v - v.round()).abs() < 1e-3;
+    if ![p0.x, p0.y, p1.x, p1.y].into_iter().all(on_grid) {
+        return None;
+    }
+    let px = decode_rgba("object.cropImage", blob).ok()?;
+    let (w, h) = px.dimensions();
+    if w == 0 || h == 0 || (w, h) != (im.width, im.height) {
+        return None;
+    }
+    let lo = |v: f64, max: u32| v.round().clamp(0.0, f64::from(max)) as u32;
+    let (x0, x1) = (lo(p0.x.min(p1.x), w), lo(p0.x.max(p1.x), w));
+    let (y0, y1) = (lo(p0.y.min(p1.y), h), lo(p0.y.max(p1.y), h));
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    let cut = image::imageops::crop_imm(&px, x0, y0, x1 - x0, y1 - y0).to_image();
+    let mut png = Vec::new();
+    cut.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).ok()?;
+    Some((png, x1 - x0, y1 - y0, im.xf * Affine::translate((f64::from(x0), f64::from(y0)))))
+}
+
 fn crop_image(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "object.cropImage";
     let st = s.doc()?;
@@ -947,6 +1027,11 @@ fn crop_image(s: &mut Session, p: &Value) -> Result<Value> {
     if (r.x0 - ib.x0).abs() < 1e-6 && (r.y0 - ib.y0).abs() < 1e-6 && (r.x1 - ib.x1).abs() < 1e-6 && (r.y1 - ib.y1).abs() < 1e-6 {
         return Err(bad(C, "nothing to crop"));
     }
+    // A plain, axis-aligned raster is cut straight from its pixels, so nothing is resampled.
+    if let Some((png, cw, ch, xf)) = crop_pixels(&st.doc, im, r) {
+        put_pixels(s, id, png, cw, ch, xf)?;
+        return Ok(json!({ "id": id.0, "width": cw, "height": ch }));
+    }
     // Keep the image's pixel density.
     let scale = (im.width as f64 / ib.width().max(1e-9)).max(im.height as f64 / ib.height().max(1e-9));
     let mut bare = node.clone();
@@ -981,6 +1066,27 @@ fn crop_image(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
+/// The image's pixels as RGBA, held to the allowance opening a raster has.
+fn decode_rgba(c: &str, blob: &vectorcraft_doc::ImageBlob) -> Result<image::RgbaImage> {
+    // Print rasters run to gigabytes decoded: the same allowance opening them has.
+    let reader = || {
+        image::ImageReader::new(std::io::Cursor::new(blob.bytes.as_slice()))
+            .with_guessed_format()
+            .map_err(|_| bad(c, "the image's pixels can't be read"))
+    };
+    // The image's size as RGBA, read from its header, is held to that allowance before anything
+    // is decoded (#1717).
+    let (w, h) = reader()?.into_dimensions().map_err(|e| bad(c, format!("the image's pixels can't be read: {e}")))?;
+    if u64::from(w) * u64::from(h) > crate::cmd::fileio::MAX_RASTER_ALLOC / 4 {
+        return Err(bad(c, format!("an image of {w} × {h} pixels is too large to draw")));
+    }
+    let mut reader = reader()?;
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(crate::cmd::fileio::MAX_RASTER_ALLOC);
+    reader.limits(limits);
+    Ok(reader.decode().map_err(|e| bad(c, format!("the image's pixels can't be read: {e}")))?.to_rgba8())
+}
+
 /// Crop Image's trim: the image cut to the box of its pixels that aren't fully transparent, the
 /// pixels copied as they are (no resampling) and placed where they were.
 fn trim_image(s: &mut Session, id: NodeId, im: ImageObject) -> Result<Value> {
@@ -991,23 +1097,7 @@ fn trim_image(s: &mut Session, id: NodeId, im: ImageObject) -> Result<Value> {
     if blob.is_cmyk() {
         return Ok(json!({ "id": id.0, "width": im.width, "height": im.height, "trimmed": false }));
     }
-    // Print rasters run to gigabytes decoded: the same allowance opening them has.
-    let reader = || {
-        image::ImageReader::new(std::io::Cursor::new(blob.bytes.as_slice()))
-            .with_guessed_format()
-            .map_err(|_| bad(C, "the image's pixels can't be read"))
-    };
-    // The image's size as RGBA, read from its header, is held to that allowance before anything
-    // is decoded (#1717).
-    let (w, h) = reader()?.into_dimensions().map_err(|e| bad(C, format!("the image's pixels can't be read: {e}")))?;
-    if u64::from(w) * u64::from(h) > crate::cmd::fileio::MAX_RASTER_ALLOC / 4 {
-        return Err(bad(C, format!("an image of {w} × {h} pixels is too large to draw")));
-    }
-    let mut reader = reader()?;
-    let mut limits = image::Limits::default();
-    limits.max_alloc = Some(crate::cmd::fileio::MAX_RASTER_ALLOC);
-    reader.limits(limits);
-    let px = reader.decode().map_err(|e| bad(C, format!("the image's pixels can't be read: {e}")))?.to_rgba8();
+    let px = decode_rgba(C, blob)?;
     let (w, h) = px.dimensions();
     let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
     for (x, y, p) in px.enumerate_pixels() {
@@ -1026,23 +1116,22 @@ fn trim_image(s: &mut Session, id: NodeId, im: ImageObject) -> Result<Value> {
     let mut png = Vec::new();
     cut.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).map_err(|e| bad(C, e.to_string()))?;
     let (cw, ch) = (x1 - x0, y1 - y0);
+    put_pixels(s, id, png, cw, ch, im.xf * Affine::translate((f64::from(x0), f64::from(y0))))?;
+    Ok(json!({ "id": id.0, "width": cw, "height": ch, "trimmed": true }))
+}
+
+/// Crop Image's edit for a cut made from the image's own pixels: `png` (`w` × `h` px) takes the
+/// image's place, mapped into the document by `xf`.
+fn put_pixels(s: &mut Session, id: NodeId, png: Vec<u8>, w: u32, h: u32, xf: Affine) -> Result<()> {
     s.edit("Crop Image", |d, _| {
         let key = unique_key(d, "crop");
         d.images.insert(key.clone(), vectorcraft_doc::ImageBlob::new("image/png", png));
         if let Some(n) = d.node_mut(id) {
-            n.kind = NodeKind::Image(Box::new(ImageObject {
-                key,
-                width: cw,
-                height: ch,
-                xf: im.xf * Affine::translate((f64::from(x0), f64::from(y0))),
-                link: None,
-                placement: Default::default(),
-                pixels: None,
-            }));
+            n.kind = NodeKind::Image(Box::new(ImageObject { key, width: w, height: h, xf, link: None, placement: Default::default(), pixels: None }));
         }
         Ok(())
     })?;
-    Ok(json!({ "id": id.0, "width": cw, "height": ch, "trimmed": true }))
+    Ok(())
 }
 
 /// The Control bar's Mask for an image: a clip group of the image and a clipping path on its
@@ -1230,6 +1319,7 @@ fn convert_to_artboards(s: &mut Session, _: &Value) -> Result<Value> {
                 show_video_safe_areas: false,
                 video_ruler_pixel_aspect_ratio: 1.0,
                 color: None,
+                guide_label: None,
             });
             converted.push(id);
         }
@@ -1274,7 +1364,7 @@ fn rearrange_artboards(s: &mut Session, p: &Value) -> Result<Value> {
     let spacing = f64_or(p, "spacing", 20.0).clamp(-1.0e5, 1.0e5);
     let move_art = switch_or(p, "moveArtwork", true, CMD)?;
     check_switches(p, &["patterns"], CMD)?;
-    let locked_and_hidden = s.prefs.move_locked_with_artboard;
+    let locked_and_hidden = super::panelcmds::locked_and_hidden(s, p, move_art, CMD)?;
     let d = &s.doc()?.doc;
     let rects: Vec<Rect> = d.artboards.iter().map(|a| a.rect).collect();
     let sizes: Vec<(f64, f64)> = rects.iter().map(|r| (r.width(), r.height())).collect();
@@ -1291,7 +1381,7 @@ fn rearrange_artboards(s: &mut Session, p: &Value) -> Result<Value> {
     // With moveArtwork, each top-level object (a child of a layer or sublayer) moves with the
     // artboard its center is on, with symbol instances measured by their art as
     // `Document::art_on_artboard` measures them; locked and hidden art, and art on a locked
-    // artboard, moves only when prefs moveLockedWithArtboard is on.
+    // artboard, moves only with `locked_and_hidden`.
     fn objects<'a>(n: &'a Node, all: bool, out: &mut Vec<&'a Node>) {
         for c in n.children().into_iter().flatten().filter(|c| c.rides_with_artboard(all)) {
             if c.is_layer() { objects(c, all, out) } else { out.push(c) }
@@ -1321,6 +1411,7 @@ fn rearrange_artboards(s: &mut Session, p: &Value) -> Result<Value> {
         for (id, dl) in &art {
             if let Some(n) = d.node_mut(*id) {
                 n.transform(Affine::translate(*dl), sc);
+                super::object::keep_pixel_aligned(n, sc);
             }
         }
         let mut moved = vec![];

@@ -390,10 +390,11 @@ fn expanded_bound(d: &Document, inst: &Node, own: bool) -> u64 {
     most.saturating_add(1).saturating_add(mask)
 }
 
-/// Replace instances `ids` with their art ([`expanded_instance`], `own` as there). Returns the
-/// art's ids. Fails before any edit when the instances together would make more than
+/// Replace instances `ids` with their art ([`expanded_instance`], `own` as there). A hidden or
+/// locked instance's art stays hidden or locked. Returns each replaced instance's id with its art's
+/// id. Fails before any edit when the instances together would make more than
 /// [`MAX_EXPAND_NODES`] objects.
-fn break_links(d: &mut Document, ids: &[NodeId], own: bool) -> Result<Vec<NodeId>> {
+fn break_links(d: &mut Document, ids: &[NodeId], own: bool) -> Result<Vec<(NodeId, NodeId)>> {
     let total = ids.iter().filter_map(|id| d.node(*id)).fold(0u64, |sum, n| sum.saturating_add(expanded_bound(d, n, own)));
     if total > MAX_EXPAND_NODES as u64 {
         return Err(EngineError::Other("Too many pieces to make at once".into()));
@@ -401,12 +402,14 @@ fn break_links(d: &mut Document, ids: &[NodeId], own: bool) -> Result<Vec<NodeId
     let mut out = vec![];
     for id in ids {
         let Some(inst) = d.node(*id).cloned() else { continue };
-        let Some(art) = expanded_instance(d, &inst, own) else { continue };
+        let Some(mut art) = expanded_instance(d, &inst, own) else { continue };
         let (par, idx, _) = d.position(*id).ok_or(EngineError::NoNode(*id))?;
+        art.visible &= inst.visible;
+        art.locked |= inst.locked;
         let aid = art.id;
         d.remove(*id)?;
         d.insert(par, idx, art)?;
-        out.push(aid);
+        out.push((*id, aid));
     }
     Ok(out)
 }
@@ -491,10 +494,22 @@ pub(super) fn symbol_break_link(s: &mut Session, p: &Value) -> Result<Value> {
     if ids.is_empty() {
         return Err(EngineError::Other("no symbol instances selected".into()));
     }
+    let iso = s.doc()?.isolation;
     let out = s.edit("Break Link to Symbol", |d, sel| {
-        let out = break_links(d, &ids, true)?;
-        sel.set(out.iter().copied());
-        Ok(out)
+        let fresh = d.new_art.get();
+        let made = break_links(d, &ids, true)?;
+        // Art that is hidden or locked, or in a hidden or locked group or layer, is left out of the
+        // selection, as is art on a locked artboard unless the instance it replaces was new art.
+        let locks = d.locked_artboards();
+        sel.set(made.iter().filter_map(|(inst, art)| {
+            let keep = if fresh.contains(inst) {
+                crate::cmd::select::is_selectable_on_any_artboard(d, iso, *art)
+            } else {
+                crate::cmd::select::is_selectable(d, iso, &locks, *art)
+            };
+            keep.then_some(*art)
+        }));
+        Ok(made.into_iter().map(|(_, art)| art).collect::<Vec<_>>())
     })?;
     Ok(json!({ "ids": ids_json(&out) }))
 }
@@ -696,6 +711,62 @@ pub(super) fn symbol_replace(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "ids": ids_json(&ids) }))
 }
 
+/// How far a transform coefficient may be from Reset Transformation's for the instance to count as
+/// already reset.
+const RESET_TOLERANCE: f64 = 1e-9;
+
+/// The transform Reset Transformation gives instance `n` of the document of `boxes`: its symbol's
+/// own scale, without rotation, shear or reflection, with the center of its art's bounding box
+/// where it is. `None` when [`reset_transformation_changes`] is false for `n`.
+fn reset_transformation(boxes: &vectorcraft_doc::SymbolBoxes, n: &Node) -> Option<Affine> {
+    let d = boxes.document();
+    if !reset_transformation_changes(d, n) {
+        return None;
+    }
+    let NodeKind::SymbolInstance { symbol, xf } = &n.kind else { return None };
+    let scale = d.symbol_natural_xf(symbol);
+    // The art's box in symbol space (the ±HALF square when the art cannot be measured): its
+    // center keeps its place on the page.
+    let art = boxes.art_bounds(symbol).unwrap_or_else(|| vectorcraft_geom::Rect::new(-HALF, -HALF, HALF, HALF));
+    let center = xf.transform_rect_bbox(art).center();
+    Some(Affine::translate(center - scale * art.center()) * scale)
+}
+
+/// Does Reset Transformation change `n`? True for an instance of a symbol `d` holds, not in
+/// perspective, whose scale, rotation, shear or reflection differs from the symbol's own scale
+/// (its stored natural size, or the art unscaled when that size is not positive and finite).
+/// It does not measure the art.
+pub fn reset_transformation_changes(d: &Document, n: &Node) -> bool {
+    let NodeKind::SymbolInstance { symbol, xf } = &n.kind else { return false };
+    if n.extras().perspective.is_some() || !d.symbols.iter().any(|s| s.name == *symbol) {
+        return false;
+    }
+    let natural = d.symbol_natural_xf(symbol).as_coeffs();
+    xf.as_coeffs()[..4].iter().zip(&natural[..4]).any(|(a, b)| (a - b).abs() > RESET_TOLERANCE)
+}
+
+pub(super) fn symbol_instance_reset_transform(s: &mut Session, p: &Value) -> Result<Value> {
+    let ids = selected_instances(s, p)?;
+    if ids.is_empty() {
+        return Err(EngineError::Other("no symbol instances selected".into()));
+    }
+    let d = &s.doc()?.doc;
+    let boxes = d.symbol_boxes();
+    let changes: Vec<(NodeId, Affine)> = ids.iter().filter_map(|id| Some((*id, reset_transformation(&boxes, d.node(*id)?)?))).collect();
+    if !changes.is_empty() {
+        s.edit("Reset Transformation", |d, _| {
+            for (id, new) in &changes {
+                if let Some(NodeKind::SymbolInstance { xf, .. }) = d.node_mut(*id).map(|n| &mut n.kind) {
+                    *xf = *new;
+                }
+            }
+            Ok(())
+        })?;
+    }
+    let changed: Vec<NodeId> = changes.iter().map(|(id, _)| *id).collect();
+    Ok(json!({ "ids": ids_json(&changed) }))
+}
+
 pub(super) fn symbol_set_current(s: &mut Session, p: &Value) -> Result<Value> {
     let name = resolve_symbol(&s.doc()?.doc, p, "symbol.setCurrent")?;
     set_unknown(s, CURRENT_SYMBOL, Some(json!(name)))?;
@@ -832,6 +903,8 @@ pub(super) fn symbol_adjust(s: &mut Session, p: &Value) -> Result<Value> {
     let radius = number_or(p, "radius", 40.0, C)?.clamp(1.0, 2000.0);
     let intensity = number_or(p, "intensity", 5.0, C)?.clamp(1.0, 10.0) / 10.0;
     let alt = switch_or(p, "alt", false, C)?;
+    // Refused while an object of a dynamic instance's art is selected: the instance stays as it is.
+    crate::cmd::edit::refuse_symbol_part(s)?;
     let st = s.doc()?;
     let color = match color_param(p, "color", C)? {
         Some(c) => crate::cmd::paint::new_color(s, p, c),

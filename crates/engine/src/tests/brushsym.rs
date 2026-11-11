@@ -1321,6 +1321,106 @@ fn break_link_counts_the_instances_mask_art() {
     assert!(matches!(node(&s, inst).kind, NodeKind::SymbolInstance { .. }), "it stays an instance");
 }
 
+/// A hidden, a locked and a plain instance of one symbol in a group, the group selected.
+fn group_with_hidden_and_locked_instances(s: &mut Session) -> (NodeId, String) {
+    let (shown, name, _) = make_symbol(s);
+    let hidden = NodeId(s.execute("symbol.place", &json!({"name": name, "x": 300, "y": 200})).unwrap()["id"].as_u64().unwrap());
+    let locked = NodeId(s.execute("symbol.place", &json!({"name": name, "x": 300, "y": 100})).unwrap()["id"].as_u64().unwrap());
+    select(s, &[shown, hidden, locked]);
+    let group = NodeId(s.execute("object.group", &json!({})).unwrap()["id"].as_u64().unwrap());
+    let doc = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().doc);
+    doc.node_mut(hidden).unwrap().visible = false;
+    doc.node_mut(locked).unwrap().locked = true;
+    select(s, &[group]);
+    (group, name)
+}
+
+/// The visibility and lock state of the children of `group`, in paint order.
+fn shown_and_locked(s: &Session, group: NodeId) -> Vec<(bool, bool)> {
+    let g = node(s, group);
+    let NodeKind::Group { children, .. } = &g.kind else { panic!("a group: {}", g.kind_label()) };
+    assert!(children.iter().all(|c| !matches!(c.kind, NodeKind::SymbolInstance { .. })), "every instance is expanded");
+    children.iter().map(|c| (c.visible, c.locked)).collect()
+}
+
+/// Break Link to Symbol on a selected group keeps a hidden instance's art hidden and a locked
+/// instance's art locked, and selects only the art that can be selected.
+#[test]
+fn break_link_keeps_hidden_and_locked_instances_hidden_and_locked() {
+    let mut s = session();
+    let (group, _) = group_with_hidden_and_locked_instances(&mut s);
+    let r = s.execute("symbol.breakLink", &json!({})).unwrap();
+    assert_eq!(r["ids"].as_array().unwrap().len(), 3, "{r}");
+    assert_eq!(shown_and_locked(&s, group), vec![(true, false), (false, false), (true, true)]);
+    let d = &s.doc().unwrap().doc;
+    let selected: Vec<NodeId> = s.doc().unwrap().selection.objects.to_vec();
+    assert_eq!(selected.len(), 1, "{selected:?}");
+    assert!(selected.iter().all(|id| d.node(*id).is_some_and(|n| n.visible && !n.locked)), "{selected:?}");
+}
+
+/// Break Link to Symbol on a selected group does not select the art of a shown, unlocked instance
+/// that sits in a hidden or a locked group inside it.
+#[test]
+fn break_link_leaves_art_in_hidden_or_locked_groups_unselected() {
+    let mut s = session();
+    let (shown, name, _) = make_symbol(&mut s);
+    let subgroup = |s: &mut Session, y: i64| {
+        let id = NodeId(s.execute("symbol.place", &json!({"name": name, "x": 300, "y": y})).unwrap()["id"].as_u64().unwrap());
+        select(s, &[id]);
+        NodeId(s.execute("object.group", &json!({})).unwrap()["id"].as_u64().unwrap())
+    };
+    let hidden = subgroup(&mut s, 200);
+    let locked = subgroup(&mut s, 100);
+    select(&mut s, &[shown, hidden, locked]);
+    let group = NodeId(s.execute("object.group", &json!({})).unwrap()["id"].as_u64().unwrap());
+    let doc = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().doc);
+    doc.node_mut(hidden).unwrap().visible = false;
+    doc.node_mut(locked).unwrap().locked = true;
+    select(&mut s, &[group]);
+    let r = s.execute("symbol.breakLink", &json!({})).unwrap();
+    assert_eq!(r["ids"].as_array().unwrap().len(), 3, "{r}");
+    let d = &s.doc().unwrap().doc;
+    let selected: Vec<NodeId> = s.doc().unwrap().selection.objects.to_vec();
+    assert_eq!(selected.len(), 1, "{selected:?}");
+    let a = d.ancestry(selected[0]).unwrap();
+    assert!(!a.contains(&hidden) && !a.contains(&locked), "{a:?}");
+}
+
+/// Break Link to Symbol on an instance just placed on a locked artboard selects the art that
+/// replaces it, which stays new art there. The art of an older instance there, named by id, is not
+/// selected.
+#[test]
+fn break_link_keeps_new_art_on_a_locked_artboard_selected() {
+    let mut s = session();
+    let (old, name, _) = make_symbol(&mut s);
+    s.execute("artboard.new", &json!({"x": 1000, "y": 0, "width": 400, "height": 400})).unwrap();
+    s.execute("artboard.setProps", &json!({"index": 1, "locked": true})).unwrap();
+    select(&mut s, &[old]);
+    s.execute("object.move", &json!({"dx": 1000, "dy": 0})).unwrap();
+    assert!(s.doc().unwrap().selection.objects.is_empty(), "moved onto the locked artboard");
+    let inst = NodeId(s.execute("symbol.place", &json!({"name": name, "x": 1100, "y": 100})).unwrap()["id"].as_u64().unwrap());
+    assert_eq!(s.doc().unwrap().selection.objects.to_vec(), [inst], "placed art is selected");
+    let r = s.execute("symbol.breakLink", &json!({})).unwrap();
+    let art: Vec<NodeId> = r["ids"].as_array().unwrap().iter().map(|v| NodeId(v.as_u64().unwrap())).collect();
+    assert_eq!(art.len(), 1, "{r}");
+    assert_eq!(s.doc().unwrap().selection.objects.to_vec(), art, "the art that replaces it");
+    s.execute("object.move", &json!({"dx": 10, "dy": 0})).unwrap();
+    assert_eq!(s.doc().unwrap().selection.objects.to_vec(), art, "the art stays editable");
+    let r = s.execute("symbol.breakLink", &json!({"ids": [old.0]})).unwrap();
+    assert_eq!(r["ids"].as_array().unwrap().len(), 1, "{r}");
+    assert!(s.doc().unwrap().selection.objects.is_empty(), "the older instance's art");
+}
+
+/// Delete Symbol, expanding the instances, keeps a hidden instance's art hidden and a locked
+/// instance's art locked.
+#[test]
+fn delete_symbol_keeps_hidden_and_locked_instances_hidden_and_locked() {
+    let mut s = session();
+    let (group, name) = group_with_hidden_and_locked_instances(&mut s);
+    s.execute("symbol.delete", &json!({"name": name})).unwrap();
+    assert_eq!(shown_and_locked(&s, group), vec![(true, false), (false, false), (true, true)]);
+}
+
 #[test]
 fn delete_duplicate_and_replace_symbols() {
     let mut s = session();
@@ -1341,6 +1441,150 @@ fn delete_duplicate_and_replace_symbols() {
     doc.walk(|n| plain += matches!(n.kind, NodeKind::Path { .. }) as i32);
     assert_eq!(plain, 2, "both instances of Small were expanded");
     assert!(s.execute("symbol.delete", &json!({"name": "Small"})).is_err());
+}
+
+fn xf_of(s: &Session, id: NodeId) -> vectorcraft_geom::Affine {
+    match node(s, id).kind {
+        NodeKind::SymbolInstance { xf, .. } => xf,
+        _ => panic!("{id:?} is not a symbol instance"),
+    }
+}
+
+fn close_xf(a: vectorcraft_geom::Affine, b: vectorcraft_geom::Affine) -> bool {
+    a.as_coeffs().iter().zip(b.as_coeffs()).all(|(x, y)| (x - y).abs() < 1e-9)
+}
+
+fn undo_len(s: &Session) -> usize {
+    s.doc().unwrap().history.undo.len()
+}
+
+/// Reset Transformation gives rotated, scaled, sheared and reflected instances (in a group too)
+/// their symbol's own scale again, each keeping the center of its bounding box, as one undo step.
+#[test]
+fn reset_transformation_restores_the_symbols_scale_and_keeps_the_center() {
+    let mut s = session();
+    let (a, name, placed) = make_symbol(&mut s);
+    let b = NodeId(s.execute("symbol.place", &json!({"name": name, "x": 300, "y": 200})).unwrap()["id"].as_u64().unwrap());
+    let c = NodeId(s.execute("symbol.place", &json!({"name": name, "x": 100, "y": 220})).unwrap()["id"].as_u64().unwrap());
+    let master = xf_of(&s, b).with_translation(vectorcraft_geom::Vec2::ZERO);
+    select(&mut s, &[a]);
+    s.execute("object.rotate", &json!({"angle": 30})).unwrap();
+    s.execute("object.scale", &json!({"sx": 150, "sy": 50})).unwrap();
+    select(&mut s, &[b]);
+    s.execute("object.shear", &json!({"angle": 20})).unwrap();
+    select(&mut s, &[c]);
+    s.execute("object.reflect", &json!({"axis": "vertical"})).unwrap();
+    let turned: Vec<_> = [a, b, c].iter().map(|id| xf_of(&s, *id)).collect();
+    let centers: Vec<_> = [a, b, c].iter().map(|id| bounds(&s, *id).center()).collect();
+    let plain = rect(&mut s, 0.0, 0.0, 10.0, 10.0);
+    select(&mut s, &[b, c]);
+    let group = NodeId(s.execute("object.group", &json!({})).unwrap()["id"].as_u64().unwrap());
+    select(&mut s, &[a, group, plain]);
+    let plain_before = node(&s, plain);
+    let before = undo_len(&s);
+    let r = s.execute("symbol.instance.resetTransform", &json!({})).unwrap();
+    assert_eq!(r["ids"], json!([a.0, b.0, c.0]));
+    assert_eq!(undo_len(&s), before + 1, "one undo step");
+    for (id, center) in [a, b, c].into_iter().zip(&centers) {
+        let got = bounds(&s, id);
+        assert!((got.width() - placed.width()).abs() < 1e-9 && (got.height() - placed.height()).abs() < 1e-9, "{id:?}: {got:?}");
+        assert!((got.center() - *center).hypot() < 1e-9, "{id:?} keeps its center: {got:?} vs {center:?}");
+        let xf = xf_of(&s, id);
+        assert!(close_xf(xf.with_translation(vectorcraft_geom::Vec2::ZERO), master), "{id:?}: {xf:?}");
+    }
+    assert!(node(&s, plain) == plain_before, "other objects are left as they are");
+    s.execute("edit.undo", &json!({})).unwrap();
+    for (id, xf) in [a, b, c].into_iter().zip(turned) {
+        assert!(close_xf(xf_of(&s, id), xf), "Undo gives {id:?} its own transform back");
+    }
+}
+
+/// An instance of a symbol whose art lies away from the symbol's origin (as imported symbols can)
+/// keeps the center of the box its art fills when Reset Transformation turns it back.
+#[test]
+fn reset_transformation_keeps_the_center_of_art_away_from_the_origin() {
+    let mut s = session();
+    let r = rect(&mut s, 300.0, 10.0, 20.0, 20.0);
+    let art = node(&s, r);
+    s.execute("edit.clear", &json!({"ids": [r.0]})).unwrap();
+    let st = s.doc_mut().unwrap();
+    let d = std::sync::Arc::make_mut(&mut st.doc);
+    d.symbols.push(vectorcraft_doc::Symbol { dynamic: false, name: "Off".into(), art: std::sync::Arc::new(art) });
+    let layer = d.layers[0].id;
+    let id = d.alloc_id();
+    let xf = vectorcraft_geom::Affine::translate((100.0, 100.0)) * vectorcraft_geom::Affine::rotate(0.5);
+    d.insert(Some(layer), usize::MAX, Node::new(id, NodeKind::SymbolInstance { symbol: "Off".into(), xf })).unwrap();
+    let measured = |s: &Session| s.doc().unwrap().doc.bounds_of(&[id], false).unwrap();
+    let before = measured(&s);
+    assert_eq!(s.execute("symbol.instance.resetTransform", &json!({"ids": [id.0]})).unwrap()["ids"], json!([id.0]));
+    let after = measured(&s);
+    assert!((after.center() - before.center()).hypot() < 1e-9, "{after:?} vs {before:?}");
+    assert!((after.width() - 20.0).abs() < 1e-9 && (after.height() - 20.0).abs() < 1e-9, "{after:?}");
+}
+
+/// A stored natural size that is not positive (from a damaged file: zero or negative on either
+/// side) does not flatten or mirror the instance: Reset Transformation gives it the art's own
+/// size, as drawing the symbol does.
+#[test]
+fn reset_transformation_ignores_a_stored_size_that_is_not_positive() {
+    for size in [json!([0.0, 20.0]), json!([-20.0, 20.0]), json!([20.0, -5.0]), json!([-20.0, -20.0])] {
+        let mut s = session();
+        let r = rect(&mut s, 0.0, 0.0, 20.0, 20.0);
+        let art = node(&s, r);
+        s.execute("edit.clear", &json!({"ids": [r.0]})).unwrap();
+        let st = s.doc_mut().unwrap();
+        let d = std::sync::Arc::make_mut(&mut st.doc);
+        d.symbols.push(vectorcraft_doc::Symbol { dynamic: false, name: "Flat".into(), art: std::sync::Arc::new(art) });
+        d.unknown.insert(vectorcraft_doc::SYMBOL_SIZES.to_string(), json!({ "Flat": size }));
+        let layer = d.layers[0].id;
+        let id = d.alloc_id();
+        let xf = vectorcraft_geom::Affine::translate((100.0, 100.0)) * vectorcraft_geom::Affine::rotate(0.5);
+        d.insert(Some(layer), usize::MAX, Node::new(id, NodeKind::SymbolInstance { symbol: "Flat".into(), xf })).unwrap();
+        assert_eq!(s.execute("symbol.instance.resetTransform", &json!({"ids": [id.0]})).unwrap()["ids"], json!([id.0]), "{size}");
+        let after = s.doc().unwrap().doc.bounds_of(&[id], false).unwrap();
+        assert!((after.width() - 20.0).abs() < 1e-9 && (after.height() - 20.0).abs() < 1e-9, "{size}: {after:?}");
+        assert!(close_xf(xf_of(&s, id).with_translation(vectorcraft_geom::Vec2::ZERO), vectorcraft_geom::Affine::IDENTITY), "{size}: not mirrored");
+    }
+}
+
+/// Reset Transformation adds no undo step for an instance already at its symbol's scale or for
+/// one in perspective, and refuses an id naming no object and objects without an instance,
+/// changing nothing.
+#[test]
+fn reset_transformation_leaves_unchanged_instances_and_refuses_bad_ids() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 1000, "height": 800})).unwrap();
+    let (inst, name, _) = make_symbol(&mut s);
+    let before = undo_len(&s);
+    assert_eq!(s.execute("symbol.instance.resetTransform", &json!({"ids": [inst.0]})).unwrap()["ids"], json!([]));
+    assert_eq!(undo_len(&s), before, "nothing changed: no undo step");
+    let plain = rect(&mut s, 0.0, 0.0, 10.0, 10.0);
+    select(&mut s, &[inst]);
+    s.execute("object.rotate", &json!({"angle": 45})).unwrap();
+    let turned = s.doc().unwrap().doc.clone();
+    let before = undo_len(&s);
+    for bad in [json!({"ids": [inst.0, 999_999]}), json!({"id": 999_999}), json!({"ids": [plain.0]}), json!({"ids": "x"})] {
+        assert!(s.execute("symbol.instance.resetTransform", &bad).is_err(), "{bad}");
+    }
+    assert!(*s.doc().unwrap().doc == *turned && undo_len(&s) == before, "the refusals change nothing");
+    // An instance in perspective is left as it is.
+    s.execute("perspective.grid.preset", &json!({"kind": 2})).unwrap();
+    let projected = NodeId(s.execute("symbol.place", &json!({"name": name, "x": 500, "y": 350})).unwrap()["id"].as_u64().unwrap());
+    select(&mut s, &[projected]);
+    s.execute("object.rotate", &json!({"angle": 30})).unwrap();
+    s.execute("perspective.attach", &json!({"ids": [projected.0], "plane": "right"})).unwrap();
+    let xf = xf_of(&s, projected);
+    let before = undo_len(&s);
+    assert_eq!(s.execute("symbol.instance.resetTransform", &json!({"ids": [projected.0]})).unwrap()["ids"], json!([]));
+    assert!(undo_len(&s) == before && close_xf(xf_of(&s, projected), xf), "an instance in perspective stays as it was");
+    // Selected with a turned instance, the instance in perspective still stays as it was, and only
+    // the other one is reset and returned, in one undo step.
+    select(&mut s, &[inst, projected]);
+    assert_eq!(s.execute("symbol.instance.resetTransform", &json!({})).unwrap()["ids"], json!([inst.0]));
+    assert_eq!(undo_len(&s), before + 1, "one undo step");
+    assert!(close_xf(xf_of(&s, projected), xf), "the instance in perspective stays as it was");
+    let reset = xf_of(&s, inst).with_translation(vectorcraft_geom::Vec2::ZERO);
+    assert!(close_xf(reset, s.doc().unwrap().doc.symbol_natural_xf(&name)), "the turned instance is reset: {reset:?}");
 }
 
 /// New Symbol and Duplicate Symbol trim the name they are given, as Symbol Options trims

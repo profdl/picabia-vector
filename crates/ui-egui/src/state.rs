@@ -74,8 +74,9 @@ pub const ROTATE_VIEW_ANGLES: [(&str, f64); 12] = [
     ("-90°", -90.0),
 ];
 
-use super::{ControlResponse, Sender};
+use super::ControlResponse;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Sender;
 
 /// Zoom stop stepping reads this (set each UI frame and before commands) so canvas wheel zoom
 /// matches the status bar when Display Print Size at 100% Zoom is on.
@@ -201,10 +202,13 @@ pub const ICON_PANELS: &[(&str, &str, &str)] = &[
     ("attributes", "Attributes", "settings"),
     (crate::panels::svg_interactivity::ID, "SVG Interactivity", "spline-pointer"),
     ("colorThemes", "Color Themes", "sun"),
+    (crate::panels::color_wheel::ID, "Color Wheel", "circle"),
     (crate::panels::links::ID, "Links", "link"),
     (crate::panels::asset_export::ID, "Asset Export", "share-2"),
     (crate::panels::css_properties::ID, "CSS Properties", "globe"),
+    (crate::panels::three_d::ID, "3D and Materials", "dc-cube"),
     (crate::panels::variables::ID, "Variables", "chart-column"),
+    (crate::panels::script_console::ID, "Script Console", "message-circle"),
     (crate::addons::cleanup::ID, "Artwork Cleanup", "sparkles"),
     (crate::addons::color::ID, "Color Effects", "sun"),
     (crate::addons::pathtools::ID, "Anchor Inspector", "dc-anchor-smooth"),
@@ -268,6 +272,10 @@ pub struct ViewFlags {
     pub modifier_copy_outlines: bool,
     /// Type → Show Hidden Characters.
     pub hidden_chars: bool,
+    /// Edit › Spelling › Auto Spell Check: a red underline under the words of the type its
+    /// dictionaries don't know.
+    #[serde(default)]
+    pub auto_spell_check: bool,
     /// View → Hide/Show Template: template layers drawn (dimmed) or left out of the canvas.
     #[serde(default = "yes")]
     pub templates: bool,
@@ -296,6 +304,7 @@ impl Default for ViewFlags {
             live_paint_gaps: false,
             modifier_copy_outlines: false,
             hidden_chars: false,
+            auto_spell_check: false,
             templates: true,
         }
     }
@@ -345,6 +354,21 @@ pub struct ReplaceFontWarning {
     pub styles: Vec<(String, String)>,
 }
 
+/// A misspelled word right-clicked on the canvas ([`UiState::context_spelling`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContextSpelling {
+    /// The document's `uid`.
+    pub uid: u64,
+    /// The type object.
+    pub id: vectorcraft_doc::NodeId,
+    /// The word's bytes in the object's plain text, which `text.editRange` replaces.
+    pub start: usize,
+    pub end: usize,
+    pub word: String,
+    /// What the dictionary of the word's language suggests instead, best first.
+    pub suggestions: Vec<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiState {
@@ -374,7 +398,18 @@ pub struct UiState {
     /// That popup's first text field is still to take the keyboard.
     #[serde(skip)]
     pub transient_focus: bool,
+    /// The Separations Preview panel is still to scroll its Color Settings section into view:
+    /// Edit › Color Settings… and Assign Profile… show the panel for it, and the section sits below
+    /// the plates and Proof Setup, out of sight in a short window (#6419).
+    #[serde(skip)]
+    pub color_settings_scroll: bool,
+    /// Type › Find Font…'s last Find In choice (`find_font::FIND_IN`), kept while the app runs.
+    #[serde(skip)]
+    pub find_font_in: String,
     pub control_bar: bool,
+    /// The Control bar is docked to the bottom of the window instead of the top
+    /// (`window.control.dock`).
+    pub control_bar_bottom: bool,
     pub toolbar: bool,
     pub toolbar_double: bool,
     /// Advanced toolbar (every tool group) instead of the categorized Basic toolbar.
@@ -406,6 +441,10 @@ pub struct UiState {
     /// while it is open ([`crate::panels::artboards::MenuFacts`]). Not saved.
     #[serde(skip)]
     pub context_artboards: Option<crate::panels::artboards::MenuFacts>,
+    /// The word with Auto Spell Check's red line under the last right-click on the canvas, for the
+    /// context menu's suggestions, Ignore All and Add to Dictionary while it is open. Not saved.
+    #[serde(skip)]
+    pub context_spelling: Option<ContextSpelling>,
     /// Which link statuses the active document's images and placed documents have, for Select ›
     /// Linked, Embedded, Missing and Modified to be on only when some do (refreshed by
     /// [`crate::addons::select::link_status::refresh`]). Not saved.
@@ -461,10 +500,21 @@ pub struct UiState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dock_width: Option<f32>,
     /// The Tools panel floats with its top-left corner here (dragged out by its title bar); `None`:
-    /// docked at the window's left edge.
+    /// docked at the window's left edge, or beside the canvas with [`Self::tools_beside_canvas`].
     #[serde(default)]
     pub toolbar_pos: Option<[f32; 2]>,
+    /// The docked Tools panel sits between the left-side panels and the canvas instead of at the
+    /// window's left edge (Window › Toolbars › Keep Tools Beside the Canvas,
+    /// `window.toolsBesideCanvas`). Off by default, and off in state saved without it.
+    #[serde(default)]
+    pub tools_beside_canvas: bool,
+    /// The docked Tools panel stands on the right, between the canvas and the panels, instead of on
+    /// the left (dropped there, or `window.panel.dock {panel: "tools", side: "right"}`). Off by
+    /// default, and off in state saved without it.
+    #[serde(default)]
+    pub toolbar_right: bool,
     pub status_bar: bool,
+    pub help_bar: bool,
     pub dock: bool,
     /// The bars that Tab (`window.dock`) hid, which the next Tab shows again; none when Tab has not
     /// hidden them since it last showed them, or a workspace was applied since.
@@ -629,6 +679,11 @@ pub struct UiState {
     /// place, [`crate::dialogs::settle`] puts the document back at the front of `pending_fonts`.
     #[serde(skip)]
     pub fonts_dialog: Option<u64>,
+    /// The plug-in (`{id, file, name, label}`) the last launch was loading when it stopped, while
+    /// the user has not chosen what to do about it. When another dialog takes the choice's place,
+    /// [`crate::dialogs::settle`] opens the choice again once no dialog is open.
+    #[serde(skip)]
+    pub stopped_plugin: Option<Value>,
     /// The search the Missing Fonts dialog started (`text.findFontFiles`'s `id`), stopped once the
     /// dialog is gone.
     #[serde(skip)]
@@ -965,7 +1020,10 @@ impl Default for UiState {
             open_panel: None,
             transient_panel: None,
             transient_focus: false,
+            color_settings_scroll: false,
+            find_font_in: String::new(),
             control_bar: false,
+            control_bar_bottom: false,
             toolbar: true,
             toolbar_double: false,
             toolbar_advanced: false,
@@ -975,6 +1033,7 @@ impl Default for UiState {
             context_locked: None,
             context_intertwine: None,
             context_artboards: None,
+            context_spelling: None,
             link_statuses: Default::default(),
             slot_tool: Default::default(),
             floating_flyouts: vec![],
@@ -992,7 +1051,10 @@ impl Default for UiState {
             docking_generation: 0,
             dock_width: None,
             toolbar_pos: None,
+            tools_beside_canvas: false,
+            toolbar_right: false,
             status_bar: true,
+            help_bar: true,
             dock: true,
             tab_hid: None,
             view: ViewFlags::default(),
@@ -1043,6 +1105,7 @@ impl Default for UiState {
             made_text_style: vec![],
             pending_fonts: vec![],
             fonts_dialog: None,
+            stopped_plugin: None,
             dialog_search: None,
             links_search: None,
             dxf_options: Value::Null,

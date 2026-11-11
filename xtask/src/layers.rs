@@ -73,6 +73,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("physics", Class::Layer(2)),
     // PICABIA: the Lumix camera link (protocol, simulator, std::net); no workspace deps.
     ("lumix", Class::Standalone),
+    ("js", Class::Standalone),
+    ("apischema", Class::Standalone),
 ];
 
 /// Explicit orderings *within* a layer (earlier may be used by later).
