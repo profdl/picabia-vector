@@ -44,9 +44,20 @@ pub enum Confirm {
 }
 
 impl Confirm {
-    /// The boxes to tick, in order.
-    pub fn checks(self) -> Vec<&'static str> {
+    /// The boxes to tick, in order: the laser's, or (`knife`, PIC35) the drag knife's, which has no
+    /// beam to guard against but a blade, a Z that must be zeroed on the sheet and maybe a laser
+    /// still wired to the spindle output.
+    pub fn checks(self, knife: bool) -> Vec<&'static str> {
         match self {
+            Confirm::Start if knife => vec![
+                tl!("The drag knife is in the clamp and the laser is unplugged"),
+                tl!("Z was zeroed with the blade just touching the sheet"),
+                tl!("The material lies flat and is held down"),
+                tl!("Hands stay clear of the head while it moves"),
+                tl!("Someone stays at the machine until the job ends"),
+                tl!("A hardware emergency stop is in reach"),
+            ],
+            Confirm::Resume if knife => vec![tl!("Hands are clear of the head"), tl!("Nothing has moved and someone is at the machine")],
             Confirm::Start => vec![
                 tl!("The laser shielding is in place"),
                 tl!("Everyone near the machine wears laser safety glasses"),
@@ -62,8 +73,9 @@ impl Confirm {
         }
     }
 
-    fn title(self) -> &'static str {
+    fn title(self, knife: bool) -> &'static str {
         match self {
+            Confirm::Start if knife => tl!("Before the knife starts"),
             Confirm::Start => tl!("Before the laser starts"),
             Confirm::Resume => tl!("Before the job resumes"),
         }
@@ -94,6 +106,8 @@ pub struct Checklist {
     /// What the job came to when the checklist opened (Start): checked again at confirm, so the job
     /// that runs is the one the checklist showed.
     pub expected: Option<Expected>,
+    /// PICABIA (PIC35): the drag knife's boxes, not the laser's.
+    pub knife: bool,
 }
 
 /// A job's size and line count, and the dry run that tells them.
@@ -123,8 +137,22 @@ impl Expected {
 
 impl Checklist {
     pub fn new(kind: Confirm, params: Value) -> Self {
-        let n = kind.checks().len();
-        Checklist { kind, params, summary: Vec::new(), ticks: vec![false; n], ticked_by_automation: vec![false; n], press: None, expected: None }
+        Self::for_head(kind, params, false)
+    }
+
+    /// The checklist for the laser, or (`knife`) for the drag knife.
+    pub fn for_head(kind: Confirm, params: Value, knife: bool) -> Self {
+        let n = kind.checks(knife).len();
+        Checklist {
+            kind,
+            params,
+            summary: Vec::new(),
+            ticks: vec![false; n],
+            ticked_by_automation: vec![false; n],
+            press: None,
+            expected: None,
+            knife,
+        }
     }
 
     /// Every box is ticked.
@@ -277,7 +305,7 @@ pub fn checklist(app: &mut VectorcraftApp, ctx: &Context, st: &Status) {
     let t = Tokens::get(ctx);
     let (mut go, mut cancel) = (false, false);
     let mut open = true;
-    egui::Window::new(list.kind.title())
+    egui::Window::new(list.kind.title(list.knife))
         .id(Id::unique("picabia_laser_checklist"))
         .order(egui::Order::Foreground)
         .collapsible(false)
@@ -294,12 +322,14 @@ pub fn checklist(app: &mut VectorcraftApp, ctx: &Context, st: &Status) {
                 ui.add_space(6.0);
             }
             let intro = match list.kind {
+                Confirm::Start if list.knife => tl!("The blade can cut the material, the bed and fingers. Tick each box once it's true."),
+                Confirm::Resume if list.knife => tl!("Resuming lowers the blade and moves the head again."),
                 Confirm::Start => tl!("The laser can burn the material, the machine and eyes. Tick each box once it's true."),
                 Confirm::Resume => tl!("Resuming turns the beam back on."),
             };
             wrapped(ui, intro, t.text_dim);
             ui.add_space(8.0);
-            for (i, text) in list.kind.checks().into_iter().enumerate() {
+            for (i, text) in list.kind.checks(list.knife).into_iter().enumerate() {
                 let on = list.ticks.get(i).copied().unwrap_or(false);
                 if widgets::check(ui, text, on, true) {
                     list.toggle(i, auto_now);

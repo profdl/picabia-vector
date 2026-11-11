@@ -15,7 +15,7 @@
 use serde_json::{Map, Value, json};
 use vectorcraft_geom::kurbo::Rect;
 use vectorcraft_modifiers::StencilMaterial;
-use vectorcraft_stencil::{Gcode, GcodeParams, LadderParams, LaserParams, LaserSheet};
+use vectorcraft_stencil::{Gcode, GcodeParams, Head, KnifeParams, LadderParams, LaserParams, LaserSheet};
 
 use super::laser::{
     CardSetup, Out, Pref, bad, card_sheet, file_name, finite, get, out_of, pref, set_pref, sheet_path, stencil_material, stencil_object,
@@ -51,6 +51,11 @@ pub struct MachineProfile {
     pub origin: String,
     /// Per material (`paper`, `film`, `card`, `custom`): `{cut, score, engrave}` op settings.
     pub materials: Map<String, Value>,
+    /// PICABIA (PIC35): what is in the tool clamp: the laser (the default) or a drag knife on Z.
+    /// Jobs on the machine are written and checked for this head.
+    pub head: Head,
+    /// The drag knife's settings (depths, feeds, blade offset), used when `head` is the knife.
+    pub knife: KnifeParams,
 }
 
 impl Default for MachineProfile {
@@ -65,6 +70,8 @@ impl Default for MachineProfile {
             checked: false,
             origin: "head".into(),
             materials: Map::new(),
+            head: Head::Laser,
+            knife: KnifeParams::default(),
         }
     }
 }
@@ -90,7 +97,8 @@ impl MachineProfile {
 
     /// Overwrite what `v` sets validly (`name`, `bedWidthMm`, `bedHeightMm`, `sMax`, `rapidMmMin`,
     /// `air`, `checked`, `origin`, `materials: {paper|film|card|custom: {cut?, score?, engrave?}}`,
-    /// op objects overlaid field by field); wrong types are ignored, numbers clamped.
+    /// op objects overlaid field by field, `head` (`laser`|`knife`), `knife: {safeZMm?, cutZMm?,
+    /// …}` overlaid field by field); wrong types are ignored, numbers clamped.
     pub fn apply_json(&mut self, v: &Value) {
         let Some(o) = v.as_object() else { return };
         let num = |k: &str| o.get(k).and_then(Value::as_f64).filter(|x| x.is_finite());
@@ -125,6 +133,12 @@ impl MachineProfile {
                 self.origin = "machine".into();
             }
         }
+        if let Some(h) = o.get("head").and_then(Value::as_str).and_then(Head::from_id) {
+            self.head = h;
+        }
+        if let Some(k) = o.get("knife") {
+            self.knife.apply_json(k);
+        }
         if let Some(m) = o.get("materials").and_then(Value::as_object) {
             for id in MATERIALS {
                 if let Some(ops) = m.get(id).filter(|v| v.is_object()) {
@@ -148,6 +162,8 @@ impl MachineProfile {
             "checked": self.checked,
             "origin": self.origin,
             "materials": Value::Object(self.materials.clone()),
+            "head": self.head.id(),
+            "knife": self.knife.to_json(),
         })
     }
 
@@ -219,12 +235,16 @@ pub(super) fn job_params(s: &Session, material: StencilMaterial, p: &Value) -> G
     let mut gp = prof.material_ops(material.id());
     gp.s_max = machine_s_max(s).unwrap_or(prof.s_max);
     gp.air = prof.air;
+    gp.head = prof.head;
+    gp.knife = prof.knife;
     gp.apply_json(p);
     gp.header = vec![format!("machine: {}", ascii(&prof.name)), format!("material: {}", material.id())];
     gp
 }
 
-/// The laser settings for G-code: as the SVG export's, with the bed the machine's.
+/// The laser settings for G-code: as the SVG export's, with the bed the machine's. With the
+/// knife as the profile's head, the kerf is 0 unless `p` gives one: a blade takes no width out,
+/// so the material's beam kerf would grow every cut-out.
 pub(super) fn job_laser_params(s: &Session, kerf: Option<f64>, p: &Value) -> LaserParams {
     let (w, h) = bed_mm(s);
     let mut lp = LaserParams::default();
@@ -232,6 +252,9 @@ pub(super) fn job_laser_params(s: &Session, kerf: Option<f64>, p: &Value) -> Las
     lp.apply_json(&json!({"bedWidthMm": w, "bedHeightMm": h}));
     if let Some(k) = kerf {
         lp.apply_json(&json!({"kerfMm": k}));
+    }
+    if MachineProfile::of(s).head == Head::Knife {
+        lp.apply_json(&json!({"kerfMm": 0.0}));
     }
     lp.apply_json(p);
     lp
@@ -253,7 +276,10 @@ fn secs(v: f64) -> f64 {
 
 /// One sheet's G-code, refused (empty text) as an error.
 pub(super) fn sheet_gcode(cmd: &str, sheet: &LaserSheet, gp: &GcodeParams) -> Result<Gcode> {
-    let g = vectorcraft_stencil::laser_gcode(sheet, gp);
+    let g = match gp.head {
+        Head::Laser => vectorcraft_stencil::laser_gcode(sheet, gp),
+        Head::Knife => vectorcraft_stencil::knife_gcode(sheet, gp),
+    };
     if g.text.is_empty() {
         let why = if g.warnings.is_empty() { "the G-code was refused".to_string() } else { g.warnings.join("; ") };
         return Err(EngineError::Disabled(cmd.into(), format!("sheet {}: {why}", sheet.name)));

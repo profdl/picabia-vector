@@ -37,13 +37,15 @@ mod native;
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::LaserStopHandle;
 #[cfg(test)]
+mod knife_tests;
+#[cfg(test)]
 mod tests;
 
 use kurbo::Rect;
 use serde_json::{Value, json};
 
 use job::{LaserRun, bed_mm, build_run, rect_json};
-pub use job::{Machine, check_gcode, check_line, gcode_bounds};
+pub use job::{Machine, check_gcode, check_gcode_for, check_line, check_line_for, gcode_bounds};
 
 use super::{CommandSpec, always, bad, cmd};
 use crate::{EngineError, Result, Session};
@@ -57,6 +59,10 @@ pub const STATUS_LOG_LINES: usize = 50;
 /// The simulator's port path.
 pub const SIM_PORT: &str = "sim";
 /// The commands that turn the beam on, the ones [`Session::laser_execute_armed`] runs.
+/// PICABIA (PIC35): why a knife job or frame waits for Set origin.
+pub const KNIFE_Z_UNSET: &str =
+    "the knife's Z isn't zeroed: lower the blade until it just touches the sheet at its bottom-left corner, then press Set origin";
+
 pub const BEAM_COMMANDS: [&str; 3] = ["laser.start", "laser.frame", "laser.resume"];
 /// Why a beam command is refused without the arm.
 pub const NOT_ARMED: &str = "the laser isn't armed: in the desktop app's Laser window, go through the safety checklist and press Start (scripts, agents, MCP and the control channel can't arm)";
@@ -344,7 +350,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Laser Status",
             [],
             None,
-            "{} → {connected, phase (closed|connecting|ready|lost), port, portName, sim, hardware (real ports allowed), state (Idle|Run|Hold|Jog|Alarm|Door|Check|Home|Sleep|Unknown, null before the first report), pos {x, y, z} (work, mm) | null, mpos {x, y, z} | null, feed, power (S) | null, armed, stopping, job {name, state (running|paused|done|stopped|failed), line (lines answered), lines, sent, percent, elapsedSec, etaSec | null, estimatedSec | null, why?, failedLine?, source (gcode|file|testCard|powerLadder|frame), boundsMm {x0, y0, x1, y1} | null, warnings} | null, alarm {code, text, advice} | null, settings {sMax ($30) | null, laserMode ($32) | null, maxTravel [x, y, z] | null, homing | null, softLimits | null, version | null, build | null, rxSize}, profile {name, bedWidthMm, bedHeightMm, sMax, rapidMmMin, air, checked, origin (head|machine)}, sMaxUsed (the machine's $30 when known, else the profile's), bedMm {w, h} (jobs must stay on it: the profile's bed, less where $130/$131 are smaller), canStart (everything but the arming and the job's size allows a start), startBlockedBy [plain reasons], lastError | null, warnings [plain], log [the last 50 lines in (\"< \") and out (\"> \")], simStats {burnMm, beamOnTravelMm, beamOnStillMs, movedMm, gcodeLines, overflows, maxRxUsed, resets} | null}",
+            "{} → {connected, phase (closed|connecting|ready|lost), port, portName, sim, hardware (real ports allowed), state (Idle|Run|Hold|Jog|Alarm|Door|Check|Home|Sleep|Unknown, null before the first report), pos {x, y, z} (work, mm) | null, mpos {x, y, z} | null, feed, power (S) | null, armed, stopping, job {name, state (running|paused|done|stopped|failed), line (lines answered), lines, sent, percent, elapsedSec, etaSec | null, estimatedSec | null, why?, failedLine?, source (gcode|file|testCard|powerLadder|frame), boundsMm {x0, y0, x1, y1} | null, warnings} | null, alarm {code, text, advice} | null, settings {sMax ($30) | null, laserMode ($32) | null, maxTravel [x, y, z] | null, homing | null, softLimits | null, version | null, build | null, rxSize}, profile {name, bedWidthMm, bedHeightMm, sMax, rapidMmMin, air, checked, origin (head|machine), head (laser|knife), knife {safeZMm, cutZMm, score, scoreZMm, feedMmMin, plungeMmMin, passes, offsetMm, swivelDeg, overcutMm}}, knifeZSet (Set origin zeroed Z with the knife on this connection; knife jobs wait for it), sMaxUsed (the machine's $30 when known, else the profile's), bedMm {w, h} (jobs must stay on it: the profile's bed, less where $130/$131 are smaller), canStart (everything but the arming and the job's size allows a start), startBlockedBy [plain reasons], lastError | null, warnings [plain], log [the last 50 lines in (\"< \") and out (\"> \")], simStats {burnMm, beamOnTravelMm, beamOnStillMs, movedMm, gcodeLines, overflows, maxRxUsed, resets} | null}",
             always,
             status
         ),
@@ -363,7 +369,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Jog Laser",
             [],
             None,
-            "{dx?, dy? (mm, relative: $J=G91) | x?, y? (mm, work coordinates: $J=G90), feed? (mm/min, 1-20000; default the profile's rapid)} (beam off; refused while a job runs) → laser.status + {sent}",
+            "{dx?, dy?, dz? (mm, relative: $J=G91) | x?, y?, z? (mm, work coordinates: $J=G90), feed? (mm/min, 1-20000; default the profile's rapid)} (beam off; Z raises or lowers the head: the knife onto the sheet before Set origin; refused while a job runs) → laser.status + {sent}",
             always,
             jog
         ),
@@ -373,7 +379,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Laser Origin",
             [],
             None,
-            "{} (G10 L20 P1 X0 Y0: the head's position becomes the work origin, where a job's sheet has its bottom-left corner) → laser.status + {sent}",
+            "{} (G10 L20 P1 X0 Y0: the head's position becomes the work origin, where a job's sheet has its bottom-left corner; with the drag knife as the profile's head, G10 L20 P1 X0 Y0 Z0: the blade, lowered until it just touches the sheet, also sets Z 0 at the sheet's surface, which knife jobs and frames wait for on each connection) → laser.status + {sent}",
             always,
             set_origin
         ),
@@ -382,7 +388,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Frame Laser Job",
             [],
             None,
-            "{ids?|id? (the objects to cut, default the selection: any objects, cut along their outlines as laser.gcode cuts them; a single stencil object: its sheet), sheet? (a stencil's sheet, 1-based; needed when it has several), mmPerUnit?, widthMm? (the objects' scale, as laser.gcode), overlapMm?, label? (a stencil's, as modifier.stencilGcode), gcode? (G-code text), path? (a .gcode, .nc, .ngc, .gc, .tap or .txt file), testCard? (card|powerLadder) (at most one of gcode, path and testCard; none: the objects), name? (the job's name), material? (paper|film|card|custom; the saved settings of which material; default the stencil's, else paper), kerfMm?, sMax?, originXMm?, originYMm?, air?, cut?, score?, engrave? ({enabled, speedMmMin, powerPct, passes}: as modifier.stencilGcode; sMax is always the connected machine's $30 when it reports one), powersPct?, speedsMmMin?, squareMm?, gapMm?, passes? (the job, as laser.start), beam? (false, the default: trace the job's bounding box with the beam off, as jogs at the profile's rapid speed; true: with the beam at 1% (M4 S = 1% of $30), which only the desktop app's Laser window can run (armed))} (the machine must be Idle and the box on the bed, as laser.start checks it) → laser.status + {boundsMm, beam, sent, warnings}",
+            "{ids?|id? (the objects to cut, default the selection: any objects, cut along their outlines as laser.gcode cuts them; a single stencil object: its sheet), sheet? (a stencil's sheet, 1-based; needed when it has several), mmPerUnit?, widthMm? (the objects' scale, as laser.gcode), overlapMm?, label? (a stencil's, as modifier.stencilGcode), gcode? (G-code text), path? (a .gcode, .nc, .ngc, .gc, .tap or .txt file), testCard? (card|powerLadder) (at most one of gcode, path and testCard; none: the objects), name? (the job's name), material? (paper|film|card|custom; the saved settings of which material; default the stencil's, else paper), kerfMm?, sMax?, originXMm?, originYMm?, air?, cut?, score?, engrave? ({enabled, speedMmMin, powerPct, passes}: as modifier.stencilGcode; sMax is always the connected machine's $30 when it reports one), powersPct?, speedsMmMin?, squareMm?, gapMm?, passes? (the job, as laser.start), beam? (false, the default: trace the job's bounding box with the beam off, as jogs at the profile's rapid speed; true: with the beam at 1% (M4 S = 1% of $30), which only the desktop app's Laser window can run (armed))} (the machine must be Idle and the box on the bed, as laser.start checks it; with the drag knife: up to the knife's travel height first, never with the beam) → laser.status + {boundsMm, beam, sent, warnings}",
             always,
             frame
         ),
@@ -391,7 +397,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Start Laser Job",
             [],
             None,
-            "{ids?|id? (the objects to cut, default the selection: any objects, cut along their outlines as laser.gcode cuts them; a single stencil object: its sheet), sheet? (a stencil's sheet, 1-based; needed when it has several), mmPerUnit?, widthMm? (the objects' scale, as laser.gcode), overlapMm?, label? (a stencil's, as modifier.stencilGcode), gcode? (G-code text), path? (a .gcode, .nc, .ngc, .gc, .tap or .txt file), testCard? (card|powerLadder) (at most one of gcode, path and testCard; none: the objects), name? (the job's name), material? (paper|film|card|custom; the saved settings of which material; default the stencil's, else paper), kerfMm?, sMax?, originXMm?, originYMm?, air?, cut?, score?, engrave? ({enabled, speedMmMin, powerPct, passes}: as modifier.stencilGcode; sMax is always the connected machine's $30 when it reports one), powersPct?, speedsMmMin?, squareMm?, gapMm?, passes? (the power ladder's)} (only the desktop app's Laser window can start a job (armed, after its safety checklist): from anywhere else it is refused; also refused unless the machine is ready and Idle, $32 = 1, and the job stays on the bed: with the profile's origin at the head (the default), the work offset plus the job's bounds must lie in the machine's travel (its sign convention taken from where the head is; when it can't be told, only what can be is checked, with a warning); with the origin at the machine's, the bounds in 0..bed; every line of the G-code (given, read or written by Picabia) must pass the laser allow-list: no $ system commands (settings, homing, jogs, resets), no M3 (constant power), no Z or other axes, no tool, plane, unit (G20: export in mm) or coordinate-system changes (G10, G28, G30, G53, G55-G59, G92), only the G-codes G0-G4, G17, G21, G40, G49, G54, G61, G80, G90, G91, G91.1, G94 and the M-codes M2, M4, M5, M8, M9, M30; the refusal names the line) → laser.status + {started: {name, lines, estimatedSec, boundsMm, warnings}}",
+            "{ids?|id? (the objects to cut, default the selection: any objects, cut along their outlines as laser.gcode cuts them; a single stencil object: its sheet), sheet? (a stencil's sheet, 1-based; needed when it has several), mmPerUnit?, widthMm? (the objects' scale, as laser.gcode), overlapMm?, label? (a stencil's, as modifier.stencilGcode), gcode? (G-code text), path? (a .gcode, .nc, .ngc, .gc, .tap or .txt file), testCard? (card|powerLadder) (at most one of gcode, path and testCard; none: the objects), name? (the job's name), material? (paper|film|card|custom; the saved settings of which material; default the stencil's, else paper), kerfMm?, sMax?, originXMm?, originYMm?, air?, cut?, score?, engrave? ({enabled, speedMmMin, powerPct, passes}: as modifier.stencilGcode; sMax is always the connected machine's $30 when it reports one), powersPct?, speedsMmMin?, squareMm?, gapMm?, passes? (the power ladder's)} (only the desktop app's Laser window can start a job (armed, after its safety checklist): from anywhere else it is refused; also refused unless the machine is ready and Idle, $32 = 1, and the job stays on the bed: with the profile's origin at the head (the default), the work offset plus the job's bounds must lie in the machine's travel (its sign convention taken from where the head is; when it can't be told, only what can be is checked, with a warning); with the origin at the machine's, the bounds in 0..bed; every line of the G-code (given, read or written by Picabia) must pass the laser allow-list: no $ system commands (settings, homing, jogs, resets), no M3 (constant power), no Z or other axes (PIC35: with the drag knife as the profile's head, jobs are written for the knife, Z is allowed, M3, M4 and S above 0 are not, and Set origin must have zeroed Z on this connection; `head` isn't a job param), no tool, plane, unit (G20: export in mm) or coordinate-system changes (G10, G28, G30, G53, G55-G59, G92), only the G-codes G0-G4, G17, G21, G40, G49, G54, G61, G80, G90, G91, G91.1, G94 and the M-codes M2, M4, M5, M8, M9, M30; the refusal names the line) → laser.status + {started: {name, lines, estimatedSec, boundsMm, warnings}}",
             always,
             start
         ),
@@ -585,7 +591,13 @@ fn unlock(s: &mut Session, _p: &Value) -> Result<Value> {
 
 fn set_origin(s: &mut Session, _p: &Value) -> Result<Value> {
     person_or_sim("laser.setOrigin", s)?;
-    let r = send_lines("laser.setOrigin", s, &["G10 L20 P1 X0 Y0".into()])?;
+    let knife = Machine::of(s).knife();
+    let line = if knife { "G10 L20 P1 X0 Y0 Z0" } else { "G10 L20 P1 X0 Y0" };
+    let r = send_lines("laser.setOrigin", s, &[line.into()])?;
+    #[cfg(not(target_arch = "wasm32"))]
+    if knife {
+        s.picabia.laser.set_knife_z(true);
+    }
     Ok(status_with(s, r))
 }
 
@@ -602,10 +614,11 @@ fn jog(s: &mut Session, p: &Value) -> Result<Value> {
         }
     };
     let (dx, dy, x, y) = (axis("dx")?, axis("dy")?, axis("x")?, axis("y")?);
-    let relative = dx.is_some() || dy.is_some();
-    let absolute = x.is_some() || y.is_some();
+    let (dz, z) = (axis("dz")?, axis("z")?);
+    let relative = dx.is_some() || dy.is_some() || dz.is_some();
+    let absolute = x.is_some() || y.is_some() || z.is_some();
     if relative == absolute {
-        return Err(bad(CMD, "give dx/dy (a relative jog) or x/y (to a work position), not both and not neither"));
+        return Err(bad(CMD, "give dx/dy/dz (a relative jog) or x/y/z (to a work position), not both and not neither"));
     }
     let feed = match get(p, "feed") {
         None => Machine::of(s).rapid_mm_min,
@@ -614,13 +627,16 @@ fn jog(s: &mut Session, p: &Value) -> Result<Value> {
             _ => return Err(bad(CMD, "`feed` must be a speed in mm/min (1-20000)")),
         },
     };
-    let (mode, ax, ay) = if relative { ("G91", dx, dy) } else { ("G90", x, y) };
+    let (mode, ax, ay, az) = if relative { ("G91", dx, dy, dz) } else { ("G90", x, y, z) };
     let mut line = format!("$J={mode} G21");
     if let Some(v) = ax {
         line.push_str(&format!(" X{}", gnum(v)));
     }
     if let Some(v) = ay {
         line.push_str(&format!(" Y{}", gnum(v)));
+    }
+    if let Some(v) = az {
+        line.push_str(&format!(" Z{}", gnum(v)));
     }
     line.push_str(&format!(" F{}", gnum(feed)));
     let r = send_lines(CMD, s, &[line])?;
@@ -685,6 +701,9 @@ fn check_machine(cmd: &str, s: &Session, bounds: Rect, need_laser_mode: bool) ->
         return Err(disabled(cmd, why));
     }
     let prof = Machine::of(s);
+    if prof.knife() && !s.picabia.laser.knife_z_set() {
+        return Err(disabled(cmd, KNIFE_Z_UNSET));
+    }
     let machine = s.picabia.laser.machine_frame();
     check_placement(bounds, bed_mm(s), prof.origin_at_head(), &machine).map_err(|why| disabled(cmd, why))
 }
@@ -783,6 +802,10 @@ fn frame(s: &mut Session, p: &Value) -> Result<Value> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let prof = Machine::of(s);
+        if beam && prof.knife() {
+            return Err(disabled(CMD, "the head is the drag knife, which has no beam: frame with the beam off"));
+        }
         if beam && !armed {
             return Err(disabled(CMD, NOT_ARMED));
         }
@@ -814,6 +837,11 @@ fn frame(s: &mut Session, p: &Value) -> Result<Value> {
             lines
         } else {
             let mut lines = vec!["M5".to_string()];
+            // The knife goes up to its travel height first, or the frame would drag the blade
+            // across the sheet.
+            if prof.knife() {
+                lines.push(format!("$J=G90 G21 Z{} F{rapid}", gnum(prof.knife.safe_z_mm)));
+            }
             lines.extend(corners.iter().map(|(x, y)| format!("$J=G90 G21 X{} Y{} F{rapid}", gnum(*x), gnum(*y))));
             s.picabia.laser.command(lines.clone()).map_err(|why| disabled(CMD, why))?;
             lines

@@ -184,6 +184,8 @@ pub enum Action {
     Home,
     Unlock,
     Jog(f64, f64),
+    /// Up (+) or down (−) by this many mm.
+    JogZ(f64),
     JogCancel,
     SetOrigin,
     Frame(Value),
@@ -338,6 +340,12 @@ fn machine_column(app: &mut VectorcraftApp, ui: &mut Ui, panel: &mut LaserPanel,
 fn job_column(app: &mut VectorcraftApp, ui: &mut Ui, panel: &mut LaserPanel, st: &Status, actions: &mut Vec<Action>) {
     section(ui, tl!("Job"));
     let now = ui.ctx().input(|i| i.time);
+    let knife = st.knife_settings();
+    if panel.job.knife != knife {
+        // Another head writes another job: dry-run it again.
+        panel.job.knife = knife;
+        panel.job.changed(now);
+    }
     if job::settings(app, ui, &mut panel.job, st.job_active()) {
         panel.job.changed(now);
     }
@@ -546,6 +554,25 @@ fn jog(ui: &mut Ui, panel: &mut LaserPanel, st: &Status, actions: &mut Vec<Actio
         if st.connected && resp.clicked() {
             actions.push(Action::JogCancel);
         }
+        // Z: up and down (the knife onto the sheet before Set origin, a laser's focus height), at
+        // most 10 mm a click: a Z axis is short and the bed is under it.
+        let (zr, _) = ui.allocate_exact_size(vec2(B, B * 3.0 + 8.0), Sense::hover());
+        let s = s.min(10.0);
+        for (r, dir, dz, name) in [
+            (egui::Rect::from_min_size(zr.min, vec2(B, B)), vec2(0.0, -1.0), s, tl!("Raise the head (Z+)")),
+            (egui::Rect::from_min_size(zr.min + vec2(0.0, 2.0 * (B + 4.0)), vec2(B, B)), vec2(0.0, 1.0), -s, tl!("Lower the head (Z−)")),
+        ] {
+            let resp =
+                ui.interact(r, Id::unique(("picabia_laser_jog_z", name)), if free { Sense::click() } else { Sense::hover() }).on_hover_text(name);
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, free, name));
+            let fill = if free && resp.hovered() { t.hover } else { t.button };
+            ui.painter().rect_filled(r, CornerRadius::same(5), fill);
+            arrow(ui, r, dir, if free { t.icon } else { t.text_disabled });
+            if free && resp.clicked() {
+                actions.push(Action::JogZ(dz));
+            }
+        }
+        ui.painter().text(zr.center(), egui::Align2::CENTER_CENTER, "Z", egui::FontId::proportional(12.0), t.text_dim);
         ui.add_space(8.0);
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
@@ -573,7 +600,19 @@ fn jog(ui: &mut Ui, panel: &mut LaserPanel, st: &Status, actions: &mut Vec<Actio
             }
         });
     });
-    crate::picabia_ui::note(ui, tl!("Jog to the sheet's bottom-left corner, Set origin, Frame, then Start."));
+    if st.knife() {
+        crate::picabia_ui::note(
+            ui,
+            tl!(
+                "Jog to the sheet's bottom-left corner, lower the blade until it just touches the sheet, Set origin (it zeroes Z too), Frame, then Start."
+            ),
+        );
+        if st.connected && !st.knife_z_set {
+            wrapped(ui, tl!("Z isn't zeroed for the knife on this connection yet."), readable(t.warning, &t));
+        }
+    } else {
+        crate::picabia_ui::note(ui, tl!("Jog to the sheet's bottom-left corner, Set origin, Frame, then Start."));
+    }
     crate::picabia_ui::note(
         ui,
         tl!("While a menu of the menu bar is open the app can't react, Shift+Esc and Stop included: use the machine's emergency stop."),
@@ -679,6 +718,13 @@ fn act(app: &mut VectorcraftApp, a: Action, st: &Status, automated: bool) {
             }
             let _ = run::as_person(app, automated, "laser.jog", p);
         }
+        Action::JogZ(dz) => {
+            let mut p = json!({"dz": dz});
+            if let Some(f) = app.picabia.laser.feed {
+                p["feed"] = json!(f);
+            }
+            let _ = run::as_person(app, automated, "laser.jog", p);
+        }
         Action::JogCancel => {
             let _ = app.run("laser.jogCancel", empty);
         }
@@ -693,7 +739,8 @@ fn act(app: &mut VectorcraftApp, a: Action, st: &Status, automated: bool) {
         Action::Start(p) => {
             let job = &app.picabia.laser.job;
             let start = job.start_params(p);
-            let mut list = Checklist::new(Confirm::Start, start.clone());
+            let knife = job.knife.is_some();
+            let mut list = Checklist::for_head(Confirm::Start, start.clone(), knife);
             list.summary = job.checklist_lines(&job::selection_name(app).unwrap_or_default());
             list.expected = job.expected(&job::selection(app), &start);
             app.picabia.laser.checklist = Some(list);
@@ -703,7 +750,8 @@ fn act(app: &mut VectorcraftApp, a: Action, st: &Status, automated: bool) {
         }
         Action::Resume => {
             if st.paused() {
-                app.picabia.laser.checklist = Some(Checklist::new(Confirm::Resume, Value::Null));
+                let knife = app.picabia.laser.job.knife.is_some();
+                app.picabia.laser.checklist = Some(Checklist::for_head(Confirm::Resume, Value::Null, knife));
             } else {
                 // A hold that isn't a job's (a jog): resuming it lights nothing.
                 let _ = app.run("laser.resume", empty);

@@ -51,6 +51,7 @@ mod hold;
 mod hoshi;
 mod index;
 mod islands;
+pub mod knife_gcode;
 mod laser;
 mod laser_bed;
 mod laser_card;
@@ -71,6 +72,7 @@ mod visible;
 pub use colour::{ColourInfo, Selector, colour_infos, luminance, mm_per_unit};
 pub use compute::{Island, MAX_PAINTS, Stats, StencilError, StencilOut, Tile, compute, compute_repeat};
 pub use gather::{Gathered, MAX_GATHER_DEPTH, MAX_GATHER_VISITS, MAX_STROKE_WIDTH, Source, gather, gather_shaped};
+pub use knife_gcode::{Head, KnifeParams, knife_gcode};
 pub use laser::{
     Contour, LaserInput, LaserJob, LaserParams, LaserSheet, MAX_LABEL_LINES, MAX_SHEET_MM, MAX_SHEET_POINTS, MAX_SHEETS, Polyline, laser_job,
     order_contours,
@@ -122,6 +124,8 @@ mod gather_tests;
 mod hold_tests;
 #[cfg(test)]
 mod hoshi_tests;
+#[cfg(test)]
+mod knife_gcode_tests;
 #[cfg(test)]
 mod laser_card_tests;
 #[cfg(test)]

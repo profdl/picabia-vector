@@ -252,6 +252,10 @@ pub struct Worker {
     pub port: String,
     pub port_name: String,
     pub sim: bool,
+    /// PICABIA (PIC35): Set origin zeroed Z with the knife as the head on this connection. GRBL
+    /// keeps a work offset across connections and power cycles, so without this a knife job's
+    /// `G0 Z5` could be 5 mm above wherever an old offset put Z 0, not above the sheet.
+    pub knife_z_set: bool,
 }
 
 fn lock(m: &Mutex<Shared>) -> MutexGuard<'_, Shared> {
@@ -316,7 +320,8 @@ impl LaserLink {
             .name("picabia-laser".into())
             .spawn(move || guarded_run(link, rx, worker_shared, worker_flags))
             .map_err(|e| EngineError::Other(format!("{cmd}: couldn't start the laser link: {e}")))?;
-        self.worker = Some(Worker { tx, shared, flags, handle: Some(handle), port: port.to_string(), port_name: name, sim: is_sim });
+        self.worker =
+            Some(Worker { tx, shared, flags, handle: Some(handle), port: port.to_string(), port_name: name, sim: is_sim, knife_z_set: false });
         Ok(())
     }
 
@@ -519,6 +524,17 @@ impl LaserLink {
         .flatten()
     }
 
+    /// Set origin zeroed Z for the knife on this connection (see [`Worker::knife_z_set`]).
+    pub(super) fn knife_z_set(&self) -> bool {
+        self.worker.as_ref().is_some_and(|w| w.knife_z_set)
+    }
+
+    pub(super) fn set_knife_z(&mut self, set: bool) {
+        if let Some(w) = self.worker.as_mut() {
+            w.knife_z_set = set;
+        }
+    }
+
     /// Why a job or frame can't start now on the machine's side.
     pub(super) fn blocked_by_machine(&self, need_laser_mode: bool) -> Option<String> {
         self.with(|sh| machine_blocks(&sh.snap, need_laser_mode).into_iter().next()).flatten()
@@ -647,7 +663,11 @@ pub(super) fn fill_status(link: &LaserLink, prof: &Machine, v: &mut Value) {
             blocked.push("the laser is stopping".to_string());
         }
         blocked.extend(machine_blocks(snap, true));
+        if prof.knife() && !w.knife_z_set {
+            blocked.push(super::KNIFE_Z_UNSET.to_string());
+        }
     }
+    v["knifeZSet"] = json!(w.knife_z_set);
     v["canStart"] = json!(blocked.is_empty());
     v["startBlockedBy"] = json!(blocked);
     let mut warnings = Vec::new();

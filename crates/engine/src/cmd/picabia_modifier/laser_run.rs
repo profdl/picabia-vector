@@ -55,7 +55,10 @@ fn secs(v: f64) -> f64 {
 pub(crate) fn trusted_run(cmd: &str, s: &Session, p: &Value) -> Result<TrustedRun> {
     let (p, warning) = machine_wins(s, p);
     let p = &p;
-    let rapid = MachineProfile::of(s).rapid_mm_min;
+    let prof = MachineProfile::of(s);
+    let rapid = prof.rapid_mm_min;
+    // What the job is called after: the tool that cuts it.
+    let tool = if prof.head == vectorcraft_stencil::Head::Knife { "knife" } else { "laser" };
     let mut warnings: Vec<String> = warning.into_iter().collect();
     if let Some(v) = get(p, "testCard") {
         let ladder = match v {
@@ -101,7 +104,7 @@ pub(crate) fn trusted_run(cmd: &str, s: &Session, p: &Value) -> Result<TrustedRu
         warnings.extend(g.warnings.iter().cloned());
         let layer = super::super::targets(s, p).ok().and_then(|ids| ids.first().copied());
         return Ok(TrustedRun {
-            name: format!("{} laser", d.base),
+            name: format!("{} {tool}", d.base),
             estimated_sec: secs(vectorcraft_stencil::estimate_sec(&g, rapid)),
             bounds: g.bounds_mm,
             text: g.text,
@@ -130,7 +133,7 @@ pub(crate) fn trusted_run(cmd: &str, s: &Session, p: &Value) -> Result<TrustedRu
     warnings.extend(job.warnings);
     warnings.extend(g.warnings.iter().cloned());
     Ok(TrustedRun {
-        name: if n > 1 { format!("{} laser {k}", job.base) } else { format!("{} laser", job.base) },
+        name: if n > 1 { format!("{} {tool} {k}", job.base) } else { format!("{} {tool}", job.base) },
         estimated_sec: secs(vectorcraft_stencil::estimate_sec(&g, rapid)),
         bounds: g.bounds_mm,
         text: g.text,

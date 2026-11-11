@@ -228,7 +228,7 @@ fn junk_status_reads_as_nothing() {
 #[test]
 fn ticks_and_presses_from_automation_are_told_apart() {
     let mut list = Checklist::new(Confirm::Start, json!({}));
-    assert!(Confirm::Start.checks().contains(&"A hardware emergency stop is in reach"));
+    assert!(Confirm::Start.checks(false).contains(&"A hardware emergency stop is in reach"));
     for i in 0..list.ticks.len() {
         list.toggle(i, i == 2);
     }
@@ -413,5 +413,41 @@ fn the_ladders_checklist_shows_its_grid_and_the_line_count_is_what_is_sent() {
     run::confirm(&mut app, &mut ticked(Confirm::Start, j.start_params(j.params(&[]).unwrap())), false).unwrap();
     let st = wait(&mut app, "done", |s| s.job.as_ref().is_some_and(|j| j.state == "done"));
     assert_eq!(st.job.unwrap().lines, shown);
+    app.run("laser.disconnect", json!({})).unwrap();
+}
+
+/// PICABIA (PIC35): with the drag knife as the head the profile shows the knife's settings, the
+/// job its knife line, the pad lowers Z, Set origin zeroes it, and Start opens the knife's
+/// checklist, which runs the job.
+#[test]
+fn the_drag_knife_head_changes_the_profile_jog_pad_job_and_checklist() {
+    let mut app = app();
+    let id = square(&mut app);
+    connect(&mut app, json!({"speedFactor": 1000, "timeScale": 100}));
+    app.run("laser.profile", json!({"set": {"head": "knife"}})).unwrap();
+    app.picabia.laser.open = true;
+    app.picabia.laser.show_profile = true;
+    let ctx = context(false);
+    frame(&mut app, &ctx, vec![]);
+    let text = texts(&frame(&mut app, &ctx, vec![]));
+    for want in ["Drag knife", "Cut depth (Z)", "Plunge speed", "Blade offset", "lower the blade", "Z isn't zeroed", "Knife: cut at Z -0.5 mm"] {
+        assert!(text.contains(want), "{want} in {text}");
+    }
+    assert!(!text.contains("Air assist"), "the laser's rows are hidden: {text}");
+    let st = status_of(&app);
+    act(&mut app, Action::JogZ(-1.0), &st, false);
+    wait(&mut app, "Z down", |s| s.pos.is_some_and(|p| (p[2] + 1.0).abs() < 1e-6) && s.state.as_deref() == Some("Idle"));
+    act(&mut app, Action::SetOrigin, &st, false);
+    let st = wait(&mut app, "Z zeroed", |s| s.knife_z_set && s.pos.is_some_and(|p| p[2].abs() < 1e-6));
+    assert!(st.can_start, "{st:?}");
+    act(&mut app, Action::Start(json!({"ids": [id]})), &st, false);
+    let mut list = app.picabia.laser.checklist.take().unwrap();
+    assert!(list.knife && list.ticks.len() == Confirm::Start.checks(true).len());
+    assert!(list.summary.iter().any(|l| l.starts_with("Knife: cut at Z")), "{:?}", list.summary);
+    assert!(!Confirm::Start.checks(true).iter().any(|c| c.contains("glasses")));
+    list.ticks.iter_mut().for_each(|t| *t = true);
+    run::confirm(&mut app, &mut list, false).unwrap();
+    let st = wait(&mut app, "done", |s| s.job.as_ref().is_some_and(|j| j.state == "done"));
+    assert!(st.pos.is_some_and(|p| (p[2] - 5.0).abs() < 1e-6), "up at the end: {st:?}");
     app.run("laser.disconnect", json!({})).unwrap();
 }

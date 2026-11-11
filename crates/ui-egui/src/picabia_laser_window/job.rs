@@ -84,6 +84,9 @@ pub struct JobState {
     pub summary: Summary,
     /// Open… was pressed: the window asks for a G-code file once it has drawn.
     pub want_file: bool,
+    /// PICABIA (PIC35): the drag knife's settings (`laser.status`'s `profile.knife`) when the
+    /// profile's head is the knife, else `None`: the knife cuts with them, not the operation table.
+    pub knife: Option<Value>,
     /// The dry run's params and the document state it ran on (its uid and contents).
     ran: Option<(Value, (u64, usize))>,
     ran_at: f64,
@@ -150,6 +153,10 @@ impl JobState {
             let ladder = matches!(self.source, Source::PowerLadder);
             if ladder && let Some(grid) = self.ladder.as_ref().and_then(ladder_text) {
                 out.push(grid);
+            }
+            if let Some(k) = &self.knife {
+                out.push(knife_text(k));
+                return out;
             }
             for (key, op) in super::ops::OP_KEYS.iter().zip(self.ops.0.iter()).filter(|(k, op)| op.enabled && (!ladder || **k == "engrave")) {
                 out.push(format!("{}: {} %, {} mm/min, {}×", super::ops::op_label(key), num(op.power), num(op.speed), op.passes));
@@ -416,6 +423,12 @@ pub fn settings(app: &mut VectorcraftApp, ui: &mut Ui, j: &mut JobState, locked:
         });
     });
     ui.add_space(2.0);
+    if let Some(k) = &j.knife {
+        // The knife cuts with the profile's settings; the table's power means nothing to it.
+        wrapped(ui, &knife_text(k), t.text);
+        wrapped(ui, tl!("The drag knife cuts with the machine profile's depths, feeds and blade offset (below). Engraving is left out."), t.text_dim);
+        return changed;
+    }
     ui.add_enabled_ui(!locked, |ui| {
         if ops::table(ui, "panel", &mut j.ops) {
             j.ops_set = true;
@@ -423,6 +436,20 @@ pub fn settings(app: &mut VectorcraftApp, ui: &mut Ui, j: &mut JobState, locked:
         }
     });
     changed
+}
+
+/// "Knife: cut at Z −0.5 mm, 1500 mm/min, 1×; blade offset 0.25 mm" from the profile's knife.
+pub fn knife_text(k: &Value) -> String {
+    let n = |key: &str, d: f64| k.get(key).and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(d);
+    i18n::fmt(
+        tl!("Knife: cut at Z {z} mm, {feed} mm/min, {passes}×; blade offset {offset} mm"),
+        &[
+            ("z", &num(n("cutZMm", -0.5))),
+            ("feed", &num(n("feedMmMin", 1500.0))),
+            ("passes", &num(n("passes", 1.0))),
+            ("offset", &num(n("offsetMm", 0.25))),
+        ],
+    )
 }
 
 /// "270.1 × 174.1 mm · 908 lines": a job's size and lines as the checklist shows them.

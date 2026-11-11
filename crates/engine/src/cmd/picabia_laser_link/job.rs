@@ -6,6 +6,7 @@
 
 use kurbo::{Point, Rect};
 use serde_json::{Value, json};
+use vectorcraft_stencil::{Head, KnifeParams};
 
 use super::{bad, get};
 use crate::{EngineError, Result, Session};
@@ -36,6 +37,11 @@ pub struct Machine {
     /// Work 0,0 is where the person pressed Set origin (the sheet's bottom-left: `"head"`), or the
     /// bed's own (`"machine"`).
     pub origin: &'static str,
+    /// PICABIA (PIC35): what is in the tool clamp. Jobs are written for it and checked against its
+    /// allow-list ([`check_line_for`]).
+    pub tool: Head,
+    /// The drag knife's settings: frames lift to its travel height first.
+    pub knife: KnifeParams,
 }
 
 impl Machine {
@@ -51,7 +57,14 @@ impl Machine {
             rapid_mm_min: p.rapid_mm_min,
             air: p.air,
             checked: p.checked,
+            tool: p.head,
+            knife: p.knife,
         }
+    }
+
+    /// The knife is in the clamp.
+    pub fn knife(&self) -> bool {
+        self.tool == Head::Knife
     }
 
     pub fn origin_at_head(&self) -> bool {
@@ -59,7 +72,7 @@ impl Machine {
     }
 
     pub fn to_json(&self) -> Value {
-        json!({"name": self.name, "bedWidthMm": self.bed_w_mm, "bedHeightMm": self.bed_h_mm, "sMax": self.s_max, "rapidMmMin": self.rapid_mm_min, "air": self.air, "checked": self.checked, "origin": self.origin})
+        json!({"name": self.name, "bedWidthMm": self.bed_w_mm, "bedHeightMm": self.bed_h_mm, "sMax": self.s_max, "rapidMmMin": self.rapid_mm_min, "air": self.air, "checked": self.checked, "origin": self.origin, "head": self.tool.id(), "knife": self.knife.to_json()})
     }
 }
 
@@ -113,6 +126,9 @@ pub fn build_run(cmd: &str, s: &Session, p: &Value) -> Result<LaserRun> {
     if given.len() > 1 {
         return Err(bad(cmd, "give one job: `gcode`, `path` or `testCard`, not several"));
     }
+    // The head is what is in the clamp, so the machine profile says, never one job (`head` isn't
+    // a job param): a job written for the other head would cut with the wrong tool.
+    let tool = Machine::of(s).tool;
     let untrusted = !given.is_empty() && given != ["testCard"];
     if untrusted {
         for k in ["ids", "id", "sheet"] {
@@ -136,7 +152,7 @@ pub fn build_run(cmd: &str, s: &Session, p: &Value) -> Result<LaserRun> {
             (name, t.text.clone(), t.source, Some(t))
         }
     };
-    let lines = check_gcode(&text).map_err(|why| EngineError::Disabled(cmd.into(), why))?;
+    let lines = check_gcode_for(&text, tool).map_err(|why| EngineError::Disabled(cmd.into(), why))?;
     // The box of the lines actually sent (cleaned as GRBL reads them: a `;` inside `( … )` doesn't
     // end the line), never of the raw text. The head starts at the work origin.
     let mut bounds = gcode_bounds(&lines.join("\n")).map_err(|why| EngineError::Disabled(cmd.into(), why))?.union_pt(Point::ZERO);
@@ -203,9 +219,14 @@ const ALLOWED_G: [i64; 16] = [0, 10, 20, 30, 40, 170, 210, 400, 490, 540, 610, 8
 /// (`M4`) and off (`M5`), air assist (`M8`, `M9`).
 const ALLOWED_M: [i64; 6] = [2, 4, 5, 8, 9, 30];
 
-/// Every line of a job: comments and spaces dropped and checked by [`check_line`] and GRBL's line
-/// rules. Returns the lines to send (empty ones left out), or why not, naming the line.
+/// Every line of a laser job: comments and spaces dropped and checked by [`check_line`] and GRBL's
+/// line rules. Returns the lines to send (empty ones left out), or why not, naming the line.
 pub fn check_gcode(text: &str) -> std::result::Result<Vec<String>, String> {
+    check_gcode_for(text, Head::Laser)
+}
+
+/// [`check_gcode`] for a job on `tool`: each line checked by [`check_line_for`].
+pub fn check_gcode_for(text: &str, tool: Head) -> std::result::Result<Vec<String>, String> {
     let mut out = Vec::new();
     for (i, raw) in text.lines().enumerate() {
         if out.len() >= vectorcraft_grbl::MAX_JOB_LINES {
@@ -217,7 +238,7 @@ pub fn check_gcode(text: &str) -> std::result::Result<Vec<String>, String> {
         if clean.is_empty() {
             continue;
         }
-        check_line(&clean).map_err(at)?;
+        check_line_for(&clean, tool).map_err(at)?;
         out.push(clean);
     }
     if out.is_empty() {
@@ -231,6 +252,17 @@ pub fn check_gcode(text: &str) -> std::result::Result<Vec<String>, String> {
 /// axes, no tool changes, no plane, unit or coordinate-system changes, no `M3` (constant power),
 /// and only the G- and M-codes in [`ALLOWED_G`] and [`ALLOWED_M`].
 pub fn check_line(line: &str) -> std::result::Result<(), String> {
+    check_line_for(line, Head::Laser)
+}
+
+/// One cleaned line against `tool`'s allow-list. The laser's is [`check_line`]'s. PICABIA (PIC35):
+/// the knife's is the same but for two differences, both because the knife works on Z and has no
+/// beam: Z moves are allowed (the blade goes down to cut and up to travel), and nothing that could
+/// turn the spindle output on is (`M3`, `M4`, an `S` above 0), since the laser may still be wired
+/// to it: a knife job that fires it would burn whatever is under the head. An `S` above 0 is also
+/// the sign of a laser file opened by mistake.
+pub fn check_line_for(line: &str, tool: Head) -> std::result::Result<(), String> {
+    let knife = tool == Head::Knife;
     let upper = line.to_ascii_uppercase();
     if upper.starts_with('$') {
         return Err("`$` system commands (settings, homing, jogs, resets) aren't allowed in a job".into());
@@ -252,6 +284,9 @@ pub fn check_line(line: &str) -> std::result::Result<(), String> {
                 }
                 _ => return Err(format!("G{} isn't allowed in a laser job", trim_num(*value))),
             },
+            'M' if knife && (code == 30 || code == 40) => {
+                return Err(format!("M{} turns the spindle (the laser) on; a drag knife job never does", trim_num(*value)));
+            }
             'M' => match code {
                 c if c % 10 == 0 && ALLOWED_M.contains(&(c / 10)) => {}
                 30 => return Err("M3 (constant power) isn't allowed: laser jobs use M4 (dynamic power, beam off while the head stops)".into()),
@@ -260,10 +295,14 @@ pub fn check_line(line: &str) -> std::result::Result<(), String> {
             'X' | 'Y' | 'I' | 'J' | 'R' | 'N' => {}
             'F' if *value > 0.0 => {}
             'F' => return Err("the feed (F) must be more than 0".into()),
+            'S' if knife && *value > 0.0 => {
+                return Err("S sets the laser's power; a drag knife job has none (is this a laser file? the head is the knife)".into());
+            }
             'S' if *value >= 0.0 => {}
             'S' => return Err("the power (S) can't be negative".into()),
             'P' if has_g4 && *value >= 0.0 => {}
             'P' => return Err("P is allowed only as a G4 dwell time".into()),
+            'Z' if knife => {}
             'Z' => return Err("Z moves aren't allowed in a laser job".into()),
             c => return Err(format!("the word `{c}` isn't allowed in a laser job")),
         }
