@@ -22,7 +22,45 @@ fn number(p: &Value, k: &str, default: f64) -> f64 {
 
 /// A number field in the profile; the new value when one was committed.
 fn field(ui: &mut Ui, key: &str, name: &str, v: f64, suffix: &str, w: f32) -> Option<f64> {
-    widgets::plain_field_named(ui, ("picabia_laser_profile", key), Some(name), v, suffix, 1, w).filter(|v| v.is_finite())
+    field_dp(ui, key, name, v, suffix, 1, w)
+}
+
+/// [`field`] with `dp` decimals.
+fn field_dp(ui: &mut Ui, key: &str, name: &str, v: f64, suffix: &str, dp: usize, w: f32) -> Option<f64> {
+    widgets::plain_field_named(ui, ("picabia_laser_profile", key), Some(name), v, suffix, dp, w).filter(|v| v.is_finite())
+}
+
+/// PICABIA (PIC35): the drag knife's rows (`k`: the profile's `knife`); the field to set, when one
+/// changed. Z 0 is the sheet's surface.
+fn knife_rows(ui: &mut Ui, k: &Value) -> Option<Value> {
+    let mut set = None;
+    let rows: [(&str, &str, &str, f64, usize); 9] = [
+        ("safeZMm", tl!("Travel height"), "mm", 5.0, 1),
+        ("cutZMm", tl!("Cut depth (Z)"), "mm", -0.5, 2),
+        ("scoreZMm", tl!("Score depth (Z)"), "mm", -0.2, 2),
+        ("feedMmMin", tl!("Cut speed"), "mm/min", 1500.0, 0),
+        ("plungeMmMin", tl!("Plunge speed"), "mm/min", 300.0, 0),
+        ("passes", tl!("Passes"), "", 1.0, 0),
+        ("offsetMm", tl!("Blade offset"), "mm", 0.25, 2),
+        ("swivelDeg", tl!("Swivel over"), "°", 15.0, 0),
+        ("overcutMm", tl!("Overcut"), "mm", 1.0, 1),
+    ];
+    for (key, name, suffix, default, dp) in rows {
+        ui.horizontal(|ui| {
+            super::lead(ui, name);
+            if let Some(v) = field_dp(ui, key, name, number(k, key, default), suffix, dp, 120.0) {
+                set = Some(json!({"knife": {key: v}}));
+            }
+        });
+    }
+    ui.horizontal(|ui| {
+        ui.add_space(super::LABEL_W + ui.spacing().item_spacing.x);
+        let score = k.get("score").and_then(Value::as_bool).unwrap_or(true);
+        if widgets::check(ui, tl!("Cut score lines"), score, true) {
+            set = Some(json!({"knife": {"score": !score}}));
+        }
+    });
+    set
 }
 
 /// The profile's rows (`profile` is `laser.profile`'s result, `st` the link's status); the fields
@@ -55,6 +93,29 @@ pub fn rows(ui: &mut Ui, profile: &Value, st: &Status, material: &mut String) ->
         }
     });
     ui.horizontal(|ui| {
+        super::lead(ui, tl!("Head"));
+        let knife = p.get("head").and_then(Value::as_str) == Some("knife");
+        if widgets::radio(ui, tl!("Laser"), !knife, true) && knife {
+            set = Some(json!({"head": "laser"}));
+        }
+        if widgets::radio(ui, tl!("Drag knife"), knife, true) && !knife {
+            set = Some(json!({"head": "knife"}));
+        }
+    });
+    if p.get("head").and_then(Value::as_str) == Some("knife") {
+        if let Some(v) = knife_rows(ui, p.get("knife").unwrap_or(&Value::Null)) {
+            set = Some(v);
+        }
+        ui.horizontal(|ui| {
+            super::lead(ui, tl!("Travel speed"));
+            if let Some(v) = field(ui, "rapid", tl!("Travel speed"), number(p, "rapidMmMin", 3000.0), "mm/min", 120.0) {
+                set = Some(json!({"rapidMmMin": v}));
+            }
+        });
+        checked_row(ui, p, &t, &mut set);
+        return set;
+    }
+    ui.horizontal(|ui| {
         super::lead(ui, tl!("S max"));
         let s_max = number(p, "sMax", 1000.0);
         if let Some(v) = field(ui, "s_max", tl!("S max"), s_max, "", 84.0) {
@@ -80,16 +141,7 @@ pub fn rows(ui: &mut Ui, profile: &Value, st: &Status, material: &mut String) ->
             set = Some(json!({"air": !air}));
         }
     });
-    ui.horizontal(|ui| {
-        ui.add_space(super::LABEL_W + ui.spacing().item_spacing.x);
-        let checked = p.get("checked").and_then(Value::as_bool).unwrap_or(false);
-        if widgets::check(ui, tl!("Checked on the machine"), checked, true) {
-            set = Some(json!({"checked": !checked}));
-        }
-    });
-    if p.get("checked").and_then(Value::as_bool) != Some(true) {
-        wrapped(ui, tl!("These values are guesses until checked on the machine."), readable(t.warning, &t));
-    }
+    checked_row(ui, p, &t, &mut set);
     // The materials' operations: what a job of that material starts from.
     ui.add_space(6.0);
     ui.horizontal(|ui| {
@@ -109,6 +161,20 @@ pub fn rows(ui: &mut Ui, profile: &Value, st: &Status, material: &mut String) ->
         set = Some(json!({"materials": {material.as_str(): table.to_json()}}));
     }
     set
+}
+
+/// "Checked on the machine" and, until it is, the warning that the values are guesses.
+fn checked_row(ui: &mut Ui, p: &Value, t: &Tokens, set: &mut Option<Value>) {
+    ui.horizontal(|ui| {
+        ui.add_space(super::LABEL_W + ui.spacing().item_spacing.x);
+        let checked = p.get("checked").and_then(Value::as_bool).unwrap_or(false);
+        if widgets::check(ui, tl!("Checked on the machine"), checked, true) {
+            *set = Some(json!({"checked": !checked}));
+        }
+    });
+    if p.get("checked").and_then(Value::as_bool) != Some(true) {
+        wrapped(ui, tl!("These values are guesses until checked on the machine."), readable(t.warning, t));
+    }
 }
 
 /// Write `set` into the profile; the host saves it with the preferences.

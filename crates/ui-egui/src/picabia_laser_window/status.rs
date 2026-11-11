@@ -71,6 +71,8 @@ pub struct Status {
     pub profile: Value,
     /// The bed jobs must stay on, mm.
     pub bed: Option<(f64, f64)>,
+    /// PICABIA (PIC35): Set origin zeroed Z with the knife on this connection.
+    pub knife_z_set: bool,
 }
 
 impl Status {
@@ -118,7 +120,18 @@ impl Status {
             version: s(&settings, "version"),
             profile: v.get("profile").cloned().unwrap_or(Value::Null),
             bed,
+            knife_z_set: v.get("knifeZSet").and_then(Value::as_bool).unwrap_or(false),
         }
+    }
+
+    /// The profile's head is the drag knife.
+    pub fn knife(&self) -> bool {
+        self.profile.get("head").and_then(Value::as_str) == Some("knife")
+    }
+
+    /// The knife's settings when the knife is the head.
+    pub fn knife_settings(&self) -> Option<Value> {
+        self.knife().then(|| self.profile.get("knife").cloned().unwrap_or(Value::Null))
     }
 
     /// The link is open (connecting or ready).

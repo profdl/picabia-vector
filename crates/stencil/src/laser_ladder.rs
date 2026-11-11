@@ -199,6 +199,10 @@ pub fn power_ladder(params: &LadderParams) -> Ladder {
 /// origin, air, header) as for [`laser_gcode`](crate::laser_gcode).
 pub fn ladder_gcode(ladder: &Ladder, params: &GcodeParams) -> Gcode {
     let p = params.clamped();
+    // PICABIA: the ladder measures the beam's power; a knife has none.
+    if p.head == crate::Head::Knife {
+        return Gcode { warnings: vec!["the power ladder is for the laser: the head is the drag knife".into()], ..Gcode::default() };
+    }
     let sheet = &ladder.sheet;
     let mut blocks = vec![Block { op: p.engrave, paths: sheet.engrave.iter().map(Vec::as_slice).collect(), closed: false }];
     for cell in &ladder.cells {

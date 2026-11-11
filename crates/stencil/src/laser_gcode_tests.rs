@@ -303,6 +303,8 @@ fn params_clamp_and_read_json_leniently() {
         origin_mm: Point::new(1e9, f64::NEG_INFINITY),
         air: true,
         header: Vec::new(),
+        head: p.head,
+        knife: p.knife,
     }
     .clamped();
     assert_eq!(junk.s_max, 1000.0);

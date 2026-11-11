@@ -24,6 +24,7 @@ use std::fmt::Write as _;
 use serde_json::{Map, Value};
 use vectorcraft_geom::kurbo::{Point, Rect};
 
+use crate::knife_gcode::{Head, KnifeParams};
 use crate::laser::LaserSheet;
 use crate::laser_svg::num;
 
@@ -112,6 +113,11 @@ pub struct GcodeParams {
     /// Extra comment lines for the header (made ASCII and cut to fit; at most
     /// [`MAX_HEADER_LINES`]).
     pub header: Vec<String>,
+    /// PICABIA: what is in the tool clamp. [`laser_gcode`] writes the laser's G-code whatever
+    /// this says; [`knife_gcode`](crate::knife_gcode) the knife's.
+    pub head: Head,
+    /// PICABIA: the drag knife's settings (used when `head` is the knife).
+    pub knife: KnifeParams,
 }
 
 impl GcodeParams {
@@ -132,7 +138,17 @@ impl GcodeParams {
 
     fn with_ops(ops: [OpSettings; 3]) -> GcodeParams {
         let [cut, score, engrave] = ops;
-        GcodeParams { s_max: Self::DEFAULT_S_MAX, cut, score, engrave, origin_mm: Point::ZERO, air: false, header: Vec::new() }
+        GcodeParams {
+            s_max: Self::DEFAULT_S_MAX,
+            cut,
+            score,
+            engrave,
+            origin_mm: Point::ZERO,
+            air: false,
+            header: Vec::new(),
+            head: Head::Laser,
+            knife: KnifeParams::default(),
+        }
     }
 
     /// The starting settings for a stencil material (`paper`, `film`, `card`; `custom` and
@@ -157,6 +173,8 @@ impl GcodeParams {
             origin_mm: Point::new(origin(self.origin_mm.x), origin(self.origin_mm.y)),
             air: self.air,
             header: self.header.clone(),
+            head: self.head,
+            knife: self.knife.clamped(),
         }
     }
 
@@ -170,7 +188,8 @@ impl GcodeParams {
     /// Overwrite the fields `v` sets validly (camelCase: `sMax`, `originXMm`, `originYMm`, `air`,
     /// `cut`/`score`/`engrave`: `{enabled, speedMmMin, powerPct, passes}` overlaid field by field,
     /// `header`: an array of strings); missing or wrong-typed fields keep their value, numbers are
-    /// clamped.
+    /// clamped. PICABIA: `head` (`laser`|`knife`) and `knife` (see
+    /// [`KnifeParams::apply_json`]) too.
     pub fn apply_json(&mut self, v: &Value) {
         let Some(o) = v.as_object() else { return };
         let num = |k: &str| o.get(k).and_then(Value::as_f64).filter(|x| x.is_finite());
@@ -191,6 +210,12 @@ impl GcodeParams {
                 op.apply_json(v);
             }
         }
+        if let Some(h) = o.get("head").and_then(Value::as_str).and_then(Head::from_id) {
+            self.head = h;
+        }
+        if let Some(k) = o.get("knife") {
+            self.knife.apply_json(k);
+        }
         if let Some(a) = o.get("header").and_then(Value::as_array) {
             self.header = a.iter().filter_map(Value::as_str).take(MAX_HEADER_LINES).map(str::to_string).collect();
         }
@@ -209,6 +234,8 @@ impl GcodeParams {
         o.insert("cut".into(), p.cut.to_json());
         o.insert("score".into(), p.score.to_json());
         o.insert("engrave".into(), p.engrave.to_json());
+        o.insert("head".into(), Value::from(p.head.id()));
+        o.insert("knife".into(), p.knife.to_json());
         Value::Object(o)
     }
 }
@@ -298,19 +325,19 @@ pub(crate) fn s_value(power_pct: f64, s_max: f64) -> u64 {
 }
 
 /// A header comment: printable ASCII only (anything else becomes `?`), at most 70 characters.
-fn comment(s: &str) -> String {
+pub(crate) fn comment(s: &str) -> String {
     let body: String = s.chars().map(|c| if c == ' ' || c.is_ascii_graphic() { c } else { '?' }).take(HEADER_CHARS - 2).collect();
     let body = body.trim_end();
     if body.is_empty() { ";".into() } else { format!("; {body}") }
 }
 
 /// Round to the 3 decimals the file carries (no `-0`).
-fn q(v: f64) -> f64 {
+pub(crate) fn q(v: f64) -> f64 {
     let r = (v * 1000.0).round() / 1000.0;
     if r == 0.0 { 0.0 } else { r }
 }
 
-fn valid(p: Point) -> bool {
+pub(crate) fn valid(p: Point) -> bool {
     p.x.is_finite() && p.y.is_finite() && p.x.abs() <= MAX_COORD_MM && p.y.abs() <= MAX_COORD_MM
 }
 
