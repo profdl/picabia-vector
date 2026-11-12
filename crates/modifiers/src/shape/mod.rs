@@ -367,7 +367,8 @@ fn apply(n: &mut Node, op: &GeometryOp, field: Option<&displace::Field>, depth: 
         return;
     }
     match &mut n.kind {
-        NodeKind::Path { guide: true, .. } => {}
+        // Ruler guides draw on screen only: passed over silently, as path guides are.
+        NodeKind::Path { guide: true, .. } | NodeKind::RulerGuide { .. } => {}
         NodeKind::Path { path, live, .. } => {
             if let Some(new) = shaped(path, op, field) {
                 *path = new;

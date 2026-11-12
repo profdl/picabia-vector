@@ -115,8 +115,8 @@ fn walk(n: &mut Node, row: &ScreenRow, image: Option<&ToneTarget>, run: &mut Run
     }
     let appearance = n.appearance.clone();
     match &mut n.kind {
-        // Guides don't print, and a clipping path's own paint isn't drawn.
-        NodeKind::Path { guide: true, .. } | NodeKind::Path { clipping: true, .. } => {}
+        // Guides (path and ruler guides) don't print, and a clipping path's own paint isn't drawn.
+        NodeKind::Path { guide: true, .. } | NodeKind::RulerGuide { .. } | NodeKind::Path { clipping: true, .. } => {}
         NodeKind::Path { path, rule, live, .. } => {
             let paint = ink(&appearance);
             // The outline's box, before the dots replace it: a gradient stays where it was.

@@ -166,7 +166,8 @@ impl G<'_> {
             return;
         }
         match &n.kind {
-            NodeKind::Path { guide: true, .. } => {}
+            // Guides (path guides and ruler guides) draw on screen only.
+            NodeKind::Path { guide: true, .. } | NodeKind::RulerGuide { .. } => {}
             NodeKind::Path { path, rule, .. } => {
                 let bp = path.to_bezpath();
                 self.appearance(n, &bp, *rule, path.is_closed(), xf, clip);

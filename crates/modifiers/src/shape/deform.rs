@@ -262,7 +262,8 @@ pub(super) fn apply_node(n: &mut Node, m: &Map, frame: Affine, room: &Room, dept
         return;
     }
     match &mut n.kind {
-        NodeKind::Path { guide: true, .. } => {}
+        // Ruler guides draw on screen only: passed over silently, as path guides are.
+        NodeKind::Path { guide: true, .. } | NodeKind::RulerGuide { .. } => {}
         NodeKind::Path { path, live, .. } => {
             *path = apply_map(path, m, frame, room.max_for(path));
             // The copy is a plain path now: a live shape would redraw its old outline.

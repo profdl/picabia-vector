@@ -375,6 +375,19 @@ fn guides_and_non_paths_are_left_alone_with_a_note() {
     assert!(sh.notes[0].contains("Deform"));
 }
 
+#[test]
+fn ruler_guides_are_left_alone_without_a_note() {
+    let out = evaluate(&stack(json!([{"id": "d", "kind": "deform", "mode": "bend"}])), Rect::new(0.0, 0.0, 100.0, 100.0));
+    let ruler = Node::new(NodeId(3), NodeKind::RulerGuide { vertical: true, pos: 50.0, artboard: None });
+    let mut g = Node::group(NodeId(2), vec![std::sync::Arc::new(node(rect(Rect::new(0.0, 0.0, 100.0, 20.0)))), std::sync::Arc::new(ruler.clone())]);
+    let mut sh = Shaper::new(&out);
+    sh.source(&mut g);
+    let kids = g.children().unwrap();
+    assert!(kids[0].path_data().unwrap().anchor_count() > 4, "bent");
+    assert_eq!(*kids[1], ruler, "the ruler guide as it was");
+    assert!(sh.notes.is_empty(), "{:?}", sh.notes);
+}
+
 // ---- Mirrors and the ramp over array copies (PIC20.3a) ----
 
 /// An asymmetric object: a 100 × 40 rectangle at (0, 0).

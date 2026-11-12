@@ -6917,7 +6917,7 @@ dependencies = [
 
 [[package]]
 name = "vectorcraft-grbl"
-version = "0.21.0"
+version = "0.24.1"
 dependencies = [
  "serialport",
 ]
@@ -6934,7 +6934,7 @@ dependencies = [
 
 [[package]]
 name = "vectorcraft-lumix"
-version = "0.21.0"
+version = "0.24.1"
 
 [[package]]
 name = "vectorcraft-mcp"
@@ -6971,7 +6971,7 @@ dependencies = [
 
 [[package]]
 name = "vectorcraft-modifiers"
-version = "0.21.0"
+version = "0.24.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -7029,7 +7029,7 @@ dependencies = [
 
 [[package]]
 name = "vectorcraft-physics"
-version = "0.21.0"
+version = "0.24.1"
 dependencies = [
  "rapier2d",
  "serde_json",
@@ -7098,7 +7098,7 @@ dependencies = [
 
 [[package]]
 name = "vectorcraft-stencil"
-version = "0.21.0"
+version = "0.24.1"
 dependencies = [
  "linesweeper",
  "serde_json",

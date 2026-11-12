@@ -61,7 +61,8 @@ fn hidden_objects_guides_and_empty_paints_are_left_out_silently() {
     let none = Node::path(NodeId(4), shapes::rectangle(Rect::new(0.0, 0.0, 10.0, 10.0)), Appearance::default());
     let mut clear = rect_node(5, Rect::new(0.0, 0.0, 10.0, 10.0), red());
     clear.opacity = 0.0;
-    let out = gather(&Document::new(612.0, 792.0), &group(1, vec![hidden, guide, none, clear]), &[], None);
+    let ruler = Node::new(NodeId(6), NodeKind::RulerGuide { vertical: true, pos: 5.0, artboard: None });
+    let out = gather(&Document::new(612.0, 792.0), &group(1, vec![hidden, guide, none, clear, ruler]), &[], None);
     assert!(out.paints.is_empty() && out.warnings.is_empty(), "{out:?}");
 }
 
