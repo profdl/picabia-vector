@@ -294,6 +294,7 @@ pub fn show(app: &mut VectorcraftApp, ui: &mut Ui) {
     let painter = ui.painter_at(rect);
     let Some(st) = app.session.active() else { return };
     let doc = crate::picabia::sim_bar::display_doc(app).unwrap_or_else(|| st.doc.clone()); // PICABIA: a physics session's clones
+    let effects = st.plugin_effects.clone();
     let mask_view = st.shown_mask();
 
     paint_paper(app, st, ui, &painter, &xf, rect, (&t, app.outline_view()));
@@ -350,8 +351,9 @@ pub fn show(app: &mut VectorcraftApp, ui: &mut Ui) {
     if wait.is_none() && (!same_frame || app.canvas.texture.is_none() || settle) {
         let (w, h, view) = frame_view(pixel, (w, h), &v, ppp);
         let opts = frame_options(app, &key, mask_view, smooth_images);
-        draw_frame(app, ui, Frame { key: &key, doc: &doc, size: (w, h), view, opts, pixel });
+        draw_frame(app, ui, Frame { key: &key, doc: &doc, effects: &effects, size: (w, h), view, opts, pixel });
     }
+    report_deferred(app, &effects);
     // The status bar reports each image that a renderer (this thread's or the worker's) could not
     // decode, once per image in the process.
     let undecoded = vectorcraft_render::newly_undecodable(doc.images.values());
@@ -610,7 +612,7 @@ fn cache_key(
 
 /// [`CacheKey::plugins`] of document `st`, one of the documents open in `session`. `keys` holds each
 /// document's value and the plug-in revision it was checked at, so a document is looked through only
-/// once after each plug-in install or removal.
+/// once after each change of the plug-in revision.
 fn plugin_key(
     keys: &mut std::collections::HashMap<u64, (u64, u64)>,
     session: &vectorcraft_engine::Session,
@@ -625,6 +627,19 @@ fn plugin_key(
             keys.insert(st.uid, (revision, key));
             key
         }
+    }
+}
+
+/// Once the first view of a document has been drawn, the status bar says how many plug-in effect
+/// stages it left deferred, if any.
+fn report_deferred(app: &mut VectorcraftApp, effects: &vectorcraft_plugins::deferred::Deferrals) {
+    if let Some(n) = effects.take_report().filter(|n| *n > 0) {
+        app.status(crate::i18n::msg_n(
+            n as u64,
+            "Opened with {n} plug-in effect deferred. Effect › Refresh Deferred Effects runs it.",
+            "Opened with {n} plug-in effects deferred. Effect › Refresh Deferred Effects runs them.",
+            &[],
+        ));
     }
 }
 
@@ -651,6 +666,9 @@ fn show_worker_frame(app: &mut VectorcraftApp, ctx: &egui::Context, done: crate:
         return;
     }
     upload(app, ctx, done.img, done.key.pixel.is_some());
+    if let Some(d) = app.session.documents().iter().find(|d| d.uid as usize == done.key.doc) {
+        d.plugin_effects.first_view_done();
+    }
     app.canvas.key = Some(done.key);
     app.canvas.shown = Some((done.doc, done.opts));
     app.perf.render_ms = done.ms;
@@ -733,6 +751,8 @@ fn frame_options(
 struct Frame<'a> {
     key: &'a CacheKey,
     doc: &'a std::sync::Arc<vectorcraft_doc::Document>,
+    /// The document's deferred plug-in effect stages: the frame renders inside their view.
+    effects: &'a vectorcraft_plugins::deferred::Deferrals,
     size: (u32, u32),
     view: Affine,
     opts: vectorcraft_render::RenderOptions,
@@ -744,7 +764,7 @@ struct Frame<'a> {
 pub(crate) const FIRST_FRAME_GRACE: std::time::Duration = std::time::Duration::from_millis(16);
 
 fn draw_frame(app: &mut VectorcraftApp, ui: &Ui, frame: Frame) {
-    let Frame { key, doc, size: (w, h), view, opts, pixel } = frame;
+    let Frame { key, doc, effects, size: (w, h), view, opts, pixel } = frame;
     // Frames that would be slow on this thread (the last one took over 8 ms) go
     // to the worker. An interaction's frames stay on the worker once it drew the frame shown:
     // its renderer keeps the rasters of the art's effects that make those frames fast, and this
@@ -772,7 +792,8 @@ fn draw_frame(app: &mut VectorcraftApp, ui: &Ui, frame: Frame) {
                 app.canvas.renderer.let_go_of_measured();
             }
             if let (Some([x0, y0, x1, y1]), Some(tex)) = (region, &mut app.canvas.texture) {
-                let part = app.canvas.renderer.render(doc, x1 - x0, y1 - y0, Affine::translate((-f64::from(x0), -f64::from(y0))) * view, &opts);
+                let renderer = &mut app.canvas.renderer;
+                let part = effects.view(|| renderer.render(doc, x1 - x0, y1 - y0, Affine::translate((-f64::from(x0), -f64::from(y0))) * view, &opts));
                 let color = color_image(&part);
                 let options = if pixel.is_some() { egui::TextureOptions::NEAREST } else { egui::TextureOptions::LINEAR };
                 tex.set_partial([x0 as usize, y0 as usize], color, options);
@@ -794,6 +815,7 @@ fn draw_frame(app: &mut VectorcraftApp, ui: &Ui, frame: Frame) {
                 view,
                 opts,
                 scope: vectorcraft_engine::file_access::ScopeHandle::capture(),
+                effects: effects.clone(),
                 may_copy,
                 may_keep: true,
             });
@@ -805,7 +827,9 @@ fn draw_frame(app: &mut VectorcraftApp, ui: &Ui, frame: Frame) {
         }
         _ => {
             let t0 = now_ms();
-            let img = app.canvas.renderer.render(doc, w, h, view, &opts);
+            let renderer = &mut app.canvas.renderer;
+            let img = effects.view(|| renderer.render(doc, w, h, view, &opts));
+            effects.first_view_done();
             upload(app, ui.ctx(), img, pixel.is_some());
             app.canvas.key = Some(key.clone());
             app.canvas.shown = Some((doc.clone(), opts.clone()));
@@ -1099,11 +1123,12 @@ fn guides_of(app: &VectorcraftApp, st: &vectorcraft_engine::DocState, (painter, 
     let look = LineLook::guides(&app.session.prefs, t);
     let picked = LineLook { color: t.selection, ..look };
     let labels = guide_labels(doc);
-    let selected: &[usize] = &st.selection.guides;
+    let selected: &[vectorcraft_doc::NodeId] = &st.selection.guides;
     let key = st.selection.key_guide;
     let view = view_bounds(xf);
     // Guides on a hidden layer hide with it.
-    for (i, g) in doc.guides.iter().enumerate().filter(|(_, g)| doc.guide_shown(g)) {
+    for g in doc.ruler_guides().iter().filter(|g| doc.guide_shown(g)) {
+        let Some(i) = g.id else { continue };
         let at = |along: f64| xf.to_screen(if g.vertical { Point::new(g.pos, along) } else { Point::new(along, g.pos) });
         // An artboard guide runs across its artboard, a canvas guide across the window (the part
         // of its document line that the canvas shows, turned with the view).

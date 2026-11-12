@@ -115,7 +115,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Rasterize…",
             ["Object"],
             None,
-            "{ppi?, background?: transparent|white|black|\"#rrggbb\" (#rrggbbaa and #rgba are refused), antiAlias?: none|art|type (text snapped to pixels)|bool, padding?|addAround?: pt (0–1000), colorModel?: \"rgb\"|\"cmyk\"|\"grayscale\"|\"bitmap\", clippingMask?: bool (a clip group with the art's outline)} replace the selection with an embedded image (PNG; in a CMYK document with its own colour model, a CMYK image of the art's inks, its transparency as its opacity mask); each defaults to document.rasterEffectsSettings; a frame of threaded text that is rasterized leaves its thread with the text it shows → {id (the image, or its clip group), width, height, warning?: \"an image couldn't be decoded and is missing from the picture\" (as raster exports say)}",
+            "{ppi?, background?: transparent|white|black|\"#rrggbb\" (#rrggbbaa and #rgba are refused), antiAlias?: none|art|type (text snapped to pixels)|bool, padding?|addAround?: pt (0–1000), colorModel?: \"rgb\"|\"cmyk\"|\"grayscale\"|\"bitmap\", clippingMask?: bool (a clip group with the art's outline)} replace the selection with an embedded image (PNG; in a CMYK document with its own colour model, a CMYK image of the art's inks, its transparency as its opacity mask); each defaults to document.rasterEffectsSettings; an image larger than 64 Mpx or 32,768 px a side is refused; a frame of threaded text that is rasterized leaves its thread with the text it shows → {id (the image, or its clip group), width, height, warning?: \"an image couldn't be decoded and is missing from the picture\" (as raster exports say)}",
             has_selection,
             rasterize
         ),
@@ -670,7 +670,11 @@ fn render_pixels(
     opts: &vectorcraft_render::RenderOptions,
     color: RasterColorModel,
 ) -> Result<(vectorcraft_render::Rendered, Option<&'static str>)> {
-    if region.width() * region.height() * scale * scale > MAX_PIXELS || region.width() * scale > 65535.0 || region.height() * scale > 65535.0 {
+    // No side longer than the renderer draws: it would cut the image off there. The sides are
+    // measured in the renderer's whole pixels.
+    let side = vectorcraft_render::MAX_RASTER_SIDE;
+    let (w, h) = vectorcraft_render::region_pixels(region, scale);
+    if region.width() * region.height() * scale * scale > MAX_PIXELS || w > side || h > side {
         return Err(EngineError::Other("image would be too large; lower the resolution".into()));
     }
     let mut r = vectorcraft_render::Renderer::new();
@@ -867,7 +871,7 @@ fn rasterize(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
-fn has_image(s: &Session) -> std::result::Result<(), String> {
+pub(crate) fn has_image(s: &Session) -> std::result::Result<(), String> {
     has_selection(s)?;
     let st = s.active().ok_or("no document open")?;
     if st.selection.objects.iter().any(|id| matches!(st.doc.node(*id).map(|n| &n.kind), Some(NodeKind::Image(_)))) {
@@ -1302,13 +1306,16 @@ fn convert_to_artboards(s: &mut Session, _: &Value) -> Result<Value> {
         let symbols = d.symbol_boxes();
         let boxes: Vec<(NodeId, Rect)> = roots.iter().filter_map(|id| Some((*id, d.node(*id)?.geometric_bounds_with(&symbols)?))).collect();
         let mut converted = vec![];
+        // The highest artboard id the document has, kept up to date as artboards are added.
+        let mut top = d.artboards.iter().map(|a| a.id).max();
         for (id, b) in boxes {
             if b.width() <= 0.0 || b.height() <= 0.0 {
                 continue;
             }
             // Named one past the highest artboard id the document has, whatever id it is given.
-            let number = d.artboards.iter().map(|a| a.id).max().map_or(1, |m| m.saturating_add(1));
-            let aid = d.next_artboard_id();
+            let number = top.map_or(1, |m| m.saturating_add(1));
+            let aid = d.next_artboard_id_above(top);
+            top = top.max(Some(aid));
             d.artboards.push(vectorcraft_doc::Artboard {
                 id: aid,
                 name: format!("Artboard {number}"),

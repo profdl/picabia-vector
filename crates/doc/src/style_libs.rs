@@ -155,10 +155,12 @@ pub const STYLE_LIBRARIES: &[BuiltinStyleLibrary] = &[
     BuiltinStyleLibrary { id: "shadows-glows", name: "Shadows and Glows", make: shadows_glows },
     BuiltinStyleLibrary { id: "outlines-rules", name: "Outlines and Rules", make: outlines_rules },
     BuiltinStyleLibrary { id: "hand-drawn", name: "Hand-Drawn", make: hand_drawn },
+    BuiltinStyleLibrary { id: "textures", name: "Textures", make: textures },
     BuiltinStyleLibrary { id: "gradient-finishes", name: "Gradient Finishes", make: gradient_finishes },
     BuiltinStyleLibrary { id: "shape-effects", name: "Shape Effects", make: shape_effects },
     BuiltinStyleLibrary { id: "blends-transparency", name: "Blends and Transparency", make: blends_transparency },
     BuiltinStyleLibrary { id: "game-hud", name: "Game HUD", make: game_hud },
+    BuiltinStyleLibrary { id: "status-effects", name: "Status Effects", make: status_effects },
 ];
 
 /// Built-in library `id`, made once.
@@ -318,6 +320,44 @@ fn hand_drawn() -> Vec<GraphicStyle> {
         ),
         style("Puffy", vec![F(fill("#ffc8dd")), S(round("#c9184a", 1.5))], vec![fx("distort.puckerBloat", json!({"amount": 25.0}))]),
         style("Starburst", vec![F(fill("#ffbe0b")), S(stroke("#fb5607", 1.0))], vec![fx("distort.puckerBloat", json!({"amount": -40.0}))]),
+    ]
+}
+
+/// Textures: fills and strokes painted with the catalog's texture effects (grain, canvas and
+/// burlap surfaces, craquelure, tiles, patchwork, stained glass and water paper).
+fn textures() -> Vec<GraphicStyle> {
+    let surface = |texture: &str, scaling: f64, relief: f64, light: &str| {
+        fx("texture.texturizer", json!({"texture": texture, "scaling": scaling, "relief": relief, "lightDirection": light, "invert": false}))
+    };
+    vec![
+        style(
+            "Fine Grain",
+            vec![F(fill("#c9ada7")), S(stroke("#4a4e69", 1.0))],
+            vec![fx("texture.grain", json!({"intensity": 35.0, "contrast": 55.0, "grainType": "regular"}))],
+        ),
+        style("Canvas Weave", vec![F(fill("#e9d8a6"))], vec![surface("canvas", 100.0, 6.0, "topLeft")]),
+        style("Burlap Sack", vec![F(fill("#bc8a5f")), S(stroke("#6f4518", 1.5))], vec![surface("burlap", 120.0, 8.0, "top")]),
+        style(
+            "Cracked Glaze",
+            vec![F(fill("#94d2bd")), S(stroke("#005f73", 1.0))],
+            vec![fx("texture.craquelure", json!({"crackSpacing": 12.0, "crackDepth": 5.0, "crackBrightness": 8.0}))],
+        ),
+        style(
+            "Mosaic Floor",
+            vec![F(fill("#0a9396"))],
+            vec![fx("texture.mosaicTiles", json!({"tileSize": 10.0, "groutWidth": 3.0, "lightenGrout": 8.0}))],
+        ),
+        style("Quilted Squares", vec![F(fill("#ee9b00"))], vec![fx("texture.patchwork", json!({"squareSize": 5.0, "relief": 10.0}))]),
+        style(
+            "Leaded Glass",
+            vec![F(FillLayer::new(linear(-45.0, &[(0.0, "#ae2012", 1.0), (0.5, "#ee9b00", 1.0), (1.0, "#005f73", 1.0)])))],
+            vec![fx("texture.stainedGlass", json!({"cellSize": 8.0, "borderThickness": 4.0, "lightIntensity": 3.0}))],
+        ),
+        style(
+            "Damp Paper",
+            vec![F(fill("#4895ef")), S(stroke("#3f37c9", 1.0))],
+            vec![fx("sketch.waterPaper", json!({"fiberLength": 12.0, "brightness": 55.0, "contrast": 60.0}))],
+        ),
     ]
 }
 
@@ -482,6 +522,43 @@ fn game_hud() -> Vec<GraphicStyle> {
     ]
 }
 
+/// Status Effects: buffs and debuffs for RPG/gamedev art (original, catalogue stylize effects only).
+fn status_effects() -> Vec<GraphicStyle> {
+    let stealth = GraphicStyle {
+        opacity: 0.45,
+        blend: BlendMode::Normal,
+        ..style("Stealth Fade", vec![F(fill("#7f8c8d")), S(stroke("#2c3e50", 1.0))], vec![])
+    };
+    vec![
+        style(
+            "Poison Tint",
+            vec![F(fill("#2ecc71"))],
+            vec![fx("stylize.outerGlow", json!({"mode": "normal", "opacity": 80.0, "blur": 6.0, "color": "#58d68d"}))],
+        ),
+        style(
+            "Freeze Edge",
+            vec![F(fill("#aed6f1")), S(stroke("#5dade2", 2.0))],
+            vec![fx("stylize.innerGlow", json!({"mode": "screen", "opacity": 70.0, "blur": 5.0, "color": "#d6eaf8", "source": "edge"}))],
+        ),
+        style(
+            "Burn Aura",
+            vec![F(fill("#e67e22"))],
+            vec![fx("stylize.outerGlow", json!({"mode": "normal", "opacity": 85.0, "blur": 8.0, "color": "#f39c12"}))],
+        ),
+        style(
+            "Stun Pulse",
+            vec![F(fill("#f4d03f"))],
+            vec![fx("stylize.outerGlow", json!({"mode": "normal", "opacity": 75.0, "blur": 7.0, "color": "#f7dc6f"}))],
+        ),
+        stealth,
+        style(
+            "Shield Buff",
+            vec![F(fill("#85c1e9")), S(round("#2874a6", 2.0))],
+            vec![fx("stylize.outerGlow", json!({"mode": "normal", "opacity": 70.0, "blur": 5.0, "color": "#5dade2"}))],
+        ),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -508,6 +585,22 @@ mod tests {
         assert_eq!(game.name, "Game HUD");
         let names: Vec<&str> = game.styles.iter().map(|g| g.name.as_str()).collect();
         assert_eq!(names, ["Health Fill", "Mana Glow", "Damage Flash", "Quest Outline", "Coin Shine", "Boss Alert"]);
+        let status = builtin_style_library("status-effects").unwrap();
+        assert_eq!(status.name, "Status Effects");
+        let status_names: Vec<&str> = status.styles.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(status_names, ["Poison Tint", "Freeze Edge", "Burn Aura", "Stun Pulse", "Stealth Fade", "Shield Buff"]);
+        let textures = builtin_style_library("textures").unwrap();
+        assert_eq!(textures.name, "Textures");
+        let texture_names: Vec<&str> = textures.styles.iter().map(|g| g.name.as_str()).collect();
+        let expected =
+            ["Fine Grain", "Canvas Weave", "Burlap Sack", "Cracked Glaze", "Mosaic Floor", "Quilted Squares", "Leaded Glass", "Damp Paper"];
+        assert_eq!(texture_names, expected);
+        for b in STYLE_LIBRARIES.iter().filter(|b| b.id != "textures") {
+            let lib = builtin_style_library(b.id).unwrap();
+            assert!(lib.styles.iter().all(|g| !expected.contains(&g.name.as_str())), "{} shares a name with Textures", b.id);
+        }
+        let ids: Vec<&str> = STYLE_LIBRARIES.iter().map(|b| b.id).collect();
+        assert_eq!(ids.iter().position(|&i| i == "textures"), ids.iter().position(|&i| i == "hand-drawn").map(|i| i + 1), "after Hand-Drawn");
     }
 
     #[test]
