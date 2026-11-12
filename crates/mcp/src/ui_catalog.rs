@@ -222,6 +222,12 @@ pub const UI_COMMANDS: &[(&str, &str, &str, &str)] = &[
         "",
         "{} toggle drawing the gaps of the selected Live Paint groups (those livePaint.info lists) in each group's Gap Preview Color while edges show → true when on",
     ),
+    (
+        "view.modifierCopyOutlines",
+        "Show Modifier Copy Outlines",
+        "",
+        "{} toggle a faint selection outline on each of the selected objects' modifier copies while edges show (off: only the object itself is outlined) → true when on",
+    ),
     ("type.hiddenCharacters", "Show Hidden Characters", "Cmd+Alt+I", "{} toggle markers for spaces, paragraph ends and story ends"),
     ("type.alignLeft", "Align left", "Cmd+Shift+L", "{} align the selected type's paragraphs (or those the Type tool's selection touches) left"),
     (
@@ -1698,5 +1704,41 @@ pub const UI_COMMANDS: &[(&str, &str, &str, &str)] = &[
         "Perspective Plane Options…",
         "",
         "{plane?: left|right|ground (default: the active plane)} open the plane's options, as double-clicking its plane widget does (dialog `perspectivePlane`: location (pt along the plane's normal), objects: none|move|copy): OK runs perspective.plane.move",
+    ),
+    (
+        "laser.panel",
+        "Laser…",
+        "",
+        "{} open the Laser window: connect to a GRBL laser (real ports only in the desktop app) or the simulator, jog, frame, start a job through its safety checklist (only a person's click there arms the laser), pause, resume and stop (Shift+Esc anywhere); the machine profile",
+    ),
+    (
+        "ui.stencilSettings",
+        "Stencil Settings…",
+        "",
+        "{} open the Stencil window: the first selected object's stencil settings (modifier.set of its stencil row), its stats and problems, Export for Laser…, Test Card…; Make Stencil for an object without one",
+    ),
+    (
+        "ui.physicsSettings",
+        "Physics Settings…",
+        "",
+        "{} give the selected objects that have none physics settings (physics.set, dynamic with the defaults; one undo step) and open them in the Appearance panel",
+    ),
+    (
+        "camera.panel",
+        "Camera…",
+        "",
+        "{} open the Camera window: connect to a Lumix camera (or \"sim\"), live view, the capture folder and prefix, Capture",
+    ),
+    (
+        "ui.cameraCapture",
+        "Capture Frame to Folder",
+        "",
+        "{} capture (camera.capture) into the capture folder, asking for the folder first when none is chosen; with the Camera window's Place option, also places the frame on the active artboard as a linked image (file.place) → camera.capture's reply, or {saved: false, cancelled: true}",
+    ),
+    (
+        "ui.cameraFolder",
+        "Choose Capture Folder…",
+        "",
+        "{} choose the camera's capture folder with the folder picker (camera.settings) → {folder | null}",
     ),
 ];

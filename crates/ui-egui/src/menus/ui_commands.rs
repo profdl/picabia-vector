@@ -1,3 +1,8 @@
+// PICABIA: Picabia's rows (`cargo xtask ui-commands` reads no comments inside the array, so they
+// are listed here): `view.modifierCopyOutlines` after `view.livePaintGaps` (outlines on a selected
+// object's modifier copies, off by default); after `ui.perspectivePlane`, the Laser, Stencil
+// Settings and Physics Settings rows (`picabia_ui::command`) and the Camera rows
+// (`picabia_camera_window::command`).
 /// UI-level commands: (id, label, shortcut, params doc).
 pub const UI_COMMANDS: &[(&str, &str, &str, &str)] = &[
     (
@@ -223,7 +228,6 @@ pub const UI_COMMANDS: &[(&str, &str, &str, &str)] = &[
         "",
         "{} toggle drawing the gaps of the selected Live Paint groups (those livePaint.info lists) in each group's Gap Preview Color while edges show → true when on",
     ),
-    // PICABIA: outlines on a selected object's modifier copies, off by default.
     (
         "view.modifierCopyOutlines",
         "Show Modifier Copy Outlines",
@@ -1707,7 +1711,6 @@ pub const UI_COMMANDS: &[(&str, &str, &str, &str)] = &[
         "",
         "{plane?: left|right|ground (default: the active plane)} open the plane's options, as double-clicking its plane widget does (dialog `perspectivePlane`: location (pt along the plane's normal), objects: none|move|copy): OK runs perspective.plane.move",
     ),
-    // PICABIA: the Laser window and the Stencil window (`picabia_ui::command`).
     (
         crate::picabia_ui::LASER_PANEL,
         "Laser…",
@@ -1726,7 +1729,6 @@ pub const UI_COMMANDS: &[(&str, &str, &str, &str)] = &[
         "",
         "{} give the selected objects that have none physics settings (physics.set, dynamic with the defaults; one undo step) and open them in the Appearance panel",
     ),
-    // PICABIA: the Camera window and its capture (`picabia_camera_window::command`).
     (
         crate::picabia_camera_window::CAMERA_PANEL,
         "Camera…",
