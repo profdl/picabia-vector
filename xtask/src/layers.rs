@@ -99,6 +99,9 @@ pub const INTRA_LAYER_ORDER: &[&[&str]] = &[
     &["stencil", "render"],
     // PICABIA: the screen row clips its dots with Pathfinder's intersect and fits them with Simplify.
     &["pathops", "modifiers"],
+    // Outline Object on an image's fill or stroke follows the outline Image Trace makes of its
+    // opaque area.
+    &["trace", "effects"],
 ];
 
 fn intra_layer_allowed(from: &str, to: &str) -> bool {

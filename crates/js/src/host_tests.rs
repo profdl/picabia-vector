@@ -271,6 +271,41 @@ fn a_frozen_getter_gives_a_frozen_value_each_time() {
     assert_eq!(r.run(source).unwrap(), JsValue::String("true,true,true,1,false,false".into()));
 }
 
+/// A site getter is told the source tag, line and column of the code that reads it: a function an
+/// earlier script or an evaluator's source defined keeps that source's tag, and code that `eval`
+/// compiled has none.
+#[test]
+fn a_site_getter_is_told_where_the_code_that_reads_it_is() {
+    let mut r = realm(10_000_000);
+    let seen: Rc<RefCell<Vec<CallSite>>> = Rc::default();
+    let log = seen.clone();
+    let site: SiteFunction = Rc::new(move |s| {
+        log.borrow_mut().push(s);
+        Ok(Data::Number(f64::from(s.line)))
+    });
+    let source: HostFunction = Rc::new(|_| Ok(Data::String("\n\nfunction inEval() { return host.site; }".into())));
+    let load = HostItem::Evaluator { source, end: Rc::new(|| {}), strict_writes: Rc::new(|| None) };
+    r.define_host_object("host", vec![("site".into(), HostItem::SiteGetter(site)), ("load".into(), load)]).unwrap();
+    r.run("function early() {\n  return  host.site;\n}\nhost.load();").unwrap();
+    let first = r.script_tag();
+    assert_eq!(r.run("\n\n\n\nhost.site + early() + inEval() + eval('host.site')").unwrap(), JsValue::Number(5.0 + 2.0 + 3.0 + 1.0));
+    let second = r.script_tag();
+    let sites = seen.borrow().clone();
+    assert_eq!(
+        sites,
+        vec![
+            CallSite { source: second, line: 5, column: 1 },
+            CallSite { source: first, line: 2, column: 11 },
+            CallSite { source: first + 1, line: 3, column: 28 },
+            CallSite { source: UNKNOWN_SOURCE, line: 1, column: 1 },
+        ]
+    );
+    seen.borrow_mut().clear();
+    // A getter a built-in calls is at the place of the code that called the built-in.
+    assert_eq!(r.run("\nObject.getOwnPropertyDescriptor(host, 'site').get.call(host)").unwrap(), JsValue::Number(2.0));
+    assert_eq!(seen.borrow().first().map(|s| s.source), Some(r.script_tag()));
+}
+
 #[test]
 fn a_text_function_takes_each_argument_as_string_gives_it() {
     let mut r = realm(1_000_000);
@@ -636,6 +671,37 @@ fn error_sources_count_from_the_last_script_and_code_from_an_earlier_one_is_unkn
     assert_eq!(r.error_source(), 1, "counted again from this run's script");
     assert!(r.run("var = 1").is_err());
     assert_eq!(r.error_source(), 0, "a syntax error is in the script");
+}
+
+#[test]
+fn error_tags_stay_the_same_from_run_to_run_and_are_never_shared() {
+    let mut r = realm(10_000_000);
+    let source: HostFunction = Rc::new(|_| Ok(Data::String("function inEval() { throw new Error('in eval'); }".into())));
+    let load = HostItem::Evaluator { source, end: Rc::new(|| {}), strict_writes: Rc::new(|| None) };
+    r.define_host_object("host", vec![("load".into(), load)]).unwrap();
+    assert_eq!(r.script_tag(), UNKNOWN_SOURCE, "no script yet");
+    r.run("function late() { throw new Error('late'); }\nhost.load(); host.load();").unwrap();
+    let first = r.script_tag();
+    assert_ne!(first, UNKNOWN_SOURCE);
+    assert!(r.run("\nlate()").is_err());
+    let second = r.script_tag();
+    assert!(second > first + 2, "the evaluator's two sources took the tags after the first script");
+    assert_eq!((r.error_source(), r.error_tag()), (UNKNOWN_SOURCE, first), "late keeps its script's tag");
+    assert!(r.run("inEval()").is_err());
+    assert_eq!(r.error_tag(), first + 2, "the second source the evaluator gave in the first run");
+    assert!(r.run("\nthrow 1").is_err());
+    assert_eq!((r.error_source(), r.error_tag()), (0, r.script_tag()));
+    // Once the tags are used up, a source gets no tag rather than one an earlier source has.
+    r.set_last_tag(UNKNOWN_SOURCE - 3);
+    r.run("function nearEnd() { throw 1; }\nhost.load(); host.load(); host.load();").unwrap();
+    assert_eq!(r.script_tag(), UNKNOWN_SOURCE - 2);
+    assert!(r.run("nearEnd()").is_err());
+    assert_eq!(r.script_tag(), UNKNOWN_SOURCE, "a script after the last tag");
+    assert_eq!(r.error_tag(), UNKNOWN_SOURCE - 2);
+    assert!(r.run("inEval()").is_err());
+    assert_eq!(r.error_tag(), UNKNOWN_SOURCE, "the third source came after the last tag");
+    assert!(r.run("\nthrow 1").is_err());
+    assert_eq!((r.error_source(), r.error_tag()), (UNKNOWN_SOURCE, UNKNOWN_SOURCE));
 }
 
 #[test]

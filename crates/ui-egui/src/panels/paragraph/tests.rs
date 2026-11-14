@@ -107,6 +107,45 @@ fn paragraph_mixed_kinsoku_and_mojikumi_show_blank_dropdowns() {
     assert_eq!(shared_para(&app, |p| p.mojikumi), Some(Mojikumi::LineEndHalf));
 }
 
+/// The Mojikumi Set menu lists None, the four other predefined sets and Line-end Punctuation Half
+/// Width, each under its own label in every interface language. Each entry sets the selected
+/// paragraphs' set in one undo step and is shown as the current set; paragraphs with different
+/// sets show a blank menu, and Reset Panel gives them Line-end Punctuation Half Width.
+#[test]
+fn mojikumi_menu_offers_and_sets_every_predefined_set() {
+    let keys: Vec<&str> = mojikumi_sets().iter().map(|s| s.2).collect();
+    assert_eq!(keys, ["none", "yakumonoHankaku", "gyomatsuYakumonoHankaku", "gyomatsuYakumonoZenkaku", "yakumonoZenkaku", "lineEndHalf"]);
+    for lang in crate::i18n::Lang::all() {
+        crate::i18n::set_current(lang);
+        let labels: std::collections::BTreeSet<&str> = mojikumi_sets().iter().map(|s| s.0).collect();
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        assert_eq!(labels.len(), 6, "{}: {labels:?}", lang.code());
+    }
+    let (mut app, id) = editing_text("「あ」。\nい、");
+    app.session.prefs.show_east_asian_options = true;
+    app.session.set_tool_option("selectAll", &json!(true));
+    let steps = |app: &VectorcraftApp| app.session.active().unwrap().history.undo.len();
+    for (_, set, key) in mojikumi_sets() {
+        app.session.set_tool_option("selectAll", &json!(true));
+        let before = (shared_para(&app, |p| p.mojikumi), steps(&app));
+        format(&mut app, json!({"mojikumi": key}));
+        assert_eq!(shared_para(&app, |p| p.mojikumi), Some(set), "{key}");
+        if before.0 == Some(set) {
+            continue;
+        }
+        assert_eq!(steps(&app), before.1 + 1, "{key}: one undo step");
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(shared_para(&app, |p| p.mojikumi), before.0, "{key}: undone");
+        app.run("edit.redo", json!({})).unwrap();
+    }
+    app.run("text.setFormat", json!({"id": id, "start": 0, "end": 0, "mojikumi": "yakumonoHankaku"})).unwrap();
+    app.run("text.setFormat", json!({"id": id, "start": 13, "end": 13, "mojikumi": "gyomatsuYakumonoZenkaku"})).unwrap();
+    app.session.set_tool_option("selectAll", &json!(true));
+    assert_eq!(shared_para(&app, |p| p.mojikumi), None, "mixed sets");
+    reset_panel(&mut app);
+    assert_eq!(shared_para(&app, |p| p.mojikumi), Some(Mojikumi::LineEndHalf), "Reset Panel");
+}
+
 /// Kinsoku Shori Type: the menu's item sets the type of the paragraphs the Type tool's selection
 /// touches in one undo step, and none is checked while the selected paragraphs differ.
 #[test]
@@ -131,6 +170,81 @@ fn kinsoku_shori_type_sets_the_selected_paragraphs_in_one_undo_step() {
     app.run("edit.undo", json!({})).unwrap();
     app.run("edit.undo", json!({})).unwrap();
     assert_eq!(types(&app), (KinsokuShoriType::PushOutOnly, KinsokuShoriType::PushOutOnly));
+}
+
+/// Korean Line Break Anywhere: new type has it off; the menu item turns it on for the paragraphs
+/// the Type tool's selection touches in one undo step, is unchecked while the selected paragraphs
+/// differ, turns it on for all of them then and off again once they all have it. Reset Panel turns
+/// it off.
+#[test]
+fn korean_line_break_anywhere_toggles_the_selected_paragraphs_in_one_undo_step() {
+    let (mut app, id) = editing_text("가나\n다라\n");
+    app.session.prefs.show_east_asian_options = true;
+    let flags = |app: &VectorcraftApp| {
+        let node = app.session.active().unwrap().doc.node(NodeId(id.as_u64().unwrap())).unwrap();
+        let NodeKind::Text(text) = &node.kind else { panic!("text") };
+        (text.para_at(0).korean_line_break_anywhere, text.para_at(1).korean_line_break_anywhere)
+    };
+    assert_eq!(flags(&app), (false, false), "new type has it off");
+    select_range(&mut app, 0, 3);
+    let history = app.session.active().unwrap().history.undo.len();
+    toggle_korean_line_break_anywhere(&mut app);
+    assert_eq!(flags(&app), (true, false));
+    assert_eq!(app.session.active().unwrap().history.undo.len(), history + 1);
+    app.session.set_tool_option("selectAll", &json!(true));
+    assert_eq!(shared_para(&app, |p| p.korean_line_break_anywhere), None, "mixed: unchecked");
+    toggle_korean_line_break_anywhere(&mut app);
+    assert_eq!(flags(&app), (true, true));
+    app.session.set_tool_option("selectAll", &json!(true));
+    toggle_korean_line_break_anywhere(&mut app);
+    assert_eq!(flags(&app), (false, false));
+    app.session.set_tool_option("selectAll", &json!(true));
+    toggle_korean_line_break_anywhere(&mut app);
+    app.session.set_tool_option("selectAll", &json!(true));
+    reset_panel(&mut app);
+    assert_eq!(flags(&app), (false, false), "Reset Panel turns it off");
+}
+
+/// Bunri-Kinshi: new type has it off; the menu item turns it on for the paragraphs the Type tool's
+/// selection touches in one undo step, is unchecked while the selected paragraphs differ, and is
+/// unavailable while any of them has kinsoku None, which keeps the setting. Reset Panel turns it off.
+#[test]
+fn bunri_kinshi_toggle_follows_kinsoku_and_the_selected_paragraphs() {
+    let (mut app, id) = editing_text("あ——い\nう……え\n");
+    app.session.prefs.show_east_asian_options = true;
+    let flags = |app: &VectorcraftApp| {
+        let node = app.session.active().unwrap().doc.node(NodeId(id.as_u64().unwrap())).unwrap();
+        let NodeKind::Text(text) = &node.kind else { panic!("text") };
+        (text.para_at(0).bunri_kinshi, text.para_at(1).bunri_kinshi)
+    };
+    assert_eq!(flags(&app), (false, false), "new type has it off");
+    select_range(&mut app, 0, 3);
+    assert_eq!(bunri_kinshi_item(&app), (true, false));
+    let history = app.session.active().unwrap().history.undo.len();
+    toggle_bunri_kinshi(&mut app);
+    assert_eq!(flags(&app), (true, false));
+    assert_eq!(app.session.active().unwrap().history.undo.len(), history + 1);
+    assert_eq!(bunri_kinshi_item(&app), (true, true));
+    app.session.set_tool_option("selectAll", &json!(true));
+    assert_eq!(bunri_kinshi_item(&app), (true, false), "mixed: unchecked");
+    toggle_bunri_kinshi(&mut app);
+    assert_eq!(flags(&app), (true, true));
+    // Kinsoku None on one paragraph: the item is unavailable and the setting stays.
+    let second = "あ——い\n".len();
+    app.run("text.setFormat", json!({"id": id, "start": second, "end": second, "kinsoku": "none"})).unwrap();
+    app.session.set_tool_option("selectAll", &json!(true));
+    assert_eq!(bunri_kinshi_item(&app), (false, true));
+    assert_eq!(flags(&app), (true, true));
+    app.run("text.setFormat", json!({"id": id, "kinsoku": "soft"})).unwrap();
+    app.session.set_tool_option("selectAll", &json!(true));
+    assert_eq!(bunri_kinshi_item(&app), (true, true));
+    toggle_bunri_kinshi(&mut app);
+    assert_eq!(flags(&app), (false, false));
+    app.session.set_tool_option("selectAll", &json!(true));
+    toggle_bunri_kinshi(&mut app);
+    app.session.set_tool_option("selectAll", &json!(true));
+    reset_panel(&mut app);
+    assert_eq!(flags(&app), (false, false), "Reset Panel turns it off");
 }
 
 #[test]
@@ -920,4 +1034,59 @@ fn reset_panel_leaves_an_undo_group_open_in_another_document() {
     app.run("text.setFormat", json!({"id": a, "mojikumi": "lineEndHalf"})).unwrap();
     app.run("edit.undoGroup.end", json!({})).unwrap();
     assert_eq!(steps(app.session.active().unwrap()), a_steps, "the later edit is part of the Batch step");
+}
+
+/// With the Selection tool a selected frame of a threaded story stands for the whole story: the
+/// Paragraph panel's changes and Reset Panel reach its locked and hidden frames, each in one undo
+/// step, other type keeps its paragraphs, and the alignment buttons read every frame.
+#[test]
+fn selection_tool_paragraph_changes_reach_every_frame_of_the_story() {
+    let mut app = VectorcraftApp::new(Session::new(), Default::default());
+    app.run("file.new", json!({"width": 900, "height": 300})).unwrap();
+    let story = "The quick brown fox jumps over the lazy dog.\n".repeat(12);
+    let area = json!({"x": 10, "y": 10, "text": story, "size": 12, "area": {"width": 150, "height": 60}});
+    let a = app.run("text.create", area).unwrap()["id"].as_u64().unwrap();
+    let b = app.run("text.thread.add", json!({"from": a, "rect": [200, 10, 150, 60]})).unwrap()["id"].as_u64().unwrap();
+    let c = app.run("text.thread.add", json!({"from": b, "rect": [400, 10, 150, 200]})).unwrap()["id"].as_u64().unwrap();
+    let other = app.run("text.create", json!({"x": 10, "y": 250, "text": "Other", "size": 12})).unwrap()["id"].as_u64().unwrap();
+    app.run("select.set", json!({"ids": [b]})).unwrap();
+    app.run("object.lock", json!({})).unwrap();
+    app.run("select.set", json!({"ids": [c]})).unwrap();
+    app.run("object.hide", json!({})).unwrap();
+    app.run("select.set", json!({"ids": [a]})).unwrap();
+    let paragraphs = |app: &VectorcraftApp, id: u64| match &app.session.active().unwrap().doc.node(NodeId(id)).unwrap().kind {
+        NodeKind::Text(t) => (0..t.paragraph_count()).map(|i| t.para_at(i).clone()).collect::<Vec<_>>(),
+        _ => panic!("not text"),
+    };
+    let undo_steps = |app: &VectorcraftApp| app.session.active().unwrap().history.undo.len();
+    for id in [a, b, c] {
+        assert!(!paragraphs(&app, id).is_empty(), "frame {id} holds text");
+    }
+
+    let steps = undo_steps(&app);
+    format(&mut app, json!({"spaceBefore": 4}));
+    assert_eq!(undo_steps(&app), steps + 1, "one undo step");
+    for id in [a, b, c] {
+        assert!(paragraphs(&app, id).iter().all(|p| (p.space_before - 4.0).abs() < 1e-9), "frame {id} takes the space");
+    }
+    assert!(paragraphs(&app, other).iter().all(|p| p.space_before.abs() < 1e-9), "other type keeps its paragraphs");
+    assert_eq!(shared_para_field(&app, |p| p.space_before), Some(4.0));
+
+    align(&mut app, "center").unwrap();
+    for id in [a, b, c] {
+        assert!(paragraphs(&app, id).iter().all(|p| p.justify == Justify::Center), "frame {id} is centered");
+    }
+    assert!(paragraphs(&app, other).iter().all(|p| p.justify != Justify::Center));
+    assert_eq!(selected_alignment(&app, &ParaStyle::default()), Some(Justify::Center));
+    // A hidden frame aligned otherwise leaves no alignment button on.
+    app.run("text.setStyle", json!({"ids": [c], "justify": "right"})).unwrap();
+    app.run("select.set", json!({"ids": [a]})).unwrap();
+    assert_eq!(selected_alignment(&app, &ParaStyle::default()), None);
+
+    let steps = undo_steps(&app);
+    reset_panel(&mut app);
+    assert_eq!(undo_steps(&app), steps + 1, "Reset Panel is one undo step");
+    for id in [a, b, c] {
+        assert!(paragraphs(&app, id).iter().all(|p| p.space_before.abs() < 1e-9 && p.justify == Justify::Auto), "frame {id} is reset");
+    }
 }

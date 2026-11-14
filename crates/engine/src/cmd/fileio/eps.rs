@@ -370,7 +370,7 @@ fn encode_document(doc: &Document, p: &Value, saving: bool) -> Result<Encoded> {
         let o = EpsOptions {
             region,
             origin,
-            title: doc.title.clone(),
+            title: doc.info_title().to_owned(),
             created,
             native: Some(native(&editing, if whole { None } else { board }, set.include_linked)),
             ..set.eps.clone()
@@ -382,6 +382,7 @@ fn encode_document(doc: &Document, p: &Value, saving: bool) -> Result<Encoded> {
                 enc.warnings.push(w);
             }
         }
+        enc.add_setting_notes(out.setting_notes);
     }
     enc.warnings.extend(crate::cmd::fonts::export_overflow_warning(doc, &doc.layers, Some(&regions)));
     Ok(enc)
