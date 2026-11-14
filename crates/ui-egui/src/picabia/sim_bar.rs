@@ -180,7 +180,7 @@ fn pin_markers(app: &VectorcraftApp, ctx: &egui::Context) {
     if marks.is_empty() {
         return;
     }
-    let xf = crate::canvas::Xf::new(rect, view);
+    let xf = crate::canvas::Xf::at(rect, view, app.canvas_ui_zoom);
     let t = Tokens::get(ctx);
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Background, Id::unique("picabia_physics_pins"))).with_clip_rect(rect);
     for (p, attached) in marks.iter().take(512) {

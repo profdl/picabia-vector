@@ -98,7 +98,7 @@ pub fn show(app: &mut VectorcraftApp, ctx: &egui::Context) {
     if !allowed(app, ctx) {
         return;
     }
-    let xf = crate::canvas::Xf::new(canvas, view);
+    let xf = crate::canvas::Xf::at(canvas, view, app.canvas_ui_zoom);
     let badges = stacked(app, ctx);
     let t = Tokens::get(ctx);
     let mut clicked = false;

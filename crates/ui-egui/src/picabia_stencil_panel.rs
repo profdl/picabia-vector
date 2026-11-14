@@ -823,7 +823,7 @@ const MAX_MARKERS: usize = 600;
 pub fn canvas_markers(app: &VectorcraftApp, ctx: &egui::Context) {
     let (Some(rect), Some(view)) = (app.canvas_rect, app.view()) else { return };
     let Some(st) = app.session.active() else { return };
-    let xf = crate::canvas::Xf::new(rect, view);
+    let xf = crate::canvas::Xf::at(rect, view, app.canvas_ui_zoom);
     let t = Tokens::get(ctx);
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Background, Id::unique("picabia_stencil_markers"))).with_clip_rect(rect);
     let focused = focus(ctx);

@@ -262,6 +262,9 @@ pub(super) fn task_bar(app: &mut VectorcraftApp, ui: &mut Ui, xf: &Xf) {
     });
     let spacing = ui.spacing().item_spacing.y;
     let chip_widths: Vec<f32> = chips.iter().map(|c| c.width()).collect();
+    let chip_widths = crate::picabia::task_bar::chip_widths(app, ui.ctx(), on_artboards, chip_widths, |w| {
+        bar_layout(&widths, w, font_w, room, bar_max_rows(bounds.height(), spacing)).map(|l| (l.actions, l.fonts, l.font_row, l.rows))
+    }); // PICABIA: the Modifiers button's width (PIC3.4a)
     let layout = bar_layout(&widths, &chip_widths, font_w, room, bar_max_rows(bounds.height(), spacing));
     // On a canvas too small for its handle and More Options: no bar, rather than one that runs off
     // the canvas.
@@ -339,6 +342,7 @@ pub(super) fn task_bar(app: &mut VectorcraftApp, ui: &mut Ui, xf: &Xf) {
                         if row == 0 && fonts && !layout.font_row {
                             crate::panels::character::task_bar(app, ui, f32::INFINITY);
                         }
+                        crate::picabia::task_bar::button(app, ui, layout.chips.get(chips.len()) == Some(&row)); // PICABIA: the Modifiers button (PIC3.4)
                         for (chip, at) in chips.iter().zip(&layout.chips) {
                             if *at != row {
                                 continue;

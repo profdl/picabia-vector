@@ -27,7 +27,7 @@ pub fn poke(app: &mut VectorcraftApp, ui: &Ui, resp: &egui::Response, rect: Rect
         return false;
     }
     let Some(view) = app.view() else { return false };
-    let xf = crate::canvas::Xf::new(rect, view);
+    let xf = crate::canvas::Xf::at(rect, view, app.canvas_ui_zoom);
     let pointer: Option<Pos2> = ui.input(|i| i.pointer.interact_pos());
     if app.picabia.poking {
         // A pull only when the pointer moved (holding still records nothing more).
