@@ -191,7 +191,7 @@ const UI_STEP_COMMANDS: [&str; 30] = [
 /// ([`UI_STEP_COMMANDS`]). Action playback runs such a step on its own, as its menu item runs it,
 /// and not inside `command.batch`.
 pub fn plays_in_app(id: &str) -> bool {
-    UI_STEP_COMMANDS.contains(&id)
+    UI_STEP_COMMANDS.contains(&id) || crate::picabia::menu::UI_STEP_COMMANDS.contains(&id) // PICABIA: Picabia's View items
 }
 
 /// Whether the item labeled `label` in menu `title`, which runs command `id` with `p`, can be a step

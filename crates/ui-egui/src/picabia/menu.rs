@@ -5,6 +5,10 @@ use serde_json::json;
 
 use crate::menus::Item;
 
+/// Picabia's View menu commands that the app runs itself and that can be steps of an action
+/// (`menus::plays_in_app`, beside upstream's list): Show/Hide Modifier Copy Outlines.
+pub const UI_STEP_COMMANDS: [&str; 1] = ["view.modifierCopyOutlines"];
+
 /// The Object ▸ Modifiers submenu: add each kind to the selection (and the screen's presets), in
 /// the groups of the panels' Add Modifier menu (`super::add_menu::GROUPS`), then Apply, Remove All,
 /// and copying and pasting rows between objects.
