@@ -54,29 +54,29 @@ pub(super) const ALLOWED: &[&str] = &[
 ];
 
 /// Picabia commands a plug-in may not call although no rule refuses them, in order: the camera and
-/// the laser are hardware links (a plug-in never drives a machine), Copy/Paste Modifiers keep rows
-/// in the session outside the document and its undo (as the clipboard), and the live physics
-/// session is state outside the document the app steps each frame (as a drag's).
+/// the laser are hardware links (a plug-in never drives a machine, nor lists the machine's serial
+/// ports), Copy/Paste Modifiers keep rows in the session outside the document and its undo (as the
+/// clipboard), and the live physics session is state outside the document the app steps each frame
+/// (as a drag's). `camera.settings` (`folder`), `laser.frame` and `laser.start` (`path`) are not
+/// listed: upstream's file-key rule refuses them.
 pub(super) const DENIED: &[&str] = &[
     "camera.capture",
     "camera.connect",
     "camera.disconnect",
     "camera.find",
     "camera.frame",
-    "camera.settings",
     "camera.start",
     "camera.status",
     "camera.stop",
     "laser.connect",
     "laser.disconnect",
-    "laser.frame",
     "laser.home",
     "laser.jog",
     "laser.jogCancel",
     "laser.pause",
+    "laser.ports", // PICABIA: lists the machine's serial ports, a hardware query outside the document.
     "laser.resume",
     "laser.setOrigin",
-    "laser.start",
     "laser.status",
     "laser.stop",
     "laser.unlock",
