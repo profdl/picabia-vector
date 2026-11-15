@@ -378,7 +378,7 @@ impl Session {
                     Ok(ui)
                 })),
                 // A press without a release in between: the drag ends where it is.
-                PointerKind::Down | PointerKind::DoubleClick => Some(self.handle_finish()),
+                PointerKind::Down | PointerKind::DoubleClick | PointerKind::TripleClick => Some(self.handle_finish()),
                 PointerKind::Move => Some(Ok(vec![])),
             };
         }
