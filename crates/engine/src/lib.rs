@@ -30,6 +30,7 @@ use vectorcraft_tools::{PaintDefaults, Tool};
 pub use cmd::clipboard::{Clipboard, SourceLayer};
 pub use cmd::create::constrain_click;
 pub use cmd::distortcmds::perspective_click;
+pub use cmd::graph::{GraphTypeSubject, calculated_axes as graph_calculated_axes, graph_type_subject};
 pub use cmd::params::{check_keys, check_params};
 pub use cmd::pathops::auto_simplify_level;
 pub use cmd::rasterfx::{export_pdf, flatten_raster_effects};
@@ -347,6 +348,9 @@ pub struct Session {
     pub global_edit_options: cmd::globaledit::Options,
     /// PICABIA: Picabia's session state (the rows `modifier.copy` copied…); not saved.
     pub(crate) picabia: cmd::picabia_modifier::PicabiaState,
+    /// The attribute Select Similar Objects selects by (`select.similar`), one of
+    /// [`cmd::SIMILAR`]; not saved.
+    pub select_similar: &'static str,
     /// Set while [`Session::tool_typed_text`] passes keyboard input to the active tool
     /// ([`vectorcraft_tools::ToolContext::typed_from_keyboard`]).
     keyboard_text: bool,
