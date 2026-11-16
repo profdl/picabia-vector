@@ -75,7 +75,7 @@ pub(super) fn grow(sp: &SubPath, g: &Grow, amplitude: f64, aim: Aim, before: usi
         return None;
     }
     let sign = if g.inward { -1.0 } else { 1.0 };
-    let mut anchors = sp.anchors.clone();
+    let mut anchors = sp.anchors.to_vec();
     // decay^gen by repeated products (no platform `powf`).
     let mut share = 1.0;
     let mut offset = before;

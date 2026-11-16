@@ -425,7 +425,7 @@ pub(super) fn normals(sp: &SubPath) -> Vec<Vec2> {
     let n = a.len();
     // The winding of the curve itself (its exact area, handles included): a curved shape with few
     // anchors (a two-anchor lens) has no anchor-polygon area to read it from.
-    let sign = if bezier_area(a, sp.closed) >= 0.0 { 1.0 } else { -1.0 };
+    let sign = if bezier_area(&a.contiguous(), sp.closed) >= 0.0 { 1.0 } else { -1.0 };
     (0..n)
         .map(|i| {
             let Some(here) = a.get(i) else { return Vec2::ZERO };

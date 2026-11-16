@@ -30,7 +30,7 @@ fn close(sp: &SubPath, method: CloseMethod, tolerance: f64) -> Option<SubPath> {
     if sp.closed || method == CloseMethod::Off || sp.anchors.len() < 2 {
         return None;
     }
-    let mut anchors = sp.anchors.clone();
+    let mut anchors = sp.anchors.to_vec();
     let (first, last) = (*anchors.first()?, *anchors.last()?);
     if first.p.distance(last.p) <= tolerance {
         // The ends are one point: the last anchor goes, its in handle moving to the first.

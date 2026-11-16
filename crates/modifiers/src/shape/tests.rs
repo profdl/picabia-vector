@@ -191,7 +191,7 @@ fn subdivide_doubles_a_four_gon_to_eight() {
         let r = resample::resample(&square(), &subdivide(method, 1)).unwrap();
         assert_eq!(r.anchors.len(), 8, "{method:?}");
         assert_eq!(resample::count(&square(), &subdivide(method, 1)), Some(8));
-        let open = SubPath::new(square().anchors, false);
+        let open = SubPath::new(square().anchors.into(), false);
         assert_eq!(resample::resample(&open, &subdivide(method, 1)).unwrap().anchors.len(), 7, "{method:?}");
         assert_eq!(resample::count(&open, &subdivide(method, 1)), Some(7));
     }
@@ -252,7 +252,7 @@ fn count_on_a_closed_path_spaces_points_evenly_round_it() {
     // Every 50 points round the 400-point perimeter.
     let m = Measured::new(pieces(&r));
     assert!((m.total - 400.0).abs() < 1e-6);
-    for w in r.anchors.windows(2) {
+    for w in r.anchors.contiguous().windows(2) {
         assert!((w[0].p.distance(w[1].p) - 50.0).abs() < 1e-6);
     }
     // A closed subpath gets at least three.
