@@ -204,14 +204,7 @@ pub(super) fn selection_overlay(app: &mut VectorcraftApp, p: &egui::Painter, xf:
             p.rect_stroke(frame, 0.0, Stroke::new(KEY_OUTLINE, color), StrokeKind::Outside);
         }
         // PICABIA: a faint outline on the selected objects' copies (View › Show Modifier Copy Outlines); a stencil's ties and repeat cell
-        let copies = app.ui.view.modifier_copy_outlines;
-        for (id, n) in st.selection.objects.iter().filter(|_| !big).filter_map(|id| Some((id, st.doc.node(*id)?))) {
-            if !matches!(n.kind, NodeKind::Text(ref tx) if matches!(tx.kind, vectorcraft_doc::TextKind::Point)) {
-                // The outline is only moved onto the copies, so it's made only when they show.
-                let outline = if copies { node_outline(n, &symbols) } else { vectorcraft_geom::BezPath::new() };
-                super::picabia::selected_outlines(p, &st.doc, n, &outline, xf, c32(st.doc.layer_color(*id)), copies);
-            }
-        }
+        super::picabia::selection_outlines(p, &st.doc, &st.selection.objects, &symbols, xf, big, app.ui.view.modifier_copy_outlines);
     }
     // The spine of each selected blend (or of the blend a selected key object belongs to).
     let mut spines = vec![];

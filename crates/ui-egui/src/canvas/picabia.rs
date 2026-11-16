@@ -6,12 +6,12 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use egui::{Pos2, Stroke, vec2};
-use vectorcraft_doc::{Document, Node};
+use vectorcraft_doc::{Document, Node, NodeId, NodeKind, SymbolBoxes};
 use vectorcraft_geom::{Affine, BezPath};
 use vectorcraft_modifiers::Guide;
 
 use super::Xf;
-use super::outline::stroke_path;
+use super::outline::{c32, node_outline, stroke_path};
 use crate::VectorcraftApp;
 use crate::theme::Tokens;
 
@@ -82,6 +82,20 @@ pub(super) fn copy_outlines(p: &egui::Painter, doc: &Document, n: &Node, outline
 
 /// The most path elements the stencil markers draw for one object (a fine lattice has many).
 const MAX_MARKER_ELEMENTS: usize = 50_000;
+
+/// [`selected_outlines`] for each selected object but point type, none when the selection is too
+/// `big` to outline. The outline is only moved onto the copies, so it is made only when `copies`.
+pub(super) fn selection_outlines(p: &egui::Painter, doc: &Document, objects: &[NodeId], symbols: &SymbolBoxes, xf: &Xf, big: bool, copies: bool) {
+    if big {
+        return;
+    }
+    for (id, n) in objects.iter().filter_map(|id| Some((id, doc.node(*id)?))) {
+        if !matches!(n.kind, NodeKind::Text(ref tx) if matches!(tx.kind, vectorcraft_doc::TextKind::Point)) {
+            let outline = if copies { node_outline(n, symbols) } else { BezPath::new() };
+            selected_outlines(p, doc, n, &outline, xf, c32(doc.layer_color(*id)), copies);
+        }
+    }
+}
 
 /// What a selected object shows besides its own outline: a faint outline on its copies when
 /// `copies` (View › Show Modifier Copy Outlines), and, for a stencil with a computed sheet, its
