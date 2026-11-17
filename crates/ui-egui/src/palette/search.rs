@@ -712,8 +712,10 @@ mod tests {
         assert_eq!(homes.get("app.quit"), Some(&("File".to_string(), "Exit")), "with its item's own label");
         let native = menu_homes(true);
         let native_home = |id: &str| native.get(id).map(|(path, _)| path.as_str());
-        assert_eq!(native_home("edit.preferences"), Some("VectorCraft › Settings"));
-        assert_eq!(native_home("help.about"), Some("VectorCraft"));
+        // PICABIA: the application menu is titled with Picabia's name.
+        let settings = format!("{} › Settings", crate::picabia::APP_NAME);
+        assert_eq!(native_home("edit.preferences"), Some(settings.as_str()));
+        assert_eq!(native_home("help.about"), Some(crate::picabia::APP_NAME));
         assert_eq!(native_home("help.discord"), Some("Help"));
         let c = catalog(Lang::EN, false);
         let of = |id: &str| c.list.iter().find(|e| e.id == id).and_then(|e| e.home.clone());

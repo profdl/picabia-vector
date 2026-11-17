@@ -41,7 +41,7 @@ const WRAPPED: &[(&str, &str)] = &[
 /// opens its dialog, the three Asset Export commands open the Asset Export panel (#4864), New
 /// Symbol makes a symbol of the selection, Gradient Vector gives the selection the default
 /// gradient, Define Perspective Grid makes the document's grid, and Select Slice deselects the
-/// slices.
+/// slices. Picabia's Laser Test Card… opens its dialog.
 const PICK_RUNS: &[&str] = &[
     "script.stop",
     "script.console.clear",
@@ -65,6 +65,8 @@ const PICK_RUNS: &[&str] = &[
     "paint.setGradientGeom",
     "perspective.grid.set",
     "object.slice.select",
+    // PICABIA: Laser Test Card… opens its dialog.
+    "modifier.stencilTestCard",
 ];
 
 /// The menu path of a panel's result: a pick runs Show Panel (`window.panel`) for the panel.
