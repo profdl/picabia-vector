@@ -110,7 +110,8 @@ pub fn app_bar(app: &mut VectorcraftApp, ui: &mut Ui) {
                 gap: ui.spacing().item_spacing.x,
                 community: crate::community::discord_width(ui, false),
             });
-            let (switcher, ws_w, learn, discord) = (fit.switcher, fit.switcher_w, fit.learn, fit.community && crate::picabia::SHOWS_DISCORD /* PICABIA: no VectorCraft Discord */);
+            let (switcher, ws_w, learn, discord) =
+                (fit.switcher, fit.switcher_w, fit.learn, fit.community && crate::picabia::SHOWS_DISCORD /* PICABIA: no VectorCraft Discord */);
             let mut rui = ui.new_child(egui::UiBuilder::new().max_rect(right).layout(egui::Layout::right_to_left(egui::Align::Center)));
             let ui = &mut rui;
             // Workspace switcher: shows the current workspace, opens Window → Workspace.
