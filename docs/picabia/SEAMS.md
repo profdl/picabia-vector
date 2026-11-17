@@ -25,7 +25,7 @@ When an upstream merge conflicts, resolve it seam by seam with this table, then 
 | `crates/ui-egui/src/dialogs/recovery.rs` | `SPEC.body` | "Picabia didn't quit normally…" | Wrap the `tl!` text in `crate::picabia::rename` |
 | `crates/engine/src/cmd/help.rs` | `github_url`, its test | Help ▸ GitHub opens github.com/profdl/picabia-vector; the getartcraft.com page stays VectorCraft's (the upstream link) | Return Picabia's URL; the test expects it |
 | `crates/ui-egui/src/community.rs` | `link_clicks_open_the_right_urls` test | Expects Picabia's GitHub URL | Change the last expected URL |
-| `crates/ui-egui/src/chrome.rs` | `app_bar` `discord` | No VectorCraft Discord button in the app bar | Prefix the condition with `crate::picabia::SHOWS_DISCORD &&` |
+| `crates/ui-egui/src/chrome.rs` | `app_bar` `discord` (from `fit_right_group`'s `community`) | No VectorCraft Discord button in the app bar | Append `&& crate::picabia::SHOWS_DISCORD` to the `discord` value taken from `fit.community` |
 | `crates/ui-egui/src/canvas/home.rs` | Community links | Home screen shows Picabia's and VectorCraft's links, not ArtCraft's Discord and website | Call `crate::picabia::links(ui)` instead of `community::links` |
 | `crates/ui-egui/src/menus/run.rs` | `help.checkForUpdates` (PIC16.1) | VectorCraft's checker would offer VectorCraft's releases: open Picabia's releases page instead | Re-add the guarded arm `if !crate::picabia::HAS_UPDATE_FEED` above upstream's |
 | `apps/vectorcraft/src/main.rs` | `set_startup_update_check` (PIC16.1) | No update check at startup | Pass `false` |
