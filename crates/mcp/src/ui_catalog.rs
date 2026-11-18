@@ -250,6 +250,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, &str)] = &[
         "",
         "{} toggle a faint selection outline on each of the selected objects' modifier copies while edges show (off: only the object itself is outlined) → true when on",
     ),
+    (
         "type.hiddenCharacters",
         "Show Hidden Characters",
         "Cmd+Alt+I",
