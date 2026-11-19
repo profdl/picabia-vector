@@ -1763,8 +1763,10 @@ mod tests {
         assert_eq!(of("tool:pen"), None);
         // The home's words find the result: Preferences… under the native bar's Settings.
         let native_catalog = catalog(Lang::EN, true);
-        assert!(place(&native_catalog, "vectorcraft settings pref", "edit.preferences").is_some());
-        assert!(place(&c, "vectorcraft settings pref", "edit.preferences").is_none());
+        // PICABIA: the home's words are Picabia's name, not VectorCraft's.
+        let words = format!("{} settings pref", crate::picabia::APP_NAME.to_lowercase());
+        assert!(place(&native_catalog, &words, "edit.preferences").is_some());
+        assert!(place(&c, &words, "edit.preferences").is_none());
         // The menu item's own label finds the result too: File › Exit runs Quit VectorCraft.
         assert!(place(&c, "exit", "app.quit").is_some());
     }
