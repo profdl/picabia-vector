@@ -12,7 +12,8 @@ use std::sync::{Arc, LazyLock};
 
 use serde_json::{Value, json};
 use vectorcraft_brush::{
-    self as brush, ArtBrush, Bristle, BristleShape, Brush, BrushKind, Calligraphic, Colorization, PatternBrush, PatternFit, Scatter, Variation,
+    self as brush, ArtBrush, ArtScale, Bristle, BristleShape, Brush, BrushKind, Calligraphic, Colorization, PatternBrush, PatternFit, Scatter,
+    Variation,
 };
 use vectorcraft_color::{Color, Paint};
 use vectorcraft_doc::{Appearance, AppearanceItem, Document, FillLayer, Node, NodeId, NodeKind, PatternDef, Symbol};
@@ -172,13 +173,16 @@ pub const BUILTIN: &[BuiltinBrushLibrary] = &[
     BuiltinBrushLibrary { id: "art-ribbons", name: "Art Ribbons", make: art_ribbons },
     BuiltinBrushLibrary { id: "ink-and-wash", name: "Ink and Wash", make: ink_and_wash },
     BuiltinBrushLibrary { id: "calligraphic-nibs", name: "Calligraphic Nibs", make: calligraphic_nibs },
+    BuiltinBrushLibrary { id: "pressure-sensitive", name: "Pressure Sensitive", make: pressure_sensitive },
     BuiltinBrushLibrary { id: "bristle-brushes", name: "Bristle Brushes", make: bristle_brushes },
     BuiltinBrushLibrary { id: "pattern-borders", name: "Pattern Borders", make: pattern_borders },
     BuiltinBrushLibrary { id: "scatter-shapes", name: "Scatter Shapes", make: scatter_shapes },
+    BuiltinBrushLibrary { id: "stipple", name: "Stipple", make: stipple },
     BuiltinBrushLibrary { id: "game-trails", name: "Game Trails", make: game_trails },
     BuiltinBrushLibrary { id: "energy-beams", name: "Energy Beams", make: energy_beams },
     BuiltinBrushLibrary { id: "dry-media", name: "Dry Media", make: dry_media },
     BuiltinBrushLibrary { id: "tech-circuit", name: "Tech Circuit", make: tech_circuit },
+    BuiltinBrushLibrary { id: "arrows", name: "Arrows", make: arrows },
 ];
 
 /// Built-in library `id`, made once.
@@ -230,6 +234,54 @@ fn ring(c: Point, outer: f64, inner: f64) -> Node {
 
 fn art(name: &str, art: Node, colorization: Colorization) -> Brush {
     Brush { name: name.into(), kind: BrushKind::Art(ArtBrush { art, colorization, ..Default::default() }) }
+}
+
+/// An Arrows brush whose art stretches only between `start` and `end` (fractions of its length).
+fn arrow_art(name: &str, art: Node, start: f64, end: f64) -> Brush {
+    Brush {
+        name: name.into(),
+        kind: BrushKind::Art(ArtBrush {
+            art,
+            scale: ArtScale::BetweenGuides { start, end },
+            colorization: Colorization::Tints,
+            ..Default::default()
+        }),
+    }
+}
+
+/// Arrows: original art brushes whose stems stretch while their heads keep their proportions.
+fn arrows() -> BrushLibrary {
+    let shaft = || black(shapes::rectangle(Rect::new(0.0, -1.0, 82.0, 1.0)));
+    let head = || black(polygon(&[(76.0, -7.0), (100.0, 0.0), (76.0, 7.0), (82.0, 0.0)]));
+    let solid = group(vec![shaft(), head()]);
+    let outline = group(vec![shaft(), black(polygon(&[(76.0, -7.0), (100.0, 0.0), (76.0, 7.0), (78.0, 4.0), (91.0, 0.0), (78.0, -4.0)]))]);
+    let double = group(vec![
+        black(shapes::rectangle(Rect::new(18.0, -1.0, 82.0, 1.0))),
+        head(),
+        black(polygon(&[(24.0, -7.0), (0.0, 0.0), (24.0, 7.0), (18.0, 0.0)])),
+    ]);
+    let chevrons = group(vec![shaft(), head(), black(polygon(&[(53.0, -5.0), (66.0, 0.0), (53.0, 5.0), (56.0, 0.0)]))]);
+    let dashed = group(
+        (0..5)
+            .map(|i| {
+                let x = f64::from(i) * 16.0;
+                black(shapes::rectangle(Rect::new(x, -1.0, x + 10.0, 1.0)))
+            })
+            .chain(std::iter::once(head()))
+            .collect(),
+    );
+    built(
+        "Arrows",
+        Document::new(100.0, 100.0),
+        vec![
+            arrow_art("Solid Arrow", solid, 0.0, 0.76),
+            arrow_art("Open Arrow", outline, 0.0, 0.76),
+            arrow_art("Double Arrow", double, 0.24, 0.76),
+            // The second chevron starts at 53 pt, so only the shaft before it stretches.
+            arrow_art("Chevron Arrow", chevrons, 0.0, 0.53),
+            arrow_art("Dashed Arrow", dashed, 0.0, 0.76),
+        ],
+    )
 }
 
 /// Art Ribbons: art brushes, 100 pt long, drawn here; Striped Ribbon is filled with the library's
@@ -372,6 +424,47 @@ fn calligraphic_nibs() -> BrushLibrary {
 /// and stiffness (%).
 fn bristle(name: &str, shape: BristleShape, [size, length, density, thickness, opacity, stiffness]: [f64; 6]) -> Brush {
     Brush { name: name.into(), kind: BrushKind::Bristle(Bristle { shape, size, length, density, thickness, opacity, stiffness }) }
+}
+
+/// Pressure Sensitive: four original marks whose art width or nib size responds to recorded pen
+/// pressure. Mouse paths keep the engine's neutral middle-pressure rendering.
+fn pressure_sensitive() -> BrushLibrary {
+    let flex = black(band(100.0, 5.0, 48, |x| 0.5 * (x / 100.0 * std::f64::consts::TAU).sin()));
+    let pulse = group(vec![
+        black(band(100.0, 2.8, 64, |x| 1.4 * (x / 100.0 * 2.0 * std::f64::consts::TAU).sin())),
+        black(shapes::ellipse(Rect::new(46.0, -2.2, 54.0, 2.2))),
+    ]);
+    let art_pressure = |name: &str, art: Node, light: f64, heavy: f64| Brush {
+        name: name.into(),
+        kind: BrushKind::Art(ArtBrush {
+            art,
+            width: light,
+            width_mode: Some(Variation::Pressure),
+            width_max: Some(heavy),
+            colorization: Colorization::Tints,
+            ..Default::default()
+        }),
+    };
+    let nib_pressure = |name: &str, angle: f64, roundness: f64, size: f64, variation: f64| Brush {
+        name: name.into(),
+        kind: BrushKind::Calligraphic(Calligraphic {
+            angle,
+            roundness,
+            size,
+            variation: [0.0, 0.0, variation],
+            modes: Some([Variation::Fixed, Variation::Fixed, Variation::Pressure]),
+        }),
+    };
+    built(
+        "Pressure Sensitive",
+        Document::new(100.0, 100.0),
+        vec![
+            art_pressure("Flex Ribbon", flex, 35.0, 250.0),
+            art_pressure("Pulse Stroke", pulse, 45.0, 280.0),
+            nib_pressure("Round Flow", 0.0, 100.0, 7.0, 5.0),
+            nib_pressure("Chisel Flow", 35.0, 25.0, 9.0, 7.0),
+        ],
+    )
 }
 
 /// Bristle Brushes: one bristle brush for each tip shape, from a fine liner to wide fans for
@@ -533,6 +626,44 @@ fn scatter_shapes() -> BrushLibrary {
         ),
     ];
     built("Scatter Shapes", doc, brushes)
+}
+
+/// Stipple: original dot-based scatter brushes for fine and broad shading along a path.
+fn stipple() -> BrushLibrary {
+    let dot = |x: f64, y: f64, r: f64, opacity: f32| {
+        Node::path(
+            NodeId(0),
+            shapes::ellipse(Rect::new(x - r, y - r, x + r, y + r)),
+            Appearance {
+                items: vec![AppearanceItem::Fill(FillLayer { opacity, ..FillLayer::new(Paint::solid(Color::BLACK)) })],
+                ..Default::default()
+            },
+        )
+    };
+    let base = Scatter { colorization: Colorization::Tints, ..Default::default() };
+    let brushes = vec![
+        scatter(
+            "Fine Stipple",
+            dot(0.0, 0.0, 0.8, 1.0),
+            Scatter { size: (70.0, 110.0), spacing: (80.0, 130.0), scatter: (-100.0, 100.0), ..base.clone() },
+        ),
+        scatter(
+            "Dense Stipple",
+            group(vec![dot(-1.7, -1.4, 1.0, 1.0), dot(1.5, 0.5, 0.8, 1.0), dot(-0.5, 1.8, 0.65, 1.0)]),
+            Scatter { size: (80.0, 120.0), spacing: (55.0, 90.0), scatter: (-70.0, 70.0), ..base.clone() },
+        ),
+        scatter(
+            "Soft Stipple",
+            group(vec![dot(-1.2, -0.8, 1.0, 0.45), dot(1.2, 1.1, 0.7, 0.35)]),
+            Scatter { size: (55.0, 135.0), spacing: (80.0, 140.0), scatter: (-140.0, 140.0), ..base.clone() },
+        ),
+        scatter(
+            "Bold Stipple",
+            group(vec![dot(-1.5, -1.0, 1.8, 1.0), dot(1.6, 1.3, 1.4, 1.0)]),
+            Scatter { size: (80.0, 125.0), spacing: (75.0, 115.0), scatter: (-95.0, 95.0), ..base },
+        ),
+    ];
+    built("Stipple", Document::new(100.0, 100.0), brushes)
 }
 
 /// Game Trails: art brushes for motion lines and impact streaks (original game HUD / VFX art).

@@ -87,6 +87,7 @@ vectorcraft-physics = { path = "crates/physics" }
 vectorcraft-lumix = { path = "crates/lumix" }
 vectorcraft-js = { path = "crates/js" }
 vectorcraft-apischema = { path = "crates/apischema" }
+vectorcraft-cdr = { path = "crates/cdr" }
 
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }

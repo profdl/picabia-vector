@@ -50,7 +50,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Move Direction Handle",
             [],
             None,
-            "{id, subpath?, anchor, which: \"in\"|\"out\", x, y, independent?: bool}",
+            "{id, subpath?, anchor, which: \"in\"|\"out\", x, y, independent?: bool, link?: bool} move a direction handle; independent moves only that side and makes the anchor a corner; link makes the anchor smooth with the other handle in line at its own length (a retracted one is pulled out to the moved handle's length where a segment leaves the anchor on its side); link and independent cannot both be true; both default false",
             has_doc,
             set_handle
         ),
@@ -457,6 +457,9 @@ fn set_handle(s: &mut Session, p: &Value) -> Result<Value> {
     let ai = index_opt(p, "anchor", "path.setHandle")?.ok_or_else(|| bad("path.setHandle", "missing anchor"))?;
     let out = str_param(p, "which") != Some("in");
     let pos = Point::new(f64_req(p, "x", "path.setHandle")?, f64_req(p, "y", "path.setHandle")?);
+    if switch_or(p, "link", false, "path.setHandle")? {
+        return link_handle(s, p, id, si, ai, out, pos);
+    }
     let independent = switch_or(p, "independent", false, "path.setHandle")?;
     // A handle already there, on an anchor already of the kind it would get, changes nothing and
     // records no undo step. The handle is compared directly: `set_handle` would recompute the
@@ -474,6 +477,114 @@ fn set_handle(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(())
     })?;
     ok()
+}
+
+/// `path.setHandle` with `link` (the Anchor Point tool's Alt-drag on a handle): the handle goes to
+/// (x, y) and the anchor becomes smooth, its other handle turned in line at its own length. A
+/// retracted other handle is pulled out to the moved handle's length when a segment leaves the
+/// anchor on its side, and stays retracted at an open end. An anchor the edit would leave as it
+/// is records no undo step.
+fn link_handle(s: &mut Session, p: &Value, id: NodeId, si: usize, ai: usize, out: bool, pos: Point) -> Result<Value> {
+    const C: &str = "path.setHandle";
+    if switch_or(p, "independent", false, C)? {
+        return Err(bad(C, "`link` and `independent` cannot both be true"));
+    }
+    if !(pos.x.abs() < 1e9 && pos.y.abs() < 1e9) {
+        return Err(bad(C, "x and y must be finite"));
+    }
+    if s.script_running() {
+        return Err(EngineError::Busy);
+    }
+    let unchanged = s.doc()?.doc.node(id).and_then(|n| n.path_data()).and_then(|pd| pd.subpaths.get(si)).is_some_and(|sp| {
+        sp.anchors.get(ai).is_some_and(|a| {
+            let mut linked = *a;
+            linked.link_handle(out, pos, sp.has_segment(ai, !out));
+            linked == *a || ((if out { a.has_in() } else { a.has_out() }) && linked_already(a, out, pos))
+        })
+    });
+    if unchanged {
+        return ok();
+    }
+    s.edit("Reshape", |d, _| {
+        let sp = path_mut(d, id)?.subpaths.get_mut(si).ok_or_else(|| EngineError::Other("no such anchor".into()))?;
+        let pull_out = sp.has_segment(ai, !out);
+        let a = sp.anchors.get_mut(ai).ok_or_else(|| EngineError::Other("no such anchor".into()))?;
+        a.link_handle(out, pos, pull_out);
+        Ok(())
+    })?;
+    ok()
+}
+
+/// Whether a smooth anchor `a` already has its `out` (or incoming) handle at `pos` and its other
+/// handle exactly where [`Anchor::link_handle`] puts it for that handle at some positive length.
+/// Turning the other handle again from its stored end measures its length anew, which can round
+/// the end differently in the last bit; a handle that passes this test only gets that rounding,
+/// and any other handle is turned. `p + u * len` here is the same arithmetic as in
+/// `Anchor::link_handle`, `dir / l` included.
+fn linked_already(a: &Anchor, out: bool, pos: Point) -> bool {
+    let (moved, other) = if out { (a.h_out, a.h_in) } else { (a.h_in, a.h_out) };
+    let dir = a.p - pos;
+    let l = dir.x.hypot(dir.y);
+    if a.kind != AnchorKind::Smooth || moved != pos || !(l > 0.0 && l.is_finite()) {
+        return false;
+    }
+    let u = dir / l;
+    // The lengths that give each stored coordinate exactly; the smallest length both ranges hold
+    // is checked against the whole end.
+    let (mut lo, mut hi) = (0.0_f64, f64::INFINITY);
+    for (p, o, u) in [(a.p.x, other.x, u.x), (a.p.y, other.y, u.y)] {
+        if u == 0.0 {
+            if o != p {
+                return false;
+            }
+            continue;
+        }
+        let Some((first, last)) = lengths_onto(p, u, o) else {
+            return false;
+        };
+        (lo, hi) = (lo.max(first), hi.min(last));
+    }
+    lo <= hi && lo > 0.0 && lo.is_finite() && a.p + u * lo == other
+}
+
+/// The lengths `len` for which `p + u * len` rounds to exactly `o`, as their smallest and largest,
+/// for a `u` other than 0. The rounded sum moves the same way as `len`, so a range around the
+/// unrounded answer is widened until it brackets `o` and then halved down to each end.
+fn lengths_onto(p: f64, u: f64, o: f64) -> Option<(f64, f64)> {
+    let s = u.signum();
+    let below = |len: f64| s * (p + u * len) < s * o;
+    let above = |len: f64| s * (p + u * len) > s * o;
+    let c = (o - p) / u;
+    let mut d = (o.abs() + p.abs()).max(f64::MIN_POSITIVE) * f64::EPSILON / u.abs();
+    let mut bracket = None;
+    for _ in 0..64 {
+        if below(c - d) && above(c + d) {
+            bracket = Some((c - d, c + d));
+            break;
+        }
+        d *= 2.0;
+    }
+    let (lo, hi) = bracket?;
+    let first = halve(lo, hi, |len| !below(len)).1;
+    let last = halve(lo, hi, above).0;
+    (first <= last).then_some((first, last))
+}
+
+/// Narrows `lo..hi`, where `pred` is false at `lo` and true at `hi` and changes once between
+/// them, to two neighboring values with the same property.
+fn halve(mut lo: f64, mut hi: f64, pred: impl Fn(f64) -> bool) -> (f64, f64) {
+    for _ in 0..2200 {
+        let m = lo + (hi - lo) / 2.0;
+        if m <= lo || m >= hi {
+            break;
+        }
+        if pred(m) {
+            hi = m;
+        } else {
+            lo = m;
+        }
+    }
+    (lo, hi)
 }
 
 /// `path.moveAnchor`: one anchor to (x, y), its handles keeping their offsets (the Anchor Point

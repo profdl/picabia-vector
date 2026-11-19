@@ -38,6 +38,7 @@ pub mod opentype;
 pub mod paragraph;
 pub mod pathfinder;
 pub mod pattern_options;
+pub mod preflight;
 pub mod properties;
 pub mod script_console;
 pub mod separations;
@@ -188,6 +189,7 @@ pub fn show_icon_panel(app: &mut VectorcraftApp, ui: &mut Ui, id: &str) {
         "colorThemes" => color_themes::show(app, ui),
         color_wheel::ID => color_wheel::show(app, ui),
         links::ID => links::show(app, ui),
+        preflight::ID => preflight::show(app, ui),
         asset_export::ID => asset_export::show(app, ui),
         css_properties::ID => css_properties::show(app, ui),
         three_d::ID => three_d::show(app, ui),
@@ -336,9 +338,10 @@ pub(crate) fn current_paints(app: &VectorcraftApp) -> (Paint, Paint) {
 /// document revision, Appearance panel item and picked gradient mesh points (picking points
 /// changes no revision).
 pub(crate) fn mixed_paints(app: &VectorcraftApp, ctx: &egui::Context) -> (bool, bool) {
-    type Key = (u64, u64, Option<usize>, Vec<(NodeId, Vec<usize>)>);
+    type Key = (u64, u64, Option<usize>, Vec<(NodeId, Vec<usize>)>, &'static str);
     let Some(st) = app.session.active() else { return (false, false) };
-    let key: Key = (st.uid, st.revision, app.session.appearance_item(), app.session.fill_mesh_points());
+    // The tool too: while the Live Paint Bucket is active the proxies show its colors.
+    let key: Key = (st.uid, st.revision, app.session.appearance_item(), app.session.fill_mesh_points(), app.session.tool_id());
     match pstate::<Option<(Key, (bool, bool))>>(ctx, "proxy-mixed") {
         Some((k, mixed)) if k == key => mixed,
         _ => {
@@ -361,8 +364,13 @@ pub(crate) fn current_stroke(app: &VectorcraftApp) -> Option<StrokeLayer> {
 /// Which Stroke panel values the selection doesn't share and whether Align Stroke applies
 /// ([`vectorcraft_engine::DocState::stroke_mixed`]), cached per document revision. While the Type
 /// tool edits text, the selected characters' stroke shows as it is, and aligns to their glyphs.
+/// While the Live Paint Bucket is active, the panel shows the one stroke it paints with, as it does
+/// with nothing selected.
 pub(crate) fn stroke_mixed(app: &VectorcraftApp, ctx: &egui::Context) -> StrokeMixed {
     if character::text_editing(app).is_some() {
+        return StrokeMixed { can_align: true, ..Default::default() };
+    }
+    if app.session.tool_id() == "livePaintBucket" {
         return StrokeMixed { can_align: true, ..Default::default() };
     }
     let Some(st) = app.session.active() else { return StrokeMixed::default() };
@@ -807,6 +815,10 @@ mod tests_brush_libraries;
 mod tests_color_wheel;
 #[cfg(test)]
 mod tests_color_wheel_box;
+#[cfg(test)]
+mod tests_color_wheel_harmony;
+#[cfg(test)]
+mod tests_color_wheel_vision;
 #[cfg(test)]
 mod tests_constrain;
 #[cfg(test)]
