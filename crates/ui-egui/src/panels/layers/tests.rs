@@ -7,7 +7,8 @@ use super::*;
 fn filled_targets(app: &mut VectorcraftApp, ctx: &egui::Context) -> usize {
     let mut out = ctx.run_ui(egui::RawInput::default(), |ui| show(app, ui));
     out.textures_delta.clear();
-    out.shapes.iter().filter(|c| matches!(&c.shape, egui::Shape::Circle(cs) if cs.radius == 3.2 && cs.fill != Color32::TRANSPARENT)).count()
+    let dot = |r: f32| r == rows::TARGET_DOT || r == rows::TARGET_DOT_IN_RING;
+    out.shapes.iter().filter(|c| matches!(&c.shape, egui::Shape::Circle(cs) if dot(cs.radius) && cs.fill != Color32::TRANSPARENT)).count()
 }
 
 /// A generated `<Kind>` name is translated where painted; an unnamed text object's text never
@@ -417,10 +418,65 @@ fn targeted_rows(app: &mut VectorcraftApp, ctx: &egui::Context) -> Vec<usize> {
     let rings: Vec<egui::Pos2> = out
         .shapes
         .iter()
-        .filter(|c| matches!(&c.shape, egui::Shape::Circle(cs) if cs.radius == 2.8))
+        .filter(|c| matches!(&c.shape, egui::Shape::Circle(cs) if cs.radius == rows::TARGET_RING))
         .map(|c| c.shape.visual_bounding_rect().center())
         .collect();
     circles.iter().enumerate().filter(|(_, c)| rings.iter().any(|r| r.distance(**c) < 0.5)).map(|(i, _)| i).collect()
+}
+
+/// The marks one headless frame paints inside the outer ring of each target circle, top row
+/// first: per circle, its (radius, fill, stroke width) circles, sorted by radius.
+fn target_marks_painted(app: &mut VectorcraftApp, ctx: &egui::Context) -> Vec<Vec<(f32, bool, f32)>> {
+    let (circles, _) = frame(app, ctx, vec![], false);
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| show(app, ui));
+    out.textures_delta.clear();
+    circles
+        .iter()
+        .map(|c| {
+            let mut marks: Vec<(f32, bool, f32)> = out
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Circle(cs) if cs.radius < 5.0 && cs.center.distance(*c) < 0.01 => {
+                        Some((cs.radius, cs.fill != Color32::TRANSPARENT, cs.stroke.width))
+                    }
+                    _ => None,
+                })
+                .collect();
+            marks.sort_by(|a, b| a.0.total_cmp(&b.0));
+            marks
+        })
+        .collect()
+}
+
+/// A targeted item with an appearance of its own keeps its inner ring in view: the appearance
+/// dot sits inside the ring with a gap, so the four looks (neither, targeted, with an appearance,
+/// both) differ, as the target icons the Appearance attributes help describes do (#8711).
+#[test]
+fn a_targeted_circle_with_an_appearance_shows_both_ring_and_dot() {
+    let (mut app, _layer, [a, b]) = two_rects();
+    app.session.execute("transparency.set", &json!({"ids": [a.0], "opacity": 30})).unwrap();
+    let ctx = egui::Context::default();
+    // Rows top down: the layer, b, a.
+    let marks = target_marks_painted(&mut app, &ctx);
+    assert_eq!(marks.len(), 3);
+    let (neither, styled) = (marks[1].clone(), marks[2].clone());
+    app.session.execute("layer.target", &json!({"id": b.0})).unwrap();
+    let targeted = target_marks_painted(&mut app, &ctx)[1].clone();
+    app.session.execute("layer.target", &json!({"id": a.0})).unwrap();
+    let both = target_marks_painted(&mut app, &ctx)[2].clone();
+    // The inner ring is painted, and nothing filled reaches its inner edge.
+    let ring = both.iter().find(|m| m.0 == rows::TARGET_RING && !m.1).expect("the inner ring");
+    let inner_edge = ring.0 - ring.2 / 2.0;
+    let dot = both.iter().find(|m| m.1).expect("the appearance dot");
+    assert!(dot.0 + dot.2 / 2.0 < inner_edge - 0.5, "the dot {dot:?} covers the ring {ring:?}");
+    let looks = [&neither, &targeted, &styled, &both];
+    for (i, x) in looks.iter().enumerate() {
+        for y in &looks[i + 1..] {
+            assert_ne!(x, y, "two states look the same: {looks:?}");
+        }
+    }
+    assert_eq!(neither, vec![]);
 }
 
 /// A layer added to the selection from its target circle shows as targeted, as an object added
@@ -3210,6 +3266,35 @@ fn guide_rows_list_by_index_whatever_the_node_order() {
     let rows = list_rows(&st.doc, st.isolation, &st.layers_open, &PanelOptions::default(), "", &Filter::default());
     let indexes: Vec<usize> = rows.iter().filter_map(|r| r.guide).collect();
     assert_eq!(indexes, [2, 1, 0]);
+}
+
+#[test]
+fn guide_row_highlight_stays_selected_without_hover() {
+    let mut app = VectorcraftApp::new(Session::new(), Default::default());
+    app.session.execute("file.new", &json!({"width": 200, "height": 200})).unwrap();
+    let rect = NodeId(app.session.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 20, "height": 20})).unwrap()["id"].as_u64().unwrap());
+    app.session.execute("guide.add", &json!({"vertical": true, "pos": 50})).unwrap();
+    app.session.execute("select.none", &json!({})).unwrap();
+    expand(&mut app, &json!({})).unwrap();
+    let ctx = egui::Context::default();
+    let (circles, _) = frame(&mut app, &ctx, vec![], false);
+    assert_eq!(circles.len(), 2); // Layer, rectangle; guide has no target circle.
+    let guide = egui::pos2(150.0, (circles[0].y + circles[1].y) / 2.0);
+    let ordinary = egui::pos2(150.0, circles[1].y);
+    let highlighted_at = |app: &mut VectorcraftApp, at: egui::Pos2| {
+        // Clear hover so a hover rectangle cannot satisfy selected-fill proof.
+        let mut out = ctx.run_ui(egui::RawInput { events: vec![egui::Event::PointerGone], ..Default::default() }, |ui| show(app, ui));
+        out.textures_delta.clear();
+        let selected = Tokens::get(&ctx).row_selected;
+        out.shapes.iter().any(|c| matches!(&c.shape, egui::Shape::Rect(r) if r.fill == selected && r.rect.contains(at) && r.rect.width() > 200.0))
+    };
+    assert!(!highlighted_at(&mut app, guide), "an unselected guide is not highlighted");
+    click_with(&mut app, &ctx, guide, egui::Modifiers::NONE);
+    assert_eq!(vectorcraft_engine::cmd::guide_indexes(&app.session.active().unwrap().doc, &app.session.active().unwrap().selection.guides), [0]);
+    assert!(highlighted_at(&mut app, guide), "selected guide has the ordinary row fill without hover");
+    click_with(&mut app, &ctx, ordinary, egui::Modifiers::NONE);
+    assert_eq!(app.session.active().unwrap().highlighted_rows(), [rect]);
+    assert!(highlighted_at(&mut app, ordinary), "ordinary row painting remains intact");
 }
 
 /// Right-clicking a row that is not highlighted selects it.
