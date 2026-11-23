@@ -19,5 +19,7 @@ jobs:
     # PICABIA: needs storytold-only secrets/runners; the fork runs only the gate, nix and packaging lint.
     if: github.repository == 'storytold/vectorcraft'
     # Tracked at @main so org-wide CI improvements propagate without PR churn.
+    # The reusable workflow defaults build-jobs to 2 so a cold instrumented
+    # archive stays within hosted-runner memory (craft-common-actions#333).
     uses: storytold/craft-common-actions/.github/workflows/sonarcloud.yml@main
     secrets: inherit
