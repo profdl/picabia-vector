@@ -372,6 +372,7 @@ impl VectorcraftApp {
         let popup = |ctx: &egui::Context| overlay::top(ctx).and_then(|id| overlay::entry(ctx, id)).is_some_and(|e| e.rank == overlay::Rank::Popup);
         self.ui_ctx.as_ref().is_some_and(|ctx| overlay::any_open(ctx, OpenFilter::Modal) || popup(ctx))
             || self.dialogs().is_some_and(|d| d.with(|h| h.shows_modal()))
+            || self.picabia.export.is_some() // PICABIA: the laser export dialog is open
     }
 
     /// The background job service: the one the window's host installed, the app's own host (the one
