@@ -7,6 +7,9 @@ use std::path::PathBuf;
 // `prefs.rs` asks it for DrawCraft's folder, which only the app reads.
 #[path = "profile.rs"]
 pub(crate) mod profile;
+// PICABIA: Picabia's settings folder names, read by `profile`.
+#[path = "picabia.rs"]
+pub(crate) mod picabia;
 
 /// The settings folder: `VectorCraft` in ~/Library/Application Support (macOS) or %APPDATA%
 /// (Windows), or `vectorcraft` in $XDG_CONFIG_HOME or ~/.config (Linux and BSD), unless
@@ -27,7 +30,8 @@ pub fn install_fonts() {
 /// The folder `name` next to the settings, for what the user keeps: none in a run without
 /// preferences (`VECTORCRAFT_NO_PREFS`), which keeps nothing.
 fn store_dir(name: &str) -> Option<PathBuf> {
-    if std::env::var_os("VECTORCRAFT_NO_PREFS").is_some() {
+    if picabia::var_os("VECTORCRAFT_NO_PREFS").is_some() {
+        // PICABIA: PICABIA_NO_PREFS first
         return None;
     }
     Some(prefs_dir()?.join(name))

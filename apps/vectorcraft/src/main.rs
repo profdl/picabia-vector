@@ -78,7 +78,7 @@ use craft::ui::InstallSpec;
 use craft::ui::shell::embed;
 use craft::window::Prefix;
 use craft::window::policy::{TitleBarPref, decide_for};
-use craft::window::restore::Store;
+use craft::window::restore::{FILE_NAME, Store}; // PICABIA: FILE_NAME
 use craft::window::system::SystemWindows;
 use vectorcraft_engine::Session;
 use vectorcraft_engine::cmd::fileio;
@@ -102,16 +102,16 @@ const DEFAULT_SIZE: [f32; 2] = [1440.0, 900.0];
 const MIN_SIZE: [f32; 2] = [800.0, 500.0];
 
 /// The app id every OS window carries; it matches `packaging/linux/ai.storyteller.vectorcraft.desktop`.
-const WINDOW_APP_ID: &str = "ai.storyteller.vectorcraft";
+const WINDOW_APP_ID: &str = vectorcraft_ui_egui::picabia::APP_ID; // PICABIA: app id
 
 /// The window, Dock, taskbar and app-switcher icon (`assets/app-icon/`, see its README). macOS gets
 /// the version with Apple's transparent margin; elsewhere the full-bleed tile. The app ID matches
 /// `packaging/linux/ai.storyteller.vectorcraft.desktop` so Wayland docks find the launcher icon.
 fn app_icon() -> egui::IconData {
     #[cfg(target_os = "macos")]
-    let png: &[u8] = include_bytes!("../../../assets/app-icon/vectorcraft-macos-512.png");
+    let png: &[u8] = include_bytes!("../../../assets/picabia/app-icon/picabia-macos-512.png"); // PICABIA: Picabia's icon
     #[cfg(not(target_os = "macos"))]
-    let png: &[u8] = include_bytes!("../../../assets/app-icon/hicolor/256x256/apps/ai.storyteller.vectorcraft.png");
+    let png: &[u8] = include_bytes!("../../../assets/picabia/app-icon/picabia-256.png"); // PICABIA: Picabia's icon
     eframe::icon_data::from_png_bytes(png).unwrap_or_default()
 }
 
@@ -137,7 +137,7 @@ fn adapter_summary(info: &eframe::wgpu::AdapterInfo) -> String {
 fn native_options(custom_titlebar: bool) -> eframe::NativeOptions {
     eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("VectorCraft")
+            .with_title(vectorcraft_ui_egui::picabia::APP_NAME) // PICABIA: app name
             .with_inner_size(DEFAULT_SIZE)
             .with_min_inner_size(MIN_SIZE)
             .with_drag_and_drop(true)
@@ -591,11 +591,11 @@ fn main() -> std::process::ExitCode {
     let run = |options: eframe::NativeOptions, app_creator: eframe::AppCreator<'_>| {
         #[cfg(target_os = "linux")]
         {
-            linux_stylus::run_native("VectorCraft", options, app_creator)
+            linux_stylus::run_native(vectorcraft_ui_egui::picabia::APP_NAME, options, app_creator) // PICABIA: app name
         }
         #[cfg(not(target_os = "linux"))]
         {
-            eframe::run_native("VectorCraft", options, app_creator)
+            eframe::run_native(vectorcraft_ui_egui::picabia::APP_NAME, options, app_creator) // PICABIA: app name
         }
     };
     let outcome = vectorcraft_engine::guard::catch_panic(|| {
@@ -606,7 +606,8 @@ fn main() -> std::process::ExitCode {
                 let winit_window = cc.winit_window().cloned();
                 let spec = InstallSpec::new(shell_info, Arc::new(SystemWindows))
                     .app_id(WINDOW_APP_ID)
-                    .placement(Arc::new(Mutex::new(Store::open("vectorcraft"))))
+                    // PICABIA: window placements in Picabia's settings folder, not VectorCraft's.
+                    .placement(Arc::new(Mutex::new(prefs_dir::prefs_dir().map_or_else(Store::in_memory, |d| Store::at(&d.join(FILE_NAME))))))
                     .frame(decision);
                 let spec = match start_pen(&winit_window) {
                     Some(pen) => spec.pen(pen),
@@ -621,12 +622,22 @@ fn main() -> std::process::ExitCode {
                 };
                 let (files, file_panels) = file_service(wake, folders);
                 let files = Arc::new(files);
-                craft::host::Host::builder(AppInfo { id: "vectorcraft", name: "VectorCraft", version: env!("CARGO_PKG_VERSION") })
-                    .i18n(vectorcraft_ui_egui::i18n::shared())
-                    .settings(Arc::new(settings.clone()))
-                    .files(files.clone())
-                    .install(ctx);
+                craft::host::Host::builder(AppInfo {
+                    id: "vectorcraft",
+                    name: vectorcraft_ui_egui::picabia::APP_NAME,
+                    version: env!("CARGO_PKG_VERSION"),
+                })
+                .i18n(vectorcraft_ui_egui::i18n::shared())
+                .settings(Arc::new(settings.clone()))
+                .files(files.clone())
+                .install(ctx);
                 let mut session = Session::new();
+                // PICABIA: real laser ports on (the Laser window has its always-visible Stop and Shift+Esc); off with
+                // PICABIA_LASER_HARDWARE=0, and off under --control unless PICABIA_LASER_HARDWARE=1.
+                if vectorcraft_ui_egui::picabia_laser_window::hardware_allowed(control_port.is_some()) {
+                    session.laser_enable_hardware();
+                }
+                session.camera_enable_network(); // PICABIA: the desktop app reaches real Lumix cameras.
                 // The profiles loaded before come back before the preferences name any of them.
                 prefs_dir::attach_profile_store(&mut session);
                 // Then Edit › Color Settings, which may name one of those profiles.
@@ -646,7 +657,7 @@ fn main() -> std::process::ExitCode {
                 prefs_dir::attach_script_data(&mut session);
                 let mut app = VectorcraftApp::new(session, services(winit_window.clone()));
                 app.adopt_context(&cc.egui_ctx);
-                app.set_startup_update_check(true);
+                app.set_startup_update_check(false); // PICABIA: VectorCraft's release feed would replace Picabia
                 load_prefs(&mut app, &settings);
                 safe_mode::after_start(&mut app, stopped);
                 // The saved PDF presets live in their own folder (also read by vectorcraft-cli),
@@ -677,7 +688,8 @@ fn main() -> std::process::ExitCode {
                 }
                 // Data Recovery copies live next to the preferences too (none for runs without
                 // preferences, such as agents' test runs, unless the recoveryFolder preference is set).
-                if std::env::var_os("VECTORCRAFT_NO_PREFS").is_none() {
+                if prefs_dir::picabia::var_os("VECTORCRAFT_NO_PREFS").is_none() {
+                    // PICABIA: PICABIA_NO_PREFS first
                     app.session.recovery.set_default_folder(folder("Data Recovery"));
                 }
                 let graphics_loss = GraphicsLoss::default();
