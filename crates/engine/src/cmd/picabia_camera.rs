@@ -251,7 +251,7 @@ fn status(s: &mut Session, _p: &Value) -> Result<Value> {
 
 fn connect(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "camera.connect";
-    let mut prefs = CameraPrefs::read(s);
+    let prefs = CameraPrefs::read(s);
     let ip = match get(p, "ip") {
         None => prefs.ip.clone().unwrap_or_else(|| vectorcraft_lumix::DEFAULT_IP.into()),
         Some(Value::String(ip)) if ip.len() <= 64 => ip.trim().to_string(),
@@ -271,6 +271,7 @@ fn connect(s: &mut Session, p: &Value) -> Result<Value> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let mut prefs = prefs;
         let target = if ip == SIM_ADDRESS {
             native::Target::Sim(native::sim_options(sim).map_err(|e| bad(CMD, e))?)
         } else {
