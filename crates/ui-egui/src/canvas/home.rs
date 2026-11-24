@@ -35,6 +35,7 @@ pub(super) fn home(app: &mut VectorcraftApp, ui: &mut Ui, rect: egui::Rect) {
     for ((label, url), icon) in crate::community::link_urls(app).into_iter().zip(LINK_ICONS) {
         links.push(StartLink::url(tl!(label), Some(IconId::new(icon)), url));
     }
+    let links = if crate::picabia::SHOWS_DISCORD { links } else { crate::picabia::home_links() }; // PICABIA: Picabia's and VectorCraft's links, not ArtCraft's
     // The bindings hold copies so the Learn section can borrow the app.
     let (mut view, mut sort) = (app.ui.home_view, app.ui.home_sort);
     let mut pressed = None;

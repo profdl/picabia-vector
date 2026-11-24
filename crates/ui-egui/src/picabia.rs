@@ -30,9 +30,9 @@ pub mod sim_poke;
 mod sim_poke_tests;
 pub mod task_bar;
 
-use egui::{RichText, Ui};
-
-use crate::theme::Tokens;
+use craft::behavior::IconId;
+use craft::ui::patterns::form_dialogs::AboutLink;
+use craft::ui::shell::StartLink;
 
 /// The name the app shows: window title, app bar, macOS app menu, About window.
 pub const APP_NAME: &str = "Picabia";
@@ -71,32 +71,35 @@ pub fn check_for_updates(app: &mut crate::VectorcraftApp) -> Result<serde_json::
     Ok(serde_json::json!({ "url": RELEASES_URL }))
 }
 
-/// Picabia's two links (its repository and VectorCraft's), for the About window and the home screen.
-pub fn links(ui: &mut Ui) {
-    let t = Tokens::get(ui.ctx());
-    ui.hyperlink_to(RichText::new("github.com/profdl/picabia-vector").color(t.accent), REPO_URL);
-    ui.hyperlink_to(RichText::new(format!("{UPSTREAM_NAME}, the open-source app {APP_NAME} is built on")).color(t.accent), UPSTREAM_URL);
+/// Picabia's two links (its repository and VectorCraft's) as (label, URL, icon), for the About
+/// window and the Home screen.
+fn link_rows() -> [(String, &'static str, &'static str); 2] {
+    [
+        ("github.com/profdl/picabia-vector".to_string(), REPO_URL, "git-branch"),
+        (format!("{UPSTREAM_NAME}, the open-source app {APP_NAME} is built on"), UPSTREAM_URL, "external-link"),
+    ]
 }
 
-/// The About tab's middle part: what Picabia is, its links and the upstream credit (in place of
-/// VectorCraft's community links and "Part of ArtCraft" line). The ArtCraft name and logos are
-/// upstream's trademarks, so Picabia neither shows nor links them as its own.
-pub fn about_credits(ui: &mut Ui) {
-    ui.label(format!(
+/// The Home screen's links: Picabia's and VectorCraft's (in place of ArtCraft's Discord and website).
+pub fn home_links() -> Vec<StartLink> {
+    link_rows().into_iter().map(|(label, url, icon)| StartLink::url(label, Some(IconId::new(icon)), url)).collect()
+}
+
+/// The About tab's links: Picabia's and VectorCraft's (in place of VectorCraft's community links).
+pub fn about_links() -> Vec<AboutLink> {
+    link_rows().into_iter().map(|(label, url, _)| AboutLink::new(label, url)).collect()
+}
+
+/// The About tab's credit line: what Picabia is and the upstream credit (in place of the "Part of
+/// ArtCraft" line). The ArtCraft name and logos are upstream's trademarks, so Picabia neither shows
+/// nor links them as its own.
+pub fn about_credits() -> String {
+    format!(
         "{APP_NAME} is built on {UPSTREAM_NAME}: vector illustration with a live modifier stack (arrays, mirrors and \
-         randomised repeats that stay editable)."
-    ));
-    ui.add_space(8.0);
-    links(ui);
-    ui.add_space(12.0);
-    ui.label(
-        RichText::new(format!(
-            "MIT OR Apache-2.0. Includes {UPSTREAM_NAME} by the ArtCraft team and community (MIT OR Apache-2.0). \
-             Fonts: Source Sans 3, Inter, JetBrains Mono (OFL). Icons: Lucide (ISC) + {UPSTREAM_NAME}. \
-             App icon: original, by the {APP_NAME} contributors."
-        ))
-        .size(11.0),
-    );
+         randomised repeats that stay editable). MIT OR Apache-2.0. Includes {UPSTREAM_NAME} by the ArtCraft team and \
+         community (MIT OR Apache-2.0). Fonts: Source Sans 3, Inter, JetBrains Mono (OFL). Icons: Lucide (ISC) + \
+         {UPSTREAM_NAME}. App icon: original, by the {APP_NAME} contributors."
+    )
 }
 
 #[cfg(test)]
@@ -117,8 +120,11 @@ mod tests {
         assert_eq!(r, Ok(serde_json::json!({ "url": RELEASES_URL })));
         assert_eq!(app.pending_url.as_deref(), Some(RELEASES_URL));
         // A frame runs any check the command queued: none starts, so no update window opens.
-        crate::updates_ui::tick(&mut app, &egui::Context::default());
-        assert!(!crate::updates_ui::blocks_input(&app), "VectorCraft's update window stays closed");
+        let ctx = crate::testing::ui_context();
+        app.ui_ctx = Some(ctx.clone());
+        crate::updates_ui::tick(&mut app, &ctx);
+        crate::updates_ui::pump(&mut app, &ctx);
+        assert!(crate::tests_picks::open_dialogs(&app).is_empty(), "VectorCraft's update window stays closed");
     }
 
     #[test]
@@ -136,11 +142,13 @@ mod tests {
     }
 
     #[test]
-    fn the_about_credits_draw_headlessly() {
-        let ctx = egui::Context::default();
-        crate::theme::install_fonts(&ctx);
-        let mut out = ctx.run_ui(egui::RawInput::default(), about_credits);
-        out.textures_delta.clear();
-        assert!(!out.shapes.is_empty());
+    fn about_and_home_link_picabia_and_vectorcraft_not_artcraft() {
+        let credits = about_credits();
+        assert!(credits.contains(APP_NAME) && credits.contains(UPSTREAM_NAME), "{credits}");
+        assert!(!credits.contains("Part of ArtCraft"), "{credits}");
+        let urls: Vec<&str> = link_rows().iter().map(|(_, url, _)| *url).collect();
+        assert_eq!(urls, [REPO_URL, UPSTREAM_URL]);
+        assert_eq!(home_links().len(), 2);
+        assert_eq!(about_links().len(), 2);
     }
 }

@@ -273,6 +273,9 @@ fn the_app_bar_gives_up_its_right_hand_controls_in_order() {
     // PLAN: shell-w9 builds Explore tutorials as `IconButton::command(.., "window.learn")`, whose command label is "Learn"; the button keeps production's name "Explore tutorials".
     // In the order the bar gives them up; the search's name goes on with its chord.
     let controls = ["Discord", "Explore tutorials", "Arrange Documents", "Search commands", "Choose a workspace"];
+    // PICABIA: Picabia's bar has no VectorCraft Discord button: it never shows, and the others keep their order.
+    assert!(bar.frame(Vec::new()).frame(Vec::new()).starting("Discord").is_none() || crate::picabia::SHOWS_DISCORD);
+    let controls: Vec<&str> = controls.into_iter().filter(|c| crate::picabia::SHOWS_DISCORD || *c != "Discord").collect();
     let mut before: Option<Vec<bool>> = None;
     let mut search_widths = vec![];
     for width in (30..=160).rev().map(|w| w as f32 * 10.0) {
@@ -290,7 +293,7 @@ fn the_app_bar_gives_up_its_right_hand_controls_in_order() {
         if let Some(before) = &before {
             assert!(on.iter().zip(before).all(|(now, was)| !now || *was), "{width}: a control came back as the window narrowed: {on:?}");
         }
-        if let Some(search) = shown[3] {
+        if let Some(search) = shown[controls.len() - 2] {
             assert!(search_widths.last().is_none_or(|w: &f32| search.rect.width() <= *w + 0.5), "{width}: the search widened as the window narrowed");
             search_widths.push(search.rect.width());
         }
@@ -1527,7 +1530,7 @@ fn the_zoom_hint_follows_animated_zoom() {
 fn window_title_with_no_document_is_the_app_name() {
     let app = crate::VectorcraftApp::new(Session::new(), Default::default());
     let title = super::window_title(&app);
-    assert!(title.contains("VectorCraft"), "{title}");
+    assert!(title.contains(crate::picabia::APP_NAME), "{title}"); // PICABIA: app name
 }
 
 /// The window's title names the active file and the app, and unsaved changes mark it.
@@ -1536,11 +1539,11 @@ fn window_title_follows_the_active_file() {
     let mut app = crate::VectorcraftApp::new(Session::new(), Default::default());
     app.run("file.new", json!({"width": 100, "height": 100, "name": "foo.svg"})).unwrap();
     let saved = super::window_title(&app);
-    assert!(saved.contains("foo.svg") && saved.contains("VectorCraft"), "{saved}");
+    assert!(saved.contains("foo.svg") && saved.contains(crate::picabia::APP_NAME), "{saved}"); // PICABIA: app name
     app.run("shape.rectangle", json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
     let modified = super::window_title(&app);
     assert!(
-        modified != saved && modified.contains("foo.svg") && modified.contains("VectorCraft"),
+        modified != saved && modified.contains("foo.svg") && modified.contains(crate::picabia::APP_NAME), // PICABIA: app name
         "an edit marks the title: {saved} then {modified}"
     );
 }

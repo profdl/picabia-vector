@@ -7,7 +7,8 @@ use std::sync::{Arc, OnceLock};
 use egui::{Color32, ColorImage};
 
 /// 128 px: sharp at 44 pt on a 2× display.
-const ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/hicolor/128x128/apps/ai.storyteller.vectorcraft.png");
+// PICABIA: Picabia's icon (`assets/picabia/app-icon/`) instead of VectorCraft's dragon.
+const ICON_PNG: &[u8] = include_bytes!("../../../assets/picabia/app-icon/picabia-128.png");
 
 /// The key a `Picture` stores the brand mark's texture under.
 pub(crate) const BRAND_KEY: u64 = 0x5643_4252_414e_4421;

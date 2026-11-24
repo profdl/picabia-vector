@@ -125,6 +125,16 @@ fn home_screen(app: VectorcraftApp) -> Panel {
     home
 }
 
+// PICABIA: the Home screen's links are Picabia's and VectorCraft's (`picabia::home_links`): no
+// ArtCraft links and no Discord.
+#[test]
+fn home_links_picabia_and_vectorcraft() {
+    let home = home_screen(VectorcraftApp::new(vectorcraft_engine::Session::new(), crate::Services::default()));
+    let upstream = format!("{}, the open-source app {} is built on", crate::picabia::UPSTREAM_NAME, crate::picabia::APP_NAME);
+    assert!(home.shows("github.com/profdl/picabia-vector") && home.shows(&upstream));
+    assert!(!home.shows("Join our Discord") && !home.shows("ArtCraft website"));
+}
+
 /// The Home screen lists the first recent files (#663); opening one that can't be opened says so.
 #[test]
 fn home_lists_recent_files_and_a_click_opens_one() {

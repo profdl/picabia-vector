@@ -250,7 +250,7 @@ fn language_command_sets_the_preference() {
     // bar has no Language menu).
     crate::menus::model::refresh(&mut app, &crate::testing::ui_context());
     let layout = craft::menu::mac_layout(&app.menus.bar, &crate::menus::native::options());
-    let app_menu = layout.bar.menus.into_iter().find(|m| m.title == "VectorCraft").expect("App menu");
+    let app_menu = layout.bar.menus.into_iter().find(|m| m.title == crate::picabia::APP_NAME).expect("App menu"); // PICABIA: app menu name
     fn items(nodes: &[crate::menus::Node], out: &mut Vec<String>) {
         for n in nodes {
             match n {

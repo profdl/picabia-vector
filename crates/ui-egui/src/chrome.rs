@@ -155,7 +155,7 @@ fn arrange_documents(app: &mut VectorcraftApp, ui: &mut Ui) {
 fn leading(ui: &mut Ui, app: &mut VectorcraftApp) {
     if !matches!(WindowHost::of(ui.ctx()).frame(), Frame::Native) {
         let image = || (*brand::image()).clone();
-        Picture::new(tl!("VectorCraft"), brand::BRAND_KEY, &image).show(ui);
+        Picture::new(crate::picabia::APP_NAME, brand::BRAND_KEY, &image).show(ui); // PICABIA: app name
     }
     let mut home = menus::home_showing(app);
     let before = home;
@@ -174,7 +174,11 @@ fn leading(ui: &mut Ui, app: &mut VectorcraftApp) {
 /// The end of the bar: the controls that fit in the room, the first-listed going last.
 fn trailing(ui: &mut Ui, app: &mut VectorcraftApp) {
     let safe = vectorcraft_plugins::safe_mode::active();
-    let order: Vec<Trailing> = Trailing::DROPPED_LAST_FIRST.into_iter().filter(|t| safe || *t != Trailing::Safe).collect();
+    let order: Vec<Trailing> = Trailing::DROPPED_LAST_FIRST
+        .into_iter()
+        .filter(|t| safe || *t != Trailing::Safe)
+        .filter(|t| crate::picabia::SHOWS_DISCORD || *t != Trailing::Discord) // PICABIA: no VectorCraft Discord
+        .collect();
     let gap = ui.spacing().item_spacing.x;
     let room = ui.available_width();
     let mut measure = |t: Trailing, short: bool| measure_slot(ui, room, |ui| t.show(app, ui, short)).x;
@@ -207,7 +211,7 @@ pub fn app_bar(ui: &mut Ui, _cx: &mut BodyCx<'_>, app: &mut VectorcraftApp) {
     let start = |ui: &mut Ui, _: &mut BodyCx<'_>| leading(ui, &mut app.borrow_mut());
     let end = |ui: &mut Ui, _: &mut BodyCx<'_>| trailing(ui, &mut app.borrow_mut());
     let _ = if titled {
-        TitleBar::new().show_titled(ui, Title::new(tl!("VectorCraft")), start, end)
+        TitleBar::new().show_titled(ui, Title::new(crate::picabia::APP_NAME), start, end) // PICABIA: app name
     } else {
         TitleBar::new().trailing(end).show(ui, start).output
     };
@@ -220,8 +224,9 @@ pub fn window_title(app: &VectorcraftApp) -> String {
     let title = app
         .session
         .active()
-        .map(|d| format!("{}{} \u{2014} VectorCraft", if d.is_dirty() { "*" } else { "" }, d.title()))
-        .unwrap_or_else(|| "VectorCraft".into());
+        // PICABIA: app name
+        .map(|d| format!("{}{} \u{2014} {}", if d.is_dirty() { "*" } else { "" }, d.title(), crate::picabia::APP_NAME))
+        .unwrap_or_else(|| crate::picabia::APP_NAME.into());
     if vectorcraft_plugins::safe_mode::active() { format!("{title} ({})", tl!("Safe Mode")) } else { title }
 }
 

@@ -71,7 +71,7 @@ pub(crate) fn home_showing(app: &VectorcraftApp) -> bool {
 /// because the catalog's rows read `Hide VectorCraft`, and the layout fills it in only afterwards.
 pub(crate) fn translate_label(english: &'static str) -> String {
     let source = english.replace("{app}", APP_NAME);
-    crate::i18n::tr(crate::i18n::current(), &source).to_owned()
+    crate::picabia::rename(crate::i18n::tr(crate::i18n::current(), &source)) // PICABIA: "Hide/Quit/About Picabia"
 }
 
 /// What the menus' rows depend on, cheaply (no allocation): commands run, the active document,
@@ -242,7 +242,7 @@ fn rebuild(app: &mut VectorcraftApp, target: Target) {
     crate::panels::panel_menu_states(app, &mut states);
 
     let bar = MenuBar::new(menus);
-    let options = LayoutOptions::new(APP_NAME).label(&translate_label);
+    let options = LayoutOptions::new(crate::picabia::APP_NAME).label(&translate_label); // PICABIA: app menu "Picabia"
     let laid = layout(&bar, target, &options).bar;
     let type_keys = crate::type_editing::app_keys(&defs, &app.shortcut_overrides);
     let (defs, linked_keys) = without_linked(defs);
