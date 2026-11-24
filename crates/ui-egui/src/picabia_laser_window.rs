@@ -27,9 +27,10 @@ pub use status::Status;
 
 use crate::VectorcraftApp;
 use crate::i18n;
+use crate::picabia_ui::Tokens;
+use crate::picabia_ui::widgets;
 use crate::picabia_ui::{button, num, readable, wrapped};
-use crate::theme::{Tokens, semibold};
-use crate::widgets;
+use crate::theme::semibold;
 
 /// The label column of the window's rows.
 pub(crate) const LABEL_W: f32 = 76.0;
@@ -68,7 +69,7 @@ pub const STOP_FIRST: &str = "Stop or finish the laser job first: a file dialog 
 
 /// Whether a file dialog must not open now: the laser is working (a job, a jog, homing, a frame),
 /// and a native file dialog would hold the window, its Stop button and Shift+Esc (seam in
-/// `picks::ask`, which every file dialog goes through). Says so in the status bar.
+/// `file_asks::start`, which every file dialog goes through). Says so in the status bar.
 pub fn refuse_file_dialog(app: &mut VectorcraftApp) -> bool {
     if !link_open(app) {
         return false;
@@ -289,7 +290,7 @@ fn body(app: &mut VectorcraftApp, ui: &mut Ui, panel: &mut LaserPanel, st: &Stat
         column(ui, |ui| machine_column(app, ui, panel, st, actions));
         ui.add_space(GUTTER / 2.0);
         let (r, _) = ui.allocate_exact_size(vec2(1.0, ui.available_height().max(1.0)), Sense::hover());
-        ui.painter().vline(r.center().x, r.y_range(), egui::Stroke::new(1.0, Tokens::get(ui.ctx()).divider));
+        ui.painter().vline(r.center().x, r.y_range(), egui::Stroke::new(1.0, Tokens::get(ui.ctx()).border));
         ui.add_space(GUTTER / 2.0);
         column(ui, |ui| job_column(app, ui, panel, st, actions));
     });
@@ -768,18 +769,17 @@ fn act(app: &mut VectorcraftApp, a: Action, st: &Status, automated: bool) {
         }
         // A file dialog would hold the window, and its Stop, while it is open.
         Action::OpenFile if st.stoppable() => app.status(tl!(STOP_FIRST)),
-        Action::OpenFile => crate::picks::button(app, |app| {
-            let pick = crate::FilePick {
-                name: String::new(),
-                folder: None,
-                filters: crate::FilePick::filters([("G-code", &["gcode", "nc", "ngc", "gc", "tap", "txt"][..])]),
-            };
-            if let Some(path) = crate::picks::open(app, &pick) {
-                let j = &mut app.picabia.laser.job;
-                j.source = Source::File(path);
-                j.summary = job::Summary::File;
-            }
-        }),
+        Action::OpenFile => {
+            let pick = craft::host::PickRequest::open("gcode").filter("G-code", &["gcode", "nc", "ngc", "gc", "tap", "txt"]);
+            crate::file_asks::ask(app, pick, crate::file_asks::Owner::Free, |app, picked| {
+                if let Some(path) = picked.first_path() {
+                    let j = &mut app.picabia.laser.job;
+                    j.source = Source::File(path.to_string_lossy().into_owned());
+                    j.summary = job::Summary::File;
+                }
+                Ok(Value::Null)
+            });
+        }
     }
 }
 

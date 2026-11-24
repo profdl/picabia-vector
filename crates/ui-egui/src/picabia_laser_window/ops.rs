@@ -7,8 +7,8 @@
 use egui::Ui;
 use serde_json::{Value, json};
 
-use crate::theme::Tokens;
-use crate::widgets;
+use crate::picabia_ui::Tokens;
+use crate::picabia_ui::widgets;
 
 /// Laser materials: (value written in `material`, label).
 pub const MATERIALS: &[(&str, &str)] = &[("paper", "Paper"), ("film", "Film"), ("card", "Card"), ("custom", "Custom")];

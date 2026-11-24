@@ -342,7 +342,8 @@ pub(super) fn hover(app: &VectorcraftApp, st: &DocState, at: Point, zoom: f64, s
         return None;
     }
     let node = st.doc.node(id).filter(|n| !too_many_anchors([*n]))?;
-    Some(Hovered { path: node_outline(node, &st.doc.symbol_boxes()), color: c32(st.doc.layer_color(id)) })
+    let path = super::picabia::with_copies(&st.doc, node, node_outline(node, &st.doc.symbol_boxes())); // PICABIA: on every copy too
+    Some(Hovered { path, color: c32(st.doc.layer_color(id)) })
 }
 
 /// The dots of the selection: point type's origin, the centre of each object that shows it, and the key anchor.
@@ -482,6 +483,7 @@ pub(super) fn show(app: &mut VectorcraftApp, ui: &mut egui::Ui, space: &CanvasSp
         }
         outline.show_at(ui, rect);
     }
+    super::picabia::selection_outlines(app, ui, st, rect, too_big(st)); // PICABIA: copies' outlines, stencil ties and cells
     let marks = anchors(app, st, tool_points);
     if !marks.paths.is_empty() {
         let mut paths = marks.paths;
@@ -498,6 +500,7 @@ pub(super) fn show(app: &mut VectorcraftApp, ui: &mut egui::Ui, space: &CanvasSp
     if !(dots.centers.is_empty() && dots.origins.is_empty() && dots.key_anchor.is_none()) {
         SelectionDots { common: Common::new(), dots: &dots }.label("Selection dots").show_at(ui, rect);
     }
+    super::picabia::modifier_handles(app, ui, space); // PICABIA: the selected object's modifier handles
 }
 
 #[cfg(test)]

@@ -14,9 +14,8 @@ fn scene() -> (VectorcraftApp, egui::Context, u64, u64) {
     app.run("physics.set", json!({"ids": [jelly], "props": {"bodyType": "soft", "soft": {"preset": "jelly"}}})).unwrap();
     let boxy = app.run("shape.rectangle", json!({"x": 200, "y": 20, "width": 40, "height": 40})).unwrap()["id"].as_u64().unwrap();
     app.run("physics.set", json!({"ids": [boxy]})).unwrap();
-    app.canvas_rect = Some(Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(900.0, 700.0)));
-    let ctx = egui::Context::default();
-    crate::theme::install_fonts(&ctx);
+    crate::picabia_ui::set_canvas(&mut app, Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(900.0, 700.0)));
+    let ctx = crate::testing::ui_context();
     (app, ctx, jelly, boxy)
 }
 
@@ -62,14 +61,14 @@ fn no_bar_without_a_session_and_the_bar_with_one() {
         assert!(shown.iter().any(|s| s == label), "no {label:?} in {shown:?}");
     }
     // It sits at the bottom of the canvas, inside it: where its texts are drawn.
-    let canvas = app.canvas_rect.unwrap();
+    let canvas = app.canvas_view().unwrap().rect;
     frame(&mut app, &ctx, vec![]);
     let drawn = frame(&mut app, &ctx, vec![]);
     for (text, r) in drawn.iter().filter(|(t, _)| ["Apply", "Cancel", "To Rest"].contains(&t.as_str())) {
         assert!(canvas.contains_rect(*r) && r.top() > canvas.center().y, "{text} at {r:?}");
     }
     // On a narrow canvas it still fits.
-    app.canvas_rect = Some(Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(420.0, 500.0)));
+    crate::picabia_ui::set_canvas(&mut app, Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(420.0, 500.0)));
     for _ in 0..4 {
         frame(&mut app, &ctx, vec![]);
     }

@@ -131,6 +131,9 @@ fn start(
     ask: impl FnOnce(&dyn Files) -> PickId,
     then: impl FnOnce(&mut VectorcraftApp, Picked) -> Result<Value, String> + 'static,
 ) -> Value {
+    if crate::picabia_laser_window::refuse_file_dialog(app) {
+        return Value::Null; // PICABIA: no file dialog over a working laser's Stop
+    }
     let Some(host) = app.ui_ctx.as_ref().and_then(Host::try_of_ctx) else { return Value::Null };
     let ticket = ask(host.files());
     let doc = match owner {

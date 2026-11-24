@@ -10,8 +10,69 @@ use egui::{Color32, Ui};
 use serde_json::Value;
 
 use crate::VectorcraftApp;
-use crate::theme::Tokens;
-use crate::widgets;
+
+pub(crate) mod widgets;
+
+/// The colours Picabia's UI draws with, read from the framework's resolved theme tokens (every theme
+/// applies), under the names the Picabia code used before VectorCraft moved onto the framework.
+#[derive(Clone, Copy, Debug)]
+pub struct Tokens {
+    pub dark: bool,
+    pub panel: Color32,
+    pub panel_darker: Color32,
+    pub input: Color32,
+    pub input_border: Color32,
+    pub border: Color32,
+    pub text: Color32,
+    pub text_dim: Color32,
+    pub text_disabled: Color32,
+    pub text_strong: Color32,
+    pub icon: Color32,
+    pub hover: Color32,
+    pub accent: Color32,
+    pub row_selected: Color32,
+    pub selection: Color32,
+    pub button: Color32,
+    pub measure_bg: Color32,
+    pub radius: u8,
+    pub error: Color32,
+    pub warning: Color32,
+}
+
+impl Tokens {
+    /// The tokens of the window `ctx` draws (its root theme).
+    pub fn get(ctx: &egui::Context) -> Self {
+        Self::of(craft::ui::runtime::env::Env::of_root(ctx).tokens.tokens())
+    }
+
+    fn of(t: &craft::theme::Tokens) -> Self {
+        let c = craft::ui::style::rgba_color;
+        let k = &t.color;
+        let panel = c(k.surface.panel);
+        Tokens {
+            dark: panel.r() as u32 + panel.g() as u32 + panel.b() as u32 <= 3 * 128,
+            panel,
+            panel_darker: c(k.surface.sunken),
+            input: c(k.surface.sunken),
+            input_border: c(k.line.control_edge),
+            border: c(k.line.border),
+            text: c(k.text.normal),
+            text_dim: c(k.text.muted),
+            text_disabled: c(k.text.disabled),
+            text_strong: c(k.text.normal),
+            icon: c(k.text.normal),
+            hover: c(k.state.hover),
+            accent: c(k.accent.solid),
+            row_selected: c(k.state.selected),
+            selection: c(k.overlay.stroke),
+            button: c(k.surface.control),
+            measure_bg: c(k.surface.raised),
+            radius: 4,
+            error: c(k.status.bad.fg),
+            warning: c(k.status.warn.fg),
+        }
+    }
+}
 
 /// UI command: open the Laser window (File ▸ Laser…).
 pub const LASER_PANEL: &str = "laser.panel";
@@ -24,6 +85,11 @@ pub const PHYSICS_SETTINGS: &str = "ui.physicsSettings";
 /// Picabia's UI state (not the document).
 #[derive(Default)]
 pub struct PicabiaUi {
+    /// Tests: the frames carry injected input (`picabia_laser_window::run::automated_frame`).
+    #[cfg(test)]
+    pub injected: bool,
+    /// The laser export dialog, while it is open (`picabia_laser_export`).
+    pub export: Option<crate::picabia_laser_export::Dialog>,
     /// The Laser window.
     pub laser: crate::picabia_laser_window::LaserPanel,
     /// The Camera window.
@@ -78,12 +144,13 @@ pub fn after_command(app: &mut VectorcraftApp, id: &str, v: &Value) {
 }
 
 /// Everything Picabia draws over the app each frame (seam in `ui_frame`, after the progress
-/// windows): the stencil's canvas markers, the modifier badges by the selection, the Stencil window, the Laser window (or its bar while
-/// connected and closed) and the safety checklist.
+/// windows): the stencil's canvas markers, the Stencil window,
+/// the laser export dialog, the Laser window (or its bar while connected and closed) and the safety
+/// checklist.
 pub fn show(app: &mut VectorcraftApp, ctx: &egui::Context) {
     crate::picabia_stencil_panel::canvas_markers(app, ctx);
-    crate::picabia::badge::show(app, ctx);
     crate::picabia_stencil_panel::window(app, ctx);
+    crate::picabia_laser_export::show(app, ctx);
     crate::picabia_laser_window::show(app, ctx);
     crate::picabia_camera_window::show(app, ctx);
     crate::picabia::sim_bar::show(app, ctx);
@@ -138,6 +205,25 @@ pub(crate) fn f(v: &Value, k: &str) -> Option<f64> {
 /// The strings of the list `v` holds under `k`, at most `cap`.
 pub(crate) fn strings(v: &Value, k: &str, cap: usize) -> Vec<String> {
     v.get(k).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).take(cap).map(str::to_string).collect()
+}
+
+/// Lays the active document's canvas out at `rect`, as a frame of the window would.
+#[cfg(test)]
+pub(crate) fn set_canvas(app: &mut VectorcraftApp, rect: egui::Rect) {
+    app.sync_views();
+    if let Some(v) = app.view_mut() {
+        v.rect = rect;
+    }
+}
+
+/// A context with the app's interface installed in the dark or the light theme (Picabia's look
+/// tests draw in both).
+#[cfg(test)]
+pub(crate) fn themed(dark: bool) -> egui::Context {
+    let ctx = crate::testing::ui_context();
+    let prefs = vectorcraft_engine::Prefs { ui_brightness: if dark { "dark" } else { "light" }.into(), ..Default::default() };
+    craft::ui::runtime::frame::set_input(&ctx, craft::ui::runtime::frame::FrameInput::new(crate::app::root_env(&prefs, 1.0)));
+    ctx
 }
 
 #[cfg(test)]

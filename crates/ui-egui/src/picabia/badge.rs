@@ -3,20 +3,22 @@
 //! corner: the modifiers glyph and the number of rows, with the tooltip "3 modifiers — click to
 //! show". A click opens the Properties panel's Modifiers section (`super::properties::reveal`).
 //!
-//! The badge is drawn in screen points (it scales with the UI, not the zoom), in the theme's
-//! colours, 8 points out from the corner on the diagonal, outside the box, so it never covers the
-//! bounding box's handles or the modifier handles inside it. It shows when the Contextual Task Bar
-//! may (`canvas::show`: not on the home screen, in Presentation Mode, while a 3D revolve is edited,
-//! while the Simplify or Smooth slider shows, nor while something is dragged), with the selection
-//! tools, only where it fits inside the canvas, and not where a floating panel, window or menu lies
-//! over it (it would otherwise draw over them and take their clicks). Drawn each frame from
-//! `picabia_ui::show` (no seam of its own).
+//! The badge is a button of the framework's on the canvas, in screen points (it scales with the UI,
+//! not the zoom), 8 points out from the corner on the diagonal, outside the box, so it never covers
+//! the bounding box's handles or the modifier handles inside it. It shows when the Contextual Task
+//! Bar may (seam in `canvas::show_body` beside the bar's: not on the home screen, in Presentation
+//! Mode, while a 3D revolve is edited, while the Simplify or Smooth slider shows, nor while
+//! something is dragged), with the selection tools, and only where it fits inside the canvas.
 
-use egui::{Pos2, Rect, Sense, Stroke, pos2, vec2};
+use craft::ui::buttons::Button;
+use craft::ui::canvas::CanvasSpace;
+use craft::ui::contract::{Props as _, Show as _};
+use craft::ui::primitives::IconSpec;
+use craft::ui::style::Variant;
+use egui::{Pos2, Rect, pos2, vec2};
 use vectorcraft_doc::NodeId;
 
 use crate::VectorcraftApp;
-use crate::theme::Tokens;
 
 /// The most stacked selected objects that get badges; with more, none do.
 pub const MAX_BADGES: usize = 8;
@@ -63,66 +65,31 @@ pub fn place(quad: &[Pos2], width: f32) -> Option<Rect> {
     Some(Rect::from_min_size(pos2(corner.x + GAP, corner.y - GAP - HEIGHT), vec2(width, HEIGHT)))
 }
 
-/// Badge `i`'s area.
-pub fn area_id(i: usize) -> egui::Id {
-    egui::Id::unique(("picabia-modifier-badge", i))
+/// Whether the badges may show: with the selection tools, off the home screen.
+fn allowed(app: &VectorcraftApp) -> bool {
+    matches!(app.session.tool_id(), "selection" | "directSelection" | "groupSelection") && !crate::menus::home_showing(app)
 }
 
-/// Whether the task bar's conditions allow the badges (`canvas::show` draws the bar under them).
-fn allowed(app: &VectorcraftApp, ctx: &egui::Context) -> bool {
-    matches!(app.session.tool_id(), "selection" | "directSelection" | "groupSelection")
-        && !crate::menus::home_showing(app)
-        && app.ui.screen_mode < 3
-        && !app.ui.dialog.as_ref().is_some_and(crate::dialogs::revolve_gizmo::active)
-        && !crate::dialogs::simplify_slider::showing(app)
-        && !crate::dialogs::smooth_slider::showing(app)
-        && !ctx.input(|i| i.pointer.is_decidedly_dragging())
-}
-
-/// Whether something drawn over the canvas (a floating panel or window, a menu or popup; not
-/// tooltips nor the badges themselves) lay over `r` last frame.
-fn covered(ctx: &egui::Context, r: Rect, badges: usize) -> bool {
-    let own: Vec<egui::Id> = (0..=MAX_BADGES.max(badges)).map(area_id).collect();
-    ctx.memory(|m| {
-        m.areas().visible_layer_ids().into_iter().any(|l| {
-            !matches!(l.order, egui::Order::Background | egui::Order::Tooltip | egui::Order::Debug)
-                && !own.contains(&l.id)
-                && m.area_rect(l.id).is_some_and(|a| a.intersects(r))
-        })
-    })
-}
-
-/// The badges, for the stacked selected objects (see the module).
-pub fn show(app: &mut VectorcraftApp, ctx: &egui::Context) {
-    let (Some(canvas), Some(view)) = (app.canvas_rect, app.view()) else { return };
-    if !allowed(app, ctx) {
+/// The badges on the canvas `space`, for the stacked selected objects (see the module).
+pub fn show(app: &mut VectorcraftApp, ui: &mut egui::Ui, space: &CanvasSpace) {
+    if !allowed(app) {
         return;
     }
-    let xf = crate::canvas::Xf::at(canvas, view, app.canvas_ui_zoom);
-    let badges = stacked(app, ctx);
-    let t = Tokens::get(ctx);
+    let (xf, canvas) = (space.view, space.view.rect);
+    let badges = stacked(app, ui.ctx());
     let mut clicked = false;
     for (i, (_, b, rows)) in badges.iter().enumerate() {
         let text = rows.to_string();
-        let galley = ctx.fonts_mut(|f| f.layout_no_wrap(text, egui::FontId::proportional(11.5), t.text_strong));
-        let width = 6.0 + 12.0 + 4.0 + galley.size().x + 6.0;
+        let width = 6.0 + 12.0 + 4.0 + 8.0 * text.len() as f32 + 6.0;
         let Some(r) = place(&xf.quad(*b), width).filter(|r| canvas.contains_rect(*r)) else { continue };
-        if covered(ctx, r, badges.len()) {
-            continue;
-        }
         let tip = crate::i18n::trn(crate::i18n::current(), *rows as u64, "{n} modifier — click to show", "{n} modifiers — click to show");
-        egui::Area::new(area_id(i)).order(egui::Order::Middle).fixed_pos(r.min).constrain(false).show(ctx, |ui| {
-            let (rect, resp) = ui.allocate_exact_size(r.size(), Sense::click());
-            let fill = if resp.hovered() { t.hover } else { t.panel };
-            ui.painter().rect_filled(rect, 4.0, fill);
-            ui.painter().rect_stroke(rect, 4.0, Stroke::new(1.0, t.selection), egui::StrokeKind::Inside);
-            let glyph = Rect::from_min_size(pos2(rect.left() + 6.0, rect.center().y - 6.0), vec2(12.0, 12.0));
-            super::add_menu::paint_glyph(ui.painter(), glyph, t.icon, fill);
-            ui.painter().galley(pos2(glyph.right() + 4.0, rect.center().y - galley.size().y / 2.0), galley, t.text_strong);
-            let resp = resp.on_hover_text(tip.as_str()).on_hover_cursor(egui::CursorIcon::PointingHand);
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tip.as_str()));
-            clicked |= resp.clicked();
-        });
+        let shown = Button::new(text)
+            .icon(IconSpec::glyph(&super::add_menu::ModifiersGlyph))
+            .variant(Variant::SECONDARY)
+            .tooltip(tip)
+            .id_salt(("picabia-modifier-badge", i))
+            .show_at(ui, r);
+        clicked |= shown.clicked();
     }
     if clicked {
         super::properties::reveal(app);

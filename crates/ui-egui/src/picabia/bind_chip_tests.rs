@@ -16,10 +16,8 @@ struct Frames {
 
 impl Frames {
     fn new() -> Self {
-        let ctx = egui::Context::default();
+        let ctx = crate::testing::ui_context();
         ctx.enable_accesskit();
-        crate::theme::install_fonts(&ctx);
-        crate::theme::apply(&ctx, Default::default());
         Self { ctx, time: 0.0 }
     }
 

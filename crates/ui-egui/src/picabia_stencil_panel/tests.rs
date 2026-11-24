@@ -23,7 +23,7 @@ fn stencil(app: &mut VectorcraftApp) -> NodeId {
 }
 
 fn texts(app: &mut VectorcraftApp, dark: bool, mut draw: impl FnMut(&mut VectorcraftApp, &mut Ui)) -> String {
-    let ctx = crate::widgets::look_tests::themed(if dark { crate::theme::Brightness::Dark } else { crate::theme::Brightness::Light });
+    let ctx = crate::picabia_ui::themed(dark);
     let mut text = String::new();
     for _ in 0..2 {
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -96,7 +96,7 @@ fn an_edit_is_one_modifier_set_and_the_buttons_open_the_laser_dialogs() {
     let row = stencil_row(&app.session.execute("modifier.list", &json!({"id": g.0})).unwrap()).unwrap();
     assert_eq!(row.str("tieMode", ""), "gauze");
     app.run("modifier.stencilExport", json!({"id": g.0})).unwrap();
-    assert_eq!(app.ui.dialog.as_ref().map(|d| d.kind.as_str()), Some(crate::picabia_laser_export::EXPORT));
+    assert_eq!(app.picabia.export.as_ref().map(|d| d.kind.as_str()), Some(crate::picabia_laser_export::EXPORT));
 }
 
 #[test]
@@ -107,7 +107,7 @@ fn an_object_without_a_stencil_offers_to_make_one_and_the_window_follows_the_sel
     assert!(text.contains("Make Stencil"), "{text}");
     app.run(crate::picabia_ui::STENCIL_SETTINGS, json!({})).unwrap();
     app.run("select.set", json!({"ids": []})).unwrap();
-    let ctx = crate::widgets::look_tests::themed(crate::theme::Brightness::Dark);
+    let ctx = crate::picabia_ui::themed(true);
     let mut out = ctx.run_ui(egui::RawInput::default(), |ui| window(&mut app, ui.ctx()));
     out.textures_delta.clear();
     // The second frame: a new window lays itself out unseen first.
@@ -122,7 +122,7 @@ fn an_object_without_a_stencil_offers_to_make_one_and_the_window_follows_the_sel
 #[test]
 fn a_problem_row_click_centres_the_view_on_the_place() {
     let mut app = app();
-    app.canvas_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)));
+    crate::picabia_ui::set_canvas(&mut app, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)));
     let before = app.view().map(|v| v.center);
     reveal(&mut app, Rect::new(100.0, 100.0, 104.0, 104.0));
     let v = app.view().unwrap();

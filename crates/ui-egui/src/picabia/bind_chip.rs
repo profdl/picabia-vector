@@ -12,8 +12,8 @@ use egui::{Rect, Sense, Stroke, Ui, vec2};
 use vectorcraft_modifiers::{Binding, BoundField, ParamKind, Parameters, Scope};
 
 use crate::panels::{pstate, set_pstate};
-use crate::theme::Tokens;
-use crate::widgets;
+use crate::picabia_ui::Tokens;
+use crate::picabia_ui::widgets;
 
 /// The chip's size, points.
 pub const CHIP: f32 = 14.0;

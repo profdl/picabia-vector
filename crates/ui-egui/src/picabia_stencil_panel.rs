@@ -20,9 +20,10 @@ use vectorcraft_geom::kurbo::{Point, Rect};
 
 use crate::VectorcraftApp;
 use crate::i18n;
+use crate::picabia_ui::Tokens;
+use crate::picabia_ui::widgets;
 use crate::picabia_ui::{button, num, readable, wrapped};
-use crate::theme::{Tokens, semibold};
-use crate::widgets;
+use crate::theme::semibold;
 
 /// The label column of the section's rows.
 const LABEL_W: f32 = 104.0;
@@ -767,7 +768,7 @@ fn reveal(app: &mut VectorcraftApp, b: Rect) {
     if ![b.x0, b.y0, b.x1, b.y1].iter().all(|v| v.is_finite()) {
         return;
     }
-    let size = app.canvas_rect.map_or((800.0, 600.0), |r| (f64::from(r.width()), f64::from(r.height())));
+    let size = app.canvas_view().map_or((800.0, 600.0), |v| (f64::from(v.rect.width()), f64::from(v.rect.height())));
     let Some(v) = app.view_mut() else { return };
     let side = b.width().max(b.height()).max(1e-6);
     let fits = ((size.0 - 128.0).max(50.0) / b.width().max(1e-6)).min((size.1 - 128.0).max(50.0) / b.height().max(1e-6));
@@ -821,9 +822,9 @@ const MAX_MARKERS: usize = 600;
 /// The selected stencils' problems and registration holes on the canvas (the focused problem
 /// emphasised), over the art and under the panels and windows.
 pub fn canvas_markers(app: &VectorcraftApp, ctx: &egui::Context) {
-    let (Some(rect), Some(view)) = (app.canvas_rect, app.view()) else { return };
+    let Some(xf) = app.canvas_view() else { return };
+    let rect = xf.rect;
     let Some(st) = app.session.active() else { return };
-    let xf = crate::canvas::Xf::at(rect, view, app.canvas_ui_zoom);
     let t = Tokens::get(ctx);
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Background, Id::unique("picabia_stencil_markers"))).with_clip_rect(rect);
     let focused = focus(ctx);
@@ -864,8 +865,8 @@ pub fn canvas_markers(app: &VectorcraftApp, ctx: &egui::Context) {
 
 /// One problem marker for `b` (document space): a ring around a place too small to box, else its
 /// bounds dashed; the focused one thicker and haloed in the selection colour.
-fn marker(painter: &egui::Painter, xf: &crate::canvas::Xf, b: Rect, warn: Color32, halo: Color32, focused: bool) {
-    let c: Vec<Pos2> = xf.quad(b);
+fn marker(painter: &egui::Painter, xf: &craft::behavior::CanvasView, b: Rect, warn: Color32, halo: Color32, focused: bool) {
+    let c: Vec<Pos2> = xf.quad(b).to_vec();
     let r = egui::Rect::from_points(&c);
     let width = if focused { 2.5 } else { 1.5 };
     if r.width().max(r.height()) < RING_BELOW {

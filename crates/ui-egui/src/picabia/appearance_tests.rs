@@ -13,8 +13,7 @@ fn arrayed() -> (VectorcraftApp, egui::Context, u64) {
     app.run("file.new", json!({"width": 800, "height": 400})).unwrap();
     let id = app.run("shape.rectangle", json!({"x": 0, "y": 0, "width": 20, "height": 20})).unwrap()["id"].as_u64().unwrap();
     app.run("modifier.add", json!({"ids": [id], "kind": "linearArray", "props": {"count": 5, "offsetX": 40}})).unwrap();
-    let ctx = egui::Context::default();
-    crate::theme::install_fonts(&ctx);
+    let ctx = crate::testing::ui_context();
     frame(&mut app, &ctx, vec![]);
     (app, ctx, id)
 }
@@ -94,13 +93,7 @@ fn a_damaged_stack_offers_remove_all() {
 #[test]
 fn object_modifiers_menu_lists_every_kind_and_the_stack_commands() {
     let items = super::menu::object_items();
-    let ids: Vec<(&str, String)> = items
-        .iter()
-        .filter_map(|i| match i {
-            crate::menus::Item::Cmd(l, id, p) => Some((*id, format!("{l} {p}"))),
-            _ => None,
-        })
-        .collect();
+    let ids: Vec<(String, String)> = super::menu::commands(&items).into_iter().map(|(l, id, p)| (id, format!("{l} {p}"))).collect();
     assert_eq!(
         ids.iter().filter(|(id, _)| *id == "modifier.add").count(),
         super::appearance::KINDS.len() + super::appearance::PRESETS.len(),
@@ -112,7 +105,7 @@ fn object_modifiers_menu_lists_every_kind_and_the_stack_commands() {
     }
     let tree = crate::menus::menu_tree();
     let object = tree.iter().find(|(t, _)| *t == "Object").unwrap();
-    assert!(object.1.iter().any(|i| matches!(i, crate::menus::Item::Sub("Modifiers", _))));
+    assert!(super::menu::submenu(&object.1, "Modifiers").is_some());
 }
 
 /// Two selected objects with the same kinds: one set of rows, and an edit reaches both.
@@ -339,7 +332,7 @@ fn the_screen_row_shows_the_fields_its_tone_uses() {
     let stack = vectorcraft_modifiers::node_stack(st.doc.node(vectorcraft_doc::NodeId(a)).unwrap()).unwrap().unwrap();
     let p = stack.modifiers[2].kind.params();
     assert_eq!((p["spot"].as_str(), p["tone"].as_str(), p["amount"].as_f64()), (Some("line"), Some("fixed"), Some(30.0)));
-    assert!(super::menu::object_items().iter().any(|i| matches!(i, crate::menus::Item::Cmd("Ben-Day Dots", "modifier.add", _))));
+    assert!(super::menu::commands(&super::menu::object_items()).iter().any(|(l, id, _)| l == "Ben-Day Dots" && id == "modifier.add"));
 }
 
 /// PIC20.4d: the displace amplitude field reaches 200 for the fractal only (the row's clamp),

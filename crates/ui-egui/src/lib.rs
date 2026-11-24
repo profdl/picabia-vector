@@ -64,6 +64,13 @@ pub mod palette;
 mod panel_docking;
 mod panel_drag;
 pub mod panels;
+pub mod picabia; // PICABIA: Picabia's name, app id and About credits
+// PICABIA: the laser export dialogs, the Laser window, the stencil settings and Picabia's UI state.
+pub mod picabia_camera_window; // PICABIA: the Camera window (picabia_ui shows it)
+pub mod picabia_laser_export;
+pub mod picabia_laser_window;
+pub mod picabia_stencil_panel;
+pub mod picabia_ui;
 pub mod place;
 pub mod placing;
 pub mod plugin_runs;
@@ -246,6 +253,8 @@ pub struct VectorcraftApp {
     pub placing: placing::Placing,
     /// Image Traces running off the UI thread ([`trace_runs`]).
     pub trace_runs: trace_runs::TraceRuns,
+    /// PICABIA: the Laser window's and the Stencil window's state ([`picabia_ui`]).
+    pub picabia: picabia_ui::PicabiaUi,
     /// Data Recovery's timer and startup question ([`recovery`]).
     pub recovery: recovery::Timer,
     /// The Close, Close All or Quit in progress, which asks about each unsaved document in turn.

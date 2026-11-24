@@ -1209,6 +1209,9 @@ pub(crate) struct Panels<'a> {
 
 impl DockPanels<String> for Panels<'_> {
     fn body(&mut self, panel: &String, ui: &mut egui::Ui, _cx: &mut BodyCx<'_>) {
+        if ui.ctx().viewport_id() != egui::ViewportId::ROOT {
+            crate::picabia_laser_window::stop_shortcut(self.app, ui.ctx()); // PICABIA: Shift+Esc in a floating panel's own window
+        }
         crate::dock::panel_body(self.app, ui, panel);
         // A floating panel's OS window runs a pass of its own, whose leftover keys the main window's pass never sees.
         if ui.ctx().viewport_id() != egui::ViewportId::ROOT {

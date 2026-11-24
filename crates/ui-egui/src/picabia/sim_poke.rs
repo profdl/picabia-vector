@@ -7,17 +7,24 @@
 //! released, let go (`physics.poke {release}`), so it is thrown with the speed it has. Every step
 //! is recorded at its step, so scrubbing replays it. A canvas seam calls [`poke`] before the tool.
 
-use egui::{Pos2, Rect, Ui};
+use craft::behavior::{CanvasView, PressPhase};
+use craft::ui::canvas::ToolPass;
+use egui::{Pos2, Ui};
 use serde_json::json;
 use vectorcraft_engine::cmd::picabia_physics::session;
 
 use crate::VectorcraftApp;
 
-/// While a session is open, a Selection-tool drag that starts on a moving body pokes it (seam at the
-/// top of `canvas::canvas_input`): pressed, the body is grabbed where it was pressed; dragged, it is
-/// pulled towards the pointer; released, let go. `true` when the poke took the input (the tool
-/// doesn't get it).
-pub fn poke(app: &mut VectorcraftApp, ui: &Ui, resp: &egui::Response, rect: Rect) -> bool {
+/// While a session is open, a Selection-tool drag that starts on a moving body pokes it (seam in
+/// `canvas::show_body`, before the tool host runs `pass`): pressed, the body is grabbed where it was
+/// pressed; dragged, it is pulled towards the pointer; released, let go. `true` when the poke took
+/// the pass (the tool doesn't get it).
+pub fn poke(app: &mut VectorcraftApp, ui: &Ui, pass: &ToolPass, xf: &CanvasView) -> bool {
+    poke_at(app, ui, matches!(pass.press.phase, PressPhase::Down { .. }), xf)
+}
+
+/// [`poke`] with `pressed`: the canvas background took a press this pass.
+pub(crate) fn poke_at(app: &mut VectorcraftApp, ui: &Ui, pressed: bool, xf: &CanvasView) -> bool {
     let open = session::bar_state(&app.session).is_some() && app.session.tool_id() == "selection";
     if !open {
         // The session closed or the tool changed mid-drag: let go of what is held.
@@ -26,8 +33,7 @@ pub fn poke(app: &mut VectorcraftApp, ui: &Ui, resp: &egui::Response, rect: Rect
         }
         return false;
     }
-    let Some(view) = app.view() else { return false };
-    let xf = crate::canvas::Xf::at(rect, view, app.canvas_ui_zoom);
+    let rect = xf.rect;
     let pointer: Option<Pos2> = ui.input(|i| i.pointer.interact_pos());
     if app.picabia.poking {
         // A pull only when the pointer moved (holding still records nothing more).
@@ -45,7 +51,7 @@ pub fn poke(app: &mut VectorcraftApp, ui: &Ui, resp: &egui::Response, rect: Rect
     // A plain primary press on a moving body: not another button, not with a modifier (Shift-click
     // and the rest stay the tool's), not with Space held (the Hand tool).
     let plain = ui.input(|i| i.pointer.primary_pressed() && i.modifiers.is_none() && !i.key_down(egui::Key::Space));
-    if !(plain && resp.is_pointer_button_down_on()) {
+    if !(plain && pressed) {
         return false;
     }
     let Some(p) = pointer.filter(|p| rect.contains(*p)) else { return false };

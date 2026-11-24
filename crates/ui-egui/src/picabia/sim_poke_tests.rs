@@ -17,14 +17,13 @@ fn scene() -> (VectorcraftApp, egui::Context, u64) {
     let boxy = app.run("shape.rectangle", json!({"x": 180, "y": 200, "width": 40, "height": 40})).unwrap()["id"].as_u64().unwrap();
     app.run("physics.set", json!({"ids": [boxy]})).unwrap();
     app.run("select.set", json!({"ids": []})).unwrap();
-    app.canvas_rect = Some(CANVAS);
-    let ctx = egui::Context::default();
-    crate::theme::install_fonts(&ctx);
+    crate::picabia_ui::set_canvas(&mut app, CANVAS);
+    let ctx = crate::testing::ui_context();
     (app, ctx, boxy)
 }
 
 fn screen(app: &VectorcraftApp, p: Point) -> Pos2 {
-    crate::canvas::Xf::new(CANVAS, app.view().unwrap()).to_screen(p)
+    app.canvas_view().unwrap().to_screen(p)
 }
 
 /// One frame: the canvas's response, then the poke; whether the poke took the input.
@@ -40,7 +39,8 @@ fn frame_with(app: &mut VectorcraftApp, ctx: &egui::Context, events: Vec<egui::E
     events.insert(0, egui::Event::ModifiersChanged(modifiers));
     let mut out = ctx.run_ui(egui::RawInput { events, time: Some(time), ..Default::default() }, |ui| {
         let resp = ui.interact(CANVAS, Id::unique("canvas-test"), Sense::click_and_drag());
-        took = super::sim_poke::poke(app, ui, &resp, CANVAS);
+        let xf = app.canvas_view().unwrap();
+        took = super::sim_poke::poke_at(app, ui, resp.is_pointer_button_down_on(), &xf);
     });
     out.textures_delta.clear();
     // The app's clock (`sim_bar::show` steps a playing session each frame).

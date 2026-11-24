@@ -420,6 +420,7 @@ const THUMBNAIL: &str = "ui.appearance.thumbnail";
 /// The Appearance panel: the object row, the stack of the selected object (or of new art with
 /// nothing selected) and the footer; Delete in the list removes the picked rows.
 pub fn show(app: &mut VectorcraftApp, ui: &mut Ui) {
+    crate::picabia::appearance::rows(app, ui); // PICABIA: the selection's modifier rows (the stack makes the copies the effects draw on)
     let node = first_subject(app);
     let summary = summary(app);
     let mix = summary.as_ref().and_then(|s| s.mixed(app));
@@ -1797,6 +1798,7 @@ pub(crate) fn fx_menu(app: &mut VectorcraftApp, ui: &mut Ui) {
             }
         });
     }
+    crate::picabia::appearance::add_menu(app, ui); // PICABIA: modifier kinds
 }
 
 /// The panel menu's New Art Has Basic Appearance row: the command turns the preference over.

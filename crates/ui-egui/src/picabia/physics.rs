@@ -11,8 +11,8 @@ use egui::{Rect, Sense, Ui, pos2, vec2};
 use serde_json::{Value, json};
 use vectorcraft_doc::NodeId;
 
-use crate::theme::Tokens;
-use crate::{VectorcraftApp, widgets};
+use crate::picabia_ui::Tokens;
+use crate::{VectorcraftApp, picabia_ui::widgets};
 
 const ROW: f32 = 30.0;
 const EYE_W: f32 = 26.0;
@@ -250,9 +250,6 @@ fn fields(app: &mut VectorcraftApp, ui: &mut Ui, v: &View) {
     }
 }
 
-fn icon_hit(ui: &mut Ui, r: Rect, id: &str, icon: &str, tip: &str) -> egui::Response {
-    let t = Tokens::get(ui.ctx());
-    let resp = ui.interact(r, ui.scope_id().with(id), Sense::click());
-    crate::icons::paint(ui, icon, r, if resp.hovered() { t.text_strong } else { t.icon });
-    resp.on_hover_text(tip)
+fn icon_hit(ui: &mut Ui, r: Rect, id: &str, icon: &'static str, tip: &str) -> widgets::Pressed {
+    widgets::icon_at(ui, r, id, icon, tip)
 }

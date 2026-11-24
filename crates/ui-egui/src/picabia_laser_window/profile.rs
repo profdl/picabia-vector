@@ -11,9 +11,9 @@ use super::ops::{self, Ops};
 use super::status::Status;
 use crate::VectorcraftApp;
 use crate::i18n;
+use crate::picabia_ui::Tokens;
+use crate::picabia_ui::widgets;
 use crate::picabia_ui::{button, num, readable, wrapped};
-use crate::theme::Tokens;
-use crate::widgets;
 
 /// A profile number.
 fn number(p: &Value, k: &str, default: f64) -> f64 {

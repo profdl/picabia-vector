@@ -9,8 +9,8 @@ use egui::{Context, Id, TextureHandle, TextureOptions, Ui, vec2};
 use serde_json::{Value, json};
 
 use crate::VectorcraftApp;
+use crate::picabia_ui::Tokens;
 use crate::picabia_ui::{button, f, note, readable, s, wrapped};
-use crate::theme::Tokens;
 
 /// UI command: open the Camera window.
 pub const CAMERA_PANEL: &str = "camera.panel";
@@ -56,7 +56,7 @@ pub fn command(app: &mut VectorcraftApp, id: &str) -> Option<Result<Value, Strin
             Some(Ok(json!({"open": true})))
         }
         CAMERA_CAPTURE => Some(capture(app)),
-        CAMERA_FOLDER => Some(choose_folder(app).map(|f| json!({"folder": f}))),
+        CAMERA_FOLDER => Some(choose_folder(app)),
         _ => None,
     }
 }
@@ -67,21 +67,36 @@ pub fn open(app: &mut VectorcraftApp) {
     p.loaded = false;
 }
 
-/// Choose the capture folder with the folder picker; the folder (`None`: cancelled, or the
-/// picker shows off the UI thread and runs this again with the answer).
-pub fn choose_folder(app: &mut VectorcraftApp) -> Result<Option<String>, String> {
-    let Some(folder) = crate::picks::folder(app) else { return Ok(None) };
-    app.run("camera.settings", json!({"folder": folder}))?;
-    app.prefs_changed = true;
-    Ok(Some(folder))
+/// Choose the capture folder with the folder picker, then run `then` (when a folder was picked).
+/// Replies `{pending: "fileDialog"}` while the picker shows (`Null` with no file service).
+fn choose_folder_then(app: &mut VectorcraftApp, then: impl FnOnce(&mut VectorcraftApp) -> Result<Value, String> + 'static) -> Value {
+    let pick = craft::host::PickRequest::folder("camera").title(tl!("Capture Folder"));
+    crate::file_asks::ask(app, pick, crate::file_asks::Owner::Free, move |app, picked| {
+        let Some(folder) = picked.first_path() else { return Ok(json!({"cancelled": true})) };
+        let folder = folder.to_string_lossy().into_owned();
+        app.run("camera.settings", json!({"folder": folder}))?;
+        app.prefs_changed = true;
+        then(app)
+    })
 }
 
-/// Capture (see [`CAMERA_CAPTURE`]).
+/// Choose the capture folder with the folder picker (see [`CAMERA_FOLDER`]).
+pub fn choose_folder(app: &mut VectorcraftApp) -> Result<Value, String> {
+    Ok(choose_folder_then(app, |app| app.run("camera.status", json!({})).map(|st| json!({"folder": st["folder"]}))))
+}
+
+/// Capture (see [`CAMERA_CAPTURE`]); with no capture folder yet, the folder picker first.
 pub fn capture(app: &mut VectorcraftApp) -> Result<Value, String> {
     let status = app.run("camera.status", json!({}))?;
-    if status["folder"].is_null() && choose_folder(app)?.is_none() {
-        return Ok(json!({"saved": false, "cancelled": true}));
+    if status["folder"].is_null() {
+        return Ok(choose_folder_then(app, capture_now));
     }
+    capture_now(app)
+}
+
+/// Capture into the capture folder.
+fn capture_now(app: &mut VectorcraftApp) -> Result<Value, String> {
+    let status = app.run("camera.status", json!({}))?;
     let r = app.run("camera.capture", json!({}));
     let shown = match &r {
         Ok(v) if v["saved"] == true => (true, format!("{} {}", tl!("Saved"), s(v, "file").unwrap_or_default())),

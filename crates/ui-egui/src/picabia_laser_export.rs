@@ -1,11 +1,11 @@
 //! PICABIA: the laser export dialogs: a stencil's Export for Laser (`stencilExport`, asked for by
 //! `modifier.stencilExport` and `modifier.stencilGcode` run without a path), the Laser Test Card
 //! (`stencilTestCard`, from `modifier.stencilTestCard`) and the G-code export of any design
-//! (`laserGcode`, from `laser.gcode`). One [`DialogSpec`](crate::dialogs::DialogSpec) row serves
-//! the three kinds (seam in `dialogs.rs`); the commands' `{dialog: …}` reply opens it
-//! ([`open_requested`], seam in `run_now`).
+//! (`laserGcode`, from `laser.gcode`). One window serves the three kinds, drawn each frame from
+//! `picabia_ui::show` ([`show`]); the commands' `{dialog: …}` reply opens it ([`open_requested`],
+//! seam in `run_now`).
 //!
-//! The dialog holds the settings only, as fields `ui.dialog.set` can set: `format` (`svg`: SVG for
+//! The dialog holds the settings only, as fields: `format` (`svg`: SVG for
 //! LightBurn and the like, `gcode`: G-code for a GRBL laser), `kind` (the test card's `card` or
 //! `powerLadder`), `material`, `kerfMm`, `bedWidthMm`, `bedHeightMm`, `noLimit`, `overlapMm`,
 //! `label`, the three operation colours (SVG) and the operation table `gcode` (`{cut, score,
@@ -16,16 +16,15 @@
 //! job warns of. Export runs the command again with the path the save panel picked (the browser:
 //! with `data: true`, each sheet a download).
 
+use craft::host::PickRequest;
 use egui::Ui;
 use serde_json::{Map, Value, json};
 
-use crate::dialogs::DialogSpec;
 use crate::i18n;
 use crate::picabia_laser_window::ops::{self, Ops};
+use crate::picabia_ui::Tokens;
 use crate::picabia_ui::{num, readable, wrapped};
-use crate::state::Dialog;
-use crate::theme::Tokens;
-use crate::{VectorcraftApp, widgets};
+use crate::{VectorcraftApp, picabia_ui::widgets};
 
 /// Export for laser: a stencil's cut, one file per sheet.
 pub const EXPORT: &str = "stencilExport";
@@ -41,17 +40,41 @@ const DEBOUNCE: f64 = 0.3;
 const LABEL_W: f32 = 84.0;
 const FIELD_W: f32 = 90.0;
 
-/// The dialogs' spec (one `registry!` row for the three kinds).
-pub(crate) const SPEC: DialogSpec = DialogSpec {
-    heading,
-    body,
-    confirm,
-    ok: Some("Export…"),
-    ok_enabled: Some(can_export),
-    min_width: 400.0,
-    max_width: Some(480.0),
-    ..DialogSpec::FORM
-};
+/// The open dialog: its kind and its fields.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Dialog {
+    pub kind: String,
+    pub fields: Map<String, Value>,
+}
+
+impl Dialog {
+    pub fn new(kind: &str, fields: Value) -> Self {
+        Self { kind: kind.to_string(), fields: fields.as_object().cloned().unwrap_or_default() }
+    }
+
+    /// Field `k` as a number; `d` when it is missing or not one.
+    pub fn f64(&self, k: &str, d: f64) -> f64 {
+        match self.fields.get(k) {
+            Some(Value::Number(n)) => n.as_f64().unwrap_or(d),
+            Some(Value::String(s)) => vectorcraft_doc::Unit::Points.parse(s).unwrap_or(d),
+            _ => d,
+        }
+    }
+
+    /// Field `k` as text: a string as it is, another value as JSON, empty when missing.
+    pub fn str(&self, k: &str) -> String {
+        match self.fields.get(k) {
+            Some(Value::String(s)) => s.clone(),
+            Some(v) => v.to_string(),
+            None => String::new(),
+        }
+    }
+
+    /// Field `k` as a bool; `false` when it is missing or not a bool.
+    pub fn bool(&self, k: &str) -> bool {
+        self.fields.get(k).and_then(Value::as_bool).unwrap_or(false)
+    }
+}
 
 fn heading(d: &Dialog) -> String {
     match d.kind.as_str() {
@@ -73,7 +96,7 @@ pub fn open_requested(app: &mut VectorcraftApp, id: &str, v: &Value) {
     if !matches!(id, "modifier.stencilExport" | "modifier.stencilGcode" | "modifier.stencilTestCard" | "laser.gcode") {
         return;
     }
-    app.ui.dialog = Some(from_request(kind, v));
+    app.picabia.export = Some(from_request(kind, v));
 }
 
 /// The dialog for request `data`: its fields from the settings the command would use.
@@ -286,7 +309,7 @@ fn refresh(app: &mut VectorcraftApp, ctx: &egui::Context, d: &mut Dialog) {
 }
 
 /// OK can export: the last dry run didn't refuse.
-fn can_export(_app: &VectorcraftApp, d: &Dialog) -> bool {
+fn can_export(d: &Dialog) -> bool {
     d.fields.get("__summary").is_some_and(|s| s.get("error").is_none())
 }
 
@@ -481,7 +504,7 @@ fn summary(ui: &mut Ui, d: &Dialog) {
     }
 }
 
-fn body(app: &mut VectorcraftApp, ui: &mut Ui, d: &mut Dialog) -> bool {
+fn body(app: &mut VectorcraftApp, ui: &mut Ui, d: &mut Dialog) {
     let t = Tokens::get(ui.ctx());
     let doc = app.session.active().map(|s| s.doc.clone());
     let first = d
@@ -502,7 +525,36 @@ fn body(app: &mut VectorcraftApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     ui.add_space(8.0);
     widgets::divider(ui);
     summary(ui, d);
-    false
+}
+
+/// The open dialog's window, each frame: the settings, the summary, Cancel and Export….
+pub fn show(app: &mut VectorcraftApp, ctx: &egui::Context) {
+    let Some(mut d) = app.picabia.export.take() else { return };
+    let mut open = true;
+    let (mut cancel, mut export) = (false, false);
+    egui::Window::new(heading(&d))
+        .id(egui::Id::unique("picabia-laser-export"))
+        .collapsible(false)
+        .resizable(false)
+        .open(&mut open)
+        .default_width(420.0)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.content_rect().center())
+        .show(ctx, |ui| {
+            body(app, ui, &mut d);
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                cancel = crate::picabia_ui::button(ui, tl!("Cancel"), false, true);
+                export = crate::picabia_ui::button(ui, tl!("Export…"), true, can_export(&d));
+            });
+        });
+    if !open || cancel {
+        return;
+    }
+    app.picabia.export = Some(d.clone());
+    if export && let Err(e) = confirm(app, &d) {
+        app.status(e);
+    }
 }
 
 /// "Saved Rose laser.svg" or "Saved 3 files: Rose laser 1.svg, …".
@@ -528,7 +580,7 @@ pub fn written(r: &Value) -> Vec<String> {
 
 /// Export: a save panel for the first sheet's file (more sheets take " 1", " 2"... beside it); in
 /// the browser each sheet downloads.
-fn confirm(app: &mut VectorcraftApp, d: &Dialog) -> Result<Value, String> {
+pub(crate) fn confirm(app: &mut VectorcraftApp, d: &Dialog) -> Result<Value, String> {
     let cmd = command(d);
     let mut p = params(d);
     let ext = extension(d);
@@ -539,34 +591,37 @@ fn confirm(app: &mut VectorcraftApp, d: &Dialog) -> Result<Value, String> {
         for f in r.get("files").and_then(Value::as_array).into_iter().flatten() {
             let name = f.get("name").and_then(Value::as_str).map_or_else(|| format!("laser.{ext}"), str::to_string);
             let bytes = f.get("data").and_then(Value::as_str).and_then(vectorcraft_format::base64_decode).ok_or("no data")?;
-            crate::io::write_named(app, None, &name, &bytes)?;
+            crate::io::write_named(app, None, &name, bytes, |_, _| Ok(Value::Null))?;
             names.push(name);
         }
         app.status(saved_text(&names));
-        app.ui.dialog = None;
+        app.picabia.export = None;
         app.prefs_changed = true;
         return Ok(json!({"files": names}));
     }
     let folder =
         app.session.active().and_then(|s| s.path.as_deref()).and_then(|p| std::path::Path::new(p).parent()).map(|p| p.to_string_lossy().into_owned());
     let label = if ext == "gcode" { "G-code" } else { "SVG" };
-    let pick = crate::FilePick {
-        name: file_name(app, d),
-        folder: folder.filter(|f| !f.is_empty()),
-        filters: crate::FilePick::filters([(label, &[ext][..])]),
-    };
-    let mut path = crate::picks::save(app, &pick).ok_or("cancelled")?;
-    if std::path::Path::new(&path).extension().is_none_or(|e| e.is_empty()) {
-        path.push('.');
-        path.push_str(ext);
+    let mut pick = PickRequest::save("laser").file_name(file_name(app, d)).filter(label, &[ext]).suggested_extension(ext);
+    if let Some(folder) = folder.filter(|f| !f.is_empty()) {
+        pick = pick.default_directory(folder);
     }
-    p["path"] = json!(path);
-    let r = app.run(cmd, p)?;
-    app.status(saved_text(&written(&r)));
-    app.ui.dialog = None;
-    // The command remembered these settings: they're saved with the preferences.
-    app.prefs_changed = true;
-    Ok(r)
+    // The dialog stays open until the save panel answers: cancelled, it keeps its settings.
+    Ok(crate::file_asks::ask(app, pick, crate::file_asks::Owner::Document, move |app, picked| {
+        let Some(path) = picked.first_path() else { return Ok(Value::Null) };
+        let mut path = path.to_string_lossy().into_owned();
+        if std::path::Path::new(&path).extension().is_none_or(|e| e.is_empty()) {
+            path.push('.');
+            path.push_str(ext);
+        }
+        p["path"] = json!(path);
+        let r = app.run(cmd, p)?;
+        app.status(saved_text(&written(&r)));
+        app.picabia.export = None;
+        // The command remembered these settings: they're saved with the preferences.
+        app.prefs_changed = true;
+        Ok(r)
+    }))
 }
 
 #[cfg(test)]
@@ -589,11 +644,11 @@ mod tests {
     }
 
     fn painted(app: &mut VectorcraftApp) -> String {
-        let ctx = crate::widgets::look_tests::themed(crate::theme::Brightness::Light);
+        let ctx = crate::testing::ui_context();
         let mut text = String::new();
         // Twice: the first frame lays the window out.
         for _ in 0..2 {
-            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| crate::dialogs::show(app, ui.ctx()));
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| show(app, ui.ctx()));
             out.textures_delta.clear();
             text.clear();
             for s in out.shapes {
@@ -636,7 +691,7 @@ mod tests {
         let mut app = app();
         let g = stencil(&mut app);
         app.run("modifier.stencilExport", json!({"id": g})).unwrap();
-        let d = app.ui.dialog.clone().unwrap();
+        let d = app.picabia.export.clone().unwrap();
         assert_eq!((d.kind.as_str(), d.fields["id"].as_u64()), (EXPORT, Some(g)));
         assert_eq!(command(&d), "modifier.stencilExport");
         let text = painted(&mut app);
@@ -644,11 +699,11 @@ mod tests {
             assert!(text.contains(want), "{want} in {text}");
         }
         // G-code: the stencil's G-code command, the operation table and its lines.
-        let d = app.ui.dialog.as_mut().unwrap();
+        let d = app.picabia.export.as_mut().unwrap();
         d.fields.insert("format".into(), json!("gcode"));
         // Changed a while ago: the summary asks again now.
         d.fields.insert("__changedAt".into(), json!(-1.0));
-        let d = app.ui.dialog.clone().unwrap();
+        let d = app.picabia.export.clone().unwrap();
         assert_eq!(command(&d), "modifier.stencilGcode");
         let text = painted(&mut app);
         for want in ["Speed", "Power", "Passes", "Material", "lines"] {
@@ -663,12 +718,16 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("picabia-b6-export-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("Stencil laser.gcode");
-        let picked = path.to_string_lossy().into_owned();
-        app.services.pick_save = Some(Box::new(move |_| Some(picked.clone())));
+        let picker = crate::tests_picks::scripted(&mut app);
         app.run("modifier.stencilGcode", json!({"id": g})).unwrap();
-        let r = crate::dialogs::confirm(&mut app).unwrap();
-        assert!(app.ui.dialog.is_none(), "closed");
-        assert_eq!(written(&r), ["Stencil laser.gcode"]);
+        let d = app.picabia.export.clone().unwrap();
+        assert_eq!(confirm(&mut app, &d), Ok(json!({"pending": "fileDialog"})));
+        assert!(app.picabia.export.is_some(), "open until the save panel answers");
+        assert_eq!(picker.requests().last().and_then(|r| r.file_name.clone()).as_deref(), Some("Stencil laser.gcode"));
+        picker.answer_saved(&path.to_string_lossy(), None);
+        let ctx = app.ui_ctx.clone().unwrap();
+        crate::tests_picks::poll(&mut app, &ctx);
+        assert!(app.picabia.export.is_none(), "closed");
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("M5") && text.contains("G21"), "{text}");
         assert!(app.prefs_changed, "the remembered settings are saved");
@@ -679,23 +738,23 @@ mod tests {
     fn the_test_card_and_design_dialogs_open_from_their_commands() {
         let mut app = app();
         app.run("modifier.stencilTestCard", json!({"format": "gcode", "kind": "powerLadder"})).unwrap();
-        let d = app.ui.dialog.clone().unwrap();
+        let d = app.picabia.export.clone().unwrap();
         assert_eq!(d.kind, TEST_CARD);
         assert!(is_ladder(&d));
         assert_eq!(params(&d)["kind"], "powerLadder");
         let text = painted(&mut app);
         assert!(text.contains("Laser Test Card") && text.contains("Power ladder"), "{text}");
         let id = app.run("shape.rectangle", json!({"x": 10, "y": 10, "width": 40, "height": 40})).unwrap()["id"].as_u64().unwrap();
-        app.ui.dialog = None;
+        app.picabia.export = None;
         app.run("laser.gcode", json!({"ids": [id]})).unwrap();
-        let d = app.ui.dialog.clone().unwrap();
+        let d = app.picabia.export.clone().unwrap();
         assert_eq!((d.kind.as_str(), command(&d)), (DESIGN, "laser.gcode"));
         assert_eq!(params(&d)["ids"], json!([id]));
         let text = painted(&mut app);
         assert!(text.contains("Export G-code for Laser"), "{text}");
         // Other replies that name a dialog are left alone.
-        app.ui.dialog = None;
+        app.picabia.export = None;
         open_requested(&mut app, "file.new", &json!({"dialog": EXPORT}));
-        assert!(app.ui.dialog.is_none());
+        assert!(app.picabia.export.is_none());
     }
 }

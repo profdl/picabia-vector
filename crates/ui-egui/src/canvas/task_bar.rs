@@ -478,6 +478,7 @@ pub(super) fn task_bar(app: &mut VectorcraftApp, ui: &mut Ui, space: &CanvasSpac
             if offer.fonts {
                 crate::panels::character::task_bar(app, ui);
             }
+            crate::picabia::task_bar::button(app, ui); // PICABIA: the Modifiers button, before the chips (PIC3.4)
             for chip in &offer.chips {
                 match chip {
                     Chip::Fill | Chip::Stroke => {

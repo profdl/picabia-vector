@@ -1,10 +1,10 @@
 //! PICABIA: the selection's modifier rows in the Appearance panel.
 //!
-//! The rows sit in the panel's one list, as a block between the fills and strokes and the object's
-//! own effects (`panels::appearance::stack` calls [`rows`]): the stack makes the copies first,
-//! then the object's fills, strokes and effects draw on each copy (`docs/picabia/modifiers.md`).
-//! They are built from the panel's own row parts (eye, disclosure, label, the `fx`-style editor)
-//! and VectorCraft's widgets, with colours from `theme::Tokens`; every edit goes through a
+//! The rows are a block of their own above the panel's list (`panels::appearance::show` calls
+//! [`rows`]; the panel's list is the framework's and has no room for rows of another kind): the
+//! stack makes the copies first, then the object's fills, strokes and effects draw on each copy
+//! (`docs/picabia/modifiers.md`). They are built from the framework's buttons, menus and fields,
+//! with colours from the theme's tokens; every edit goes through a
 //! `modifier.*` command for every selected object, so it is one undo step and agents can do the
 //! same.
 //!
@@ -22,6 +22,7 @@
 
 use std::sync::Arc;
 
+use craft::ui::contract::ShowContainer as _;
 use egui::{Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::{Value, json};
 use vectorcraft_doc::{Document, NodeId};
@@ -29,8 +30,8 @@ use vectorcraft_modifiers::{Modifier, ModifierKind};
 
 use super::bind_chip::{self, ChipAction};
 use crate::panels::{pstate, set_pstate};
-use crate::theme::Tokens;
-use crate::{VectorcraftApp, icons, widgets};
+use crate::picabia_ui::Tokens;
+use crate::{VectorcraftApp, picabia_ui::widgets};
 
 const ROW: f32 = 30.0;
 /// The eye column's width, as the Appearance panel's.
@@ -614,11 +615,8 @@ fn row(ui: &mut Ui, selected: bool) -> (Rect, egui::Response) {
     (r, resp)
 }
 
-fn icon_hit(ui: &mut Ui, r: Rect, id: impl std::hash::Hash + std::fmt::Debug, icon: &str, tip: &str) -> egui::Response {
-    let t = Tokens::get(ui.ctx());
-    let resp = ui.interact(r, ui.scope_id().with(id), Sense::click());
-    icons::paint(ui, icon, r, if resp.hovered() { t.text_strong } else { t.icon });
-    resp.on_hover_text(tip)
+fn icon_hit(ui: &mut Ui, r: Rect, id: impl std::hash::Hash + std::fmt::Debug, icon: &'static str, tip: &str) -> widgets::Pressed {
+    widgets::icon_at(ui, r, id, icon, tip)
 }
 
 fn text(ui: &Ui, pos: egui::Pos2, s: &str, strong: bool, dim: bool) {
@@ -645,7 +643,7 @@ fn note(ui: &mut Ui, s: &str) {
 /// The selection's modifier rows (none when no selected object has modifier data). The panel's
 /// own `mixed` flag (its fills and effects differ) doesn't hide them: the rows compare stacks.
 /// Then the selection's physics row (`super::physics`), when an object has physics settings.
-pub fn rows(app: &mut VectorcraftApp, ui: &mut Ui, _n: &vectorcraft_doc::Node, _mixed: bool) {
+pub fn rows(app: &mut VectorcraftApp, ui: &mut Ui) {
     modifier_rows(app, ui);
     // The physics row (the selection's physics settings) under them.
     super::physics::section(app, ui);
@@ -758,9 +756,9 @@ fn modifier_row(app: &mut VectorcraftApp, ui: &mut Ui, doc: &Document, ids: &[No
     if resp.clicked() {
         set_pstate(ui.ctx(), "pc-row", Some((first.0, r.first.id.clone())));
     }
-    let menu = egui::Popup::menu(&more).open_memory(more.clicked().then_some(egui::SetOpenCommand::Toggle));
-    let menu = if resp.secondary_clicked() { menu.open_memory(Some(egui::SetOpenCommand::Bool(true))) } else { menu };
-    menu.show(|ui| row_menu(app, ui, ids, i, len));
+    craft::ui::menu::Menu::new(tl!("Modifier options"))
+        .opened_by(&more.response, craft::ui::contract::Trigger::Press)
+        .show(ui, |ui, _| row_menu(app, ui, ids, i, len));
     if open {
         if r.kind == "stencil" {
             let t = Tokens::get(ui.ctx());
@@ -788,36 +786,29 @@ fn row_menu(app: &mut VectorcraftApp, ui: &mut Ui, ids: &[NodeId], i: usize, len
     let run = |app: &mut VectorcraftApp, cmd: &str, p: Value| {
         app.run(cmd, p).ok();
     };
-    if widgets::menu_item(ui, tl!("Move Up"), i > 0, false) {
+    if widgets::menu_item(ui, "Move Up", i > 0, false) {
         run(app, "modifier.move", json!({"ids": all, "from": i, "to": i.saturating_sub(1)}));
-        ui.close();
     }
-    if widgets::menu_item(ui, tl!("Move Down"), i + 1 < len, false) {
+    if widgets::menu_item(ui, "Move Down", i + 1 < len, false) {
         run(app, "modifier.move", json!({"ids": all, "from": i, "to": i + 1}));
-        ui.close();
     }
-    ui.separator();
-    if widgets::menu_item(ui, tl!("Duplicate Modifier"), true, false) {
+    widgets::divider(ui);
+    if widgets::menu_item(ui, "Duplicate Modifier", true, false) {
         run(app, "modifier.duplicate", json!({"ids": all, "index": i}));
-        ui.close();
     }
-    if widgets::menu_item(ui, tl!("Copy Modifier"), true, false) {
+    if widgets::menu_item(ui, "Copy Modifier", true, false) {
         run(app, "modifier.copy", json!({"id": first, "index": i}));
-        ui.close();
     }
     let pasted = !app.session.picabia_copied_modifiers().is_empty();
-    if widgets::menu_item(ui, tl!("Paste Modifiers"), pasted, false) {
+    if widgets::menu_item(ui, "Paste Modifiers", pasted, false) {
         run(app, "modifier.paste", json!({"ids": all}));
-        ui.close();
     }
-    if widgets::menu_item(ui, tl!("Remove Modifier"), true, false) {
+    if widgets::menu_item(ui, "Remove Modifier", true, false) {
         run(app, "modifier.remove", json!({"ids": all, "index": i}));
-        ui.close();
     }
-    ui.separator();
-    if widgets::menu_item(ui, tl!("Apply Up to Here"), true, false) {
+    widgets::divider(ui);
+    if widgets::menu_item(ui, "Apply Up to Here", true, false) {
         run(app, "modifier.apply", json!({"ids": all, "upTo": i}));
-        ui.close();
     }
 }
 
@@ -973,7 +964,7 @@ fn field_editor(
 /// An object dropdown: the copy-to-shape targets an object can copy onto
 /// (`cmd::picabia_modifier::target_choices`), or the images a screen can read
 /// (`cmd::picabia_modifier::image_choices`).
-fn object_picker(ui: &mut Ui, choices: Vec<(NodeId, String)>, current: &str, fid: impl std::hash::Hash) -> Option<Value> {
+fn object_picker(ui: &mut Ui, choices: Vec<(NodeId, String)>, current: &str, fid: impl std::hash::Hash + std::fmt::Debug) -> Option<Value> {
     let choices: Vec<(NodeId, String)> = choices.into_iter().take(MAX_TARGETS).collect();
     let current_id = vectorcraft_modifiers::parse_target(current).ok();
     let shown = match current_id.and_then(|t| choices.iter().find(|(c, _)| *c == t)) {
@@ -990,5 +981,5 @@ fn object_picker(ui: &mut Ui, choices: Vec<(NodeId, String)>, current: &str, fid
 /// "Add New Effect"'s Modifiers submenu: the grouped kinds `modifier.add` adds to the selection
 /// (`super::add_menu`, the same menu as the Properties panel's and the task bar's).
 pub fn add_menu(app: &mut VectorcraftApp, ui: &mut Ui) {
-    ui.menu_button(tl!("Modifiers"), |ui| super::add_menu::items(app, ui));
+    craft::ui::menu::Menu::submenu_row(ui, tl!("Modifiers"), |ui, _| super::add_menu::items(app, ui));
 }

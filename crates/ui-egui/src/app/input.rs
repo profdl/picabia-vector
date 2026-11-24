@@ -7,6 +7,7 @@ impl VectorcraftApp {
     /// events to its first pass only, so a second pass of the frame finds no new paste or click
     /// and repeats nothing.
     pub(super) fn handle_input(&mut self, ctx: &egui::Context) {
+        crate::picabia_laser_window::stop_shortcut(self, ctx); // PICABIA: Shift+Esc stops the laser, before anything else sees the key
         shortcuts::run_left_by_labels(self, ctx);
         self.write_formats_before_text_input(ctx);
         menus::native::run(self, ctx);

@@ -6,7 +6,7 @@ use serde_json::json;
 use vectorcraft_engine::Session;
 use vectorcraft_geom::Point;
 
-use super::super::{Xf, show};
+use super::super::show;
 use super::KNOB;
 use crate::VectorcraftApp;
 
@@ -18,8 +18,7 @@ fn frame(app: &mut VectorcraftApp, ctx: &egui::Context, events: Vec<egui::Event>
         }
     }
     let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))), events, ..Default::default() };
-    let mut out = ctx.run_ui(raw, |ui| show(app, ui));
-    out.textures_delta.clear();
+    let out = crate::testing::part_frame(app, ctx, raw, show);
     let mut v = vec![];
     out.shapes.into_iter().for_each(|c| flat(c.shape, &mut v));
     v
@@ -36,15 +35,15 @@ fn arrayed(zoom: f64) -> (VectorcraftApp, egui::Context, u64) {
     app.session.select_tool("selection", Default::default()).unwrap();
     app.ui.task_bar = false;
     app.ui.view.rulers = false;
-    let ctx = egui::Context::default();
+    let ctx = crate::testing::ui_context();
     frame(&mut app, &ctx, vec![]);
     app.view_mut().unwrap().zoom = zoom;
     frame(&mut app, &ctx, vec![]);
     (app, ctx, id)
 }
 
-fn xf(app: &VectorcraftApp) -> Xf {
-    Xf::new(app.canvas_rect.unwrap(), app.view().unwrap())
+fn xf(app: &VectorcraftApp) -> craft::behavior::CanvasView {
+    app.canvas_view().unwrap()
 }
 
 /// A knob (a circle of the handle's size, either size) drawn at `at`.
@@ -101,7 +100,7 @@ fn a_bound_handle_is_drawn_greyed() {
     app.run("param.add", json!({"name": "step", "value": 60})).unwrap();
     app.run("modifier.bind", json!({"ids": [id], "index": 0, "field": "offsetX", "binding": {"param": "step"}})).unwrap();
     let at = xf(&app).to_screen(Point::new(240.0, 60.0));
-    let t = crate::theme::Tokens::get(&ctx);
+    let t = crate::picabia_ui::Tokens::get(&ctx);
     let drawn = frame(&mut app, &ctx, vec![]);
     let ring = drawn.iter().find_map(|s| match s {
         Shape::Circle(c) if c.center.distance(at) < 0.01 && c.stroke.width > 0.0 => Some(c.stroke.color),
@@ -122,7 +121,7 @@ fn the_appearance_panel_reports_its_open_rows() {
             .collect::<Vec<_>>()
     };
     let panel = |app: &mut VectorcraftApp| {
-        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| crate::panels::appearance::show(app, ui));
+        let mut out = crate::testing::part_frame(app, &ctx, egui::RawInput::default(), crate::panels::appearance::show);
         out.textures_delta.clear();
     };
     panel(&mut app);
@@ -179,8 +178,7 @@ fn capture_handle_pictures() {
                 move |ui, app: &mut VectorcraftApp| {
                     if !ready {
                         egui_extras::install_image_loaders(ui.ctx());
-                        crate::theme::install_fonts(ui.ctx());
-                        crate::theme::apply(ui.ctx(), brightness);
+                        crate::testing::install(ui.ctx());
                         crate::panels::set_pstate(ui.ctx(), &format!("pc-open-{id}-m1"), true);
                         ready = true;
                         return;

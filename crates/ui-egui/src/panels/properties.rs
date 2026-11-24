@@ -114,6 +114,7 @@ fn body(app: &mut VectorcraftApp, ui: &mut Ui, first: Option<&Node>, n_sel: usiz
         crate::dialogs::dimension::properties_section(app, ui);
     }
     appearance_section::appearance_section(app, ui);
+    crate::picabia::properties::section(app, ui); // PICABIA: the Modifiers section (PIC3.4)
     section(tl!("Align")).show(ui, |ui, _| {
         Row::new().show(ui, |ui, _| {
             super::align::align_buttons(app, ui);

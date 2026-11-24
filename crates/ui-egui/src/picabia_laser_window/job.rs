@@ -10,9 +10,9 @@ use vectorcraft_doc::NodeId;
 use super::ops::{self, Ops};
 use crate::VectorcraftApp;
 use crate::i18n;
+use crate::picabia_ui::Tokens;
+use crate::picabia_ui::widgets;
 use crate::picabia_ui::{button, num, readable, wrapped};
-use crate::theme::Tokens;
-use crate::widgets;
 
 /// Seconds the summary waits after a change before it asks again.
 const DEBOUNCE: f64 = 0.3;

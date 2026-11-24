@@ -76,7 +76,7 @@ fn texts(shapes: &[egui::epaint::ClippedShape]) -> String {
 }
 
 fn context(dark: bool) -> egui::Context {
-    crate::widgets::look_tests::themed(if dark { crate::theme::Brightness::Dark } else { crate::theme::Brightness::Light })
+    crate::picabia_ui::themed(dark)
 }
 
 #[test]
@@ -285,20 +285,26 @@ fn the_checklist_shows_the_job_start_runs() {
     assert_eq!(j.start_params(json!({"path": "/x/a.gcode"})), json!({"path": "/x/a.gcode"}), "a file runs as it is");
 }
 
+/// Ask for a G-code file as the Laser window does: `{pending: "fileDialog"}` when the dialog opens,
+/// `Null` when it is refused.
+fn ask_file(app: &mut VectorcraftApp) -> Value {
+    crate::file_asks::ask(app, craft::host::PickRequest::open("gcode"), crate::file_asks::Owner::Free, |_, _| Ok(Value::Null))
+}
+
 #[test]
 fn no_file_dialog_opens_over_a_working_laser_and_motion_goes_the_persons_way() {
     let mut app = app();
     let id = square(&mut app);
-    app.services.pick_open = Some(Box::new(|_| Some("/tmp/x.gcode".into())));
-    let pick = crate::FilePick::named("x.gcode");
-    assert_eq!(crate::picks::open(&mut app, &pick).as_deref(), Some("/tmp/x.gcode"), "not connected: it opens");
+    let picker = crate::tests_picks::scripted(&mut app);
+    assert_eq!(ask_file(&mut app), json!({"pending": "fileDialog"}), "not connected: it opens");
+    picker.cancel();
     connect(&mut app, json!({"speedFactor": 2, "timeScale": 1}));
     // The person's path on the simulator, even from automation.
     run::as_person(&mut app, true, "laser.jog", json!({"dx": 1})).unwrap();
     wait(&mut app, "the jog done", |s| s.state.as_deref() == Some("Idle") && s.pos.is_some_and(|p| p[0] > 0.99));
     run::confirm(&mut app, &mut ticked(Confirm::Start, json!({"ids": [id]})), false).unwrap();
     wait(&mut app, "running", |s| s.job_active());
-    assert_eq!(crate::picks::open(&mut app, &pick), None, "refused while the laser works");
+    assert_eq!(ask_file(&mut app), Value::Null, "refused while the laser works");
     assert!(app.ui.status.contains("Stop or finish the laser job first"), "{}", app.ui.status);
     // Shift+Esc acts whenever the link is open.
     let ctx = context(false);
@@ -364,16 +370,16 @@ fn a_press_counts_where_it_went_down() {
         })
         .expect("the checklist's Start");
     let press = |pressed| egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
-    app.synthetic_frame = true;
+    app.picabia.injected = true;
     frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start), press(true)]);
-    app.synthetic_frame = false;
+    app.picabia.injected = false;
     frame(&mut app, &ctx, vec![press(false)]);
     assert_eq!(app.picabia.laser.checklist.as_ref().and_then(|l| l.press), Some(true), "recorded when it went down");
     // The window's motion buttons read the same: the last press while the window is up.
     app.picabia.laser.open = true;
-    app.synthetic_frame = true;
+    app.picabia.injected = true;
     frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start), press(true)]);
-    app.synthetic_frame = false;
+    app.picabia.injected = false;
     assert_eq!(app.picabia.laser.last_press, Some(true));
     frame(&mut app, &ctx, vec![press(false), egui::Event::PointerMoved(start), press(true)]);
     assert_eq!(app.picabia.laser.last_press, Some(false), "a person's press");
@@ -383,15 +389,16 @@ fn a_press_counts_where_it_went_down() {
 #[test]
 fn a_motion_just_sent_holds_file_dialogs_off() {
     let mut app = app();
-    app.services.pick_open = Some(Box::new(|_| Some("/tmp/x.gcode".into())));
+    let picker = crate::tests_picks::scripted(&mut app);
     connect(&mut app, json!({"speedFactor": 1000, "timeScale": 100}));
-    let pick = crate::FilePick::named("x.gcode");
-    assert!(crate::picks::open(&mut app, &pick).is_some(), "idle: it opens");
+    assert!(!ask_file(&mut app).is_null(), "idle: it opens");
+    picker.cancel();
     run::as_person(&mut app, false, "laser.jog", json!({"dx": 0.1})).unwrap();
-    assert_eq!(crate::picks::open(&mut app, &pick), None, "within a second of the jog, before the status says it moves");
+    assert_eq!(ask_file(&mut app), Value::Null, "within a second of the jog, before the status says it moves");
     app.picabia.laser.last_motion = Some(std::time::Instant::now() - std::time::Duration::from_secs(2));
     wait(&mut app, "idle", |s| s.state.as_deref() == Some("Idle") && !s.stoppable());
-    assert!(crate::picks::open(&mut app, &pick).is_some(), "a while later, idle: it opens");
+    assert!(!ask_file(&mut app).is_null(), "a while later, idle: it opens");
+    picker.cancel();
     app.run("laser.disconnect", json!({})).unwrap();
 }
 

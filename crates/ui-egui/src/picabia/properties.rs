@@ -2,19 +2,21 @@
 //! (`panels::properties::show` calls [`section`]), so modifiers are found from the panel that is
 //! always open in the Essentials workspace.
 //!
-//! The section is the selection's: shown while objects (not only layers) are selected. Its header
-//! looks like the panel's other section headers, with the number of rows and a chevron; a click
-//! collapses it (kept for the session in `PicabiaUi::modifiers_collapsed`). Open, it shows the
+//! The section is the selection's: shown while objects (not only layers) are selected. It is one of
+//! the panel's sections, titled with the number of rows; its disclosure collapses it (kept for the session in `PicabiaUi::modifiers_collapsed`). Open, it shows the
 //! Appearance panel's modifier rows for the selection (`super::appearance::modifier_rows`: eye,
 //! kind and copies, the row's fields when its disclosure is open, the `⋯` menu, the copy count and
 //! Apply; one "Mixed" row when several objects' stacks differ), then "+ Add Modifier", which opens
 //! the grouped Add Modifier menu (`super::add_menu`).
 
-use egui::{Sense, Ui, pos2, vec2};
+use craft::ui::buttons::Button;
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Trigger};
+use craft::ui::menu::Menu;
+use craft::ui::sections::Section;
+use craft::ui::style::Variant;
+use egui::Ui;
 
-use crate::theme::Tokens;
-use crate::widgets::{self, divider};
-use crate::{VectorcraftApp, icons};
+use crate::VectorcraftApp;
 
 /// The selection as a cache key: the document, its revision and the selected objects (their
 /// number and a hash of their ids), without copying the selection.
@@ -74,55 +76,23 @@ pub fn reveal(app: &mut VectorcraftApp) {
     }
 }
 
-/// The Modifiers section and the divider under it, for a selection that can take modifiers.
+/// The Modifiers section, a section of the panel's (its title with the number of rows; its
+/// disclosure collapses it), for a selection that can take modifiers.
 pub fn section(app: &mut VectorcraftApp, ui: &mut Ui) {
     let Some((count, _)) = offer(app, ui.ctx()) else { return };
-    let header = header(ui, count, !app.picabia.modifiers_collapsed);
-    if header.clicked() {
-        app.picabia.modifiers_collapsed = !app.picabia.modifiers_collapsed;
-    }
-    if app.picabia.reveal_modifiers {
-        app.picabia.reveal_modifiers = false;
-        app.picabia.modifiers_collapsed = false;
-        header.scroll_to_me(Some(egui::Align::TOP));
-    }
-    if !app.picabia.modifiers_collapsed {
+    let reveal = std::mem::take(&mut app.picabia.reveal_modifiers);
+    let mut open = reveal || !app.picabia.modifiers_collapsed;
+    let title = if count > 0 { format!("{} ({count})", tl!("Modifiers")) } else { tl!("Modifiers").to_string() };
+    let shown = Section::new(title).open(Bind::bound(&mut open)).show(ui, |ui, _| {
         super::appearance::modifier_rows(app, ui);
         // The physics row, as the Appearance panel shows it: Add Physics is on this section's
         // menu, so its result shows here.
         super::physics::section(app, ui);
-        ui.add_space(4.0);
-        let add = widgets::flat_button(ui, tl!("+ Add Modifier"), ui.available_width()).on_hover_text(tl!("Add a modifier to the selected objects"));
-        egui::Popup::menu(&add).show(|ui| {
-            ui.set_min_width(180.0);
-            super::add_menu::items(app, ui);
-        });
+        let add = Button::new(tl!("+ Add Modifier")).variant(Variant::SECONDARY).tooltip(tl!("Add a modifier to the selected objects")).show(ui);
+        Menu::new(tl!("Add Modifier")).opened_by(&add.response, Trigger::Press).show(ui, |ui, _| super::add_menu::items(app, ui));
+    });
+    app.picabia.modifiers_collapsed = !open;
+    if reveal {
+        shown.response.scroll_to_me(Some(egui::Align::TOP));
     }
-    divider(ui);
-}
-
-/// The header: "Modifiers" as the panel's section headers show it, the number of rows (dim) and a
-/// chevron at the right; a click on it toggles the section.
-fn header(ui: &mut Ui, count: usize, open: bool) -> egui::Response {
-    let t = Tokens::get(ui.ctx());
-    ui.add_space(2.0);
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::click());
-    let painter = ui.painter();
-    let name = tl!("Modifiers");
-    painter.text(pos2(rect.left(), rect.center().y), egui::Align2::LEFT_CENTER, name, egui::FontId::proportional(12.5), t.text_strong);
-    let chevron = egui::Rect::from_center_size(pos2(rect.right() - 7.0, rect.center().y), vec2(12.0, 12.0));
-    icons::paint(ui, if open { "chevron-down" } else { "chevron-right" }, chevron, if resp.hovered() { t.text_strong } else { t.icon });
-    if count > 0 {
-        painter.text(
-            pos2(chevron.left() - 6.0, rect.center().y),
-            egui::Align2::RIGHT_CENTER,
-            count.to_string(),
-            egui::FontId::proportional(11.5),
-            t.text_dim,
-        );
-    }
-    ui.add_space(2.0);
-    let tip = if open { tl!("Hide the modifiers") } else { tl!("Show the modifiers") };
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::DisclosureTriangle, true, open, name));
-    resp.on_hover_text(tip).on_hover_cursor(egui::CursorIcon::PointingHand)
 }

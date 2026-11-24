@@ -5,7 +5,6 @@ use egui::Rect;
 use serde_json::json;
 
 use crate::VectorcraftApp;
-use crate::menus::Item;
 use crate::panels::appearance::show;
 
 /// A selected rectangle with physics settings, and the panel's context after a frame.
@@ -14,8 +13,7 @@ fn with_physics() -> (VectorcraftApp, egui::Context, u64) {
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     let id = app.run("shape.rectangle", json!({"x": 20, "y": 20, "width": 40, "height": 30})).unwrap()["id"].as_u64().unwrap();
     app.run("physics.set", json!({"ids": [id]})).unwrap();
-    let ctx = egui::Context::default();
-    crate::theme::install_fonts(&ctx);
+    let ctx = crate::testing::ui_context();
     frame(&mut app, &ctx, vec![]);
     (app, ctx, id)
 }
@@ -119,8 +117,7 @@ fn no_row_without_settings() {
     let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.run("shape.rectangle", json!({"x": 20, "y": 20, "width": 40, "height": 30})).unwrap();
-    let ctx = egui::Context::default();
-    crate::theme::install_fonts(&ctx);
+    let ctx = crate::testing::ui_context();
     assert!(!texts(&mut app, &ctx).iter().any(|s| s.starts_with("Physics:")));
 }
 
@@ -128,8 +125,9 @@ fn no_row_without_settings() {
 fn object_physics_menu_runs_its_commands() {
     let tree = crate::menus::menu_tree();
     let object = tree.iter().find(|(title, _)| *title == "Object").map(|(_, items)| items).unwrap();
-    let Some(Item::Sub(_, physics)) = object.iter().find(|i| matches!(i, Item::Sub("Physics", _))) else { panic!("no Object ▸ Physics") };
-    let ids: Vec<&str> = physics.iter().filter_map(|i| if let Item::Cmd(_, id, _) = i { Some(*id) } else { None }).collect();
+    let Some(physics) = super::menu::submenu(object, "Physics") else { panic!("no Object ▸ Physics") };
+    let physics = super::menu::commands(physics);
+    let ids: Vec<&str> = physics.iter().map(|(_, id, _)| id.as_str()).collect();
     assert_eq!(
         ids,
         [
@@ -152,13 +150,11 @@ fn object_physics_menu_runs_its_commands() {
     let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     let id = app.run("shape.rectangle", json!({"x": 20, "y": 20, "width": 40, "height": 30})).unwrap()["id"].as_u64().unwrap();
-    for item in physics {
-        if let Item::Cmd(label, cmd, p) = item {
-            let p = if p.is_null() { json!({}) } else { p.clone() };
-            // Pinning needs anchors chosen on a soft object (tested in the engine).
-            if !matches!(*cmd, "physics.clear" | "physics.pin") {
-                app.run(cmd, p).unwrap_or_else(|e| panic!("{label}: {e}"));
-            }
+    for (label, cmd, p) in &physics {
+        let p = if p.is_null() { json!({}) } else { p.clone() };
+        // Pinning needs anchors chosen on a soft object (tested in the engine).
+        if !matches!(cmd.as_str(), "physics.clear" | "physics.pin") {
+            app.run(cmd, p).unwrap_or_else(|e| panic!("{label}: {e}"));
         }
     }
     let settings = app.run("physics.get", json!({"id": id})).unwrap()["settings"].clone();

@@ -1,19 +1,26 @@
 //! PICABIA: outlines on an object's modifier copies: the hover highlight on every copy, and a
 //! faint outline on a selected object's copies when View › Show Modifier Copy Outlines is on (the
 //! selection box stays on the object itself); a
-//! selected stencil's tie bars and repeat cell; the selected object's modifier handles.
+//! selected stencil's tie bars and repeat cell; the selected object's modifier handles. The
+//! outlines are the framework's canvas outlines (`selection::show` and `selection::hover` call in);
+//! the handles are a canvas control of their own ([`ModifierHandles`]).
 
 use std::sync::{Arc, Mutex, PoisonError};
 
+use craft::behavior::CanvasView;
+use craft::ui::canvas::{CanvasSpace, canvas_space};
+use craft::ui::canvas_controls::SelectionOutline;
+use craft::ui::contract::{Access, Common, Component, Cx, Input, MeasureCx, PaintUi, Props as _, Role, Show as _};
+use craft::ui::style::{ComponentStyle, DataColor, Metrics, StyleCx};
 use egui::{Pos2, Stroke, vec2};
-use vectorcraft_doc::{Document, Node, NodeId, NodeKind, SymbolBoxes};
+use vectorcraft_doc::{Document, Node, NodeKind, SymbolBoxes};
+use vectorcraft_engine::DocState;
 use vectorcraft_geom::{Affine, BezPath};
 use vectorcraft_modifiers::Guide;
 
-use super::Xf;
-use super::outline::{c32, node_outline, stroke_path};
+use super::outline::{c32, node_outline};
 use crate::VectorcraftApp;
-use crate::theme::Tokens;
+use crate::picabia_ui::Tokens;
 
 /// The most copies outlined for one object in a frame (as picabia-craft capped them).
 pub(super) const MAX_OUTLINES: usize = 2_000;
@@ -73,46 +80,55 @@ fn shaped_outlines(doc: &Document, n: &Node) -> Vec<BezPath> {
     out
 }
 
-/// Stroke `outline` on each of `n`'s copies.
-pub(super) fn copy_outlines(p: &egui::Painter, doc: &Document, n: &Node, outline: &BezPath, xf: &Xf, stroke: Stroke) {
-    for bp in copy_outline_paths(doc, n, outline) {
-        stroke_path(p, &bp, xf, stroke);
+/// `outline` (the hovered object's own) with its copies' outlines added (seam in `selection::hover`).
+pub(super) fn with_copies(doc: &Document, n: &Node, mut outline: BezPath) -> BezPath {
+    for bp in copy_outline_paths(doc, n, &outline) {
+        outline.extend(bp);
     }
+    outline
 }
 
 /// The most path elements the stencil markers draw for one object (a fine lattice has many).
 const MAX_MARKER_ELEMENTS: usize = 50_000;
 
-/// [`selected_outlines`] for each selected object but point type, none when the selection is too
-/// `big` to outline. The outline is only moved onto the copies, so it is made only when `copies`.
-pub(super) fn selection_outlines(p: &egui::Painter, doc: &Document, objects: &[NodeId], symbols: &SymbolBoxes, xf: &Xf, big: bool, copies: bool) {
+/// What each selected object but point type shows besides its own outline (seam in
+/// `selection::show`, after the selection's outlines): a faint outline on its copies when View ›
+/// Show Modifier Copy Outlines is on, and, for a stencil with a computed sheet, its tie bars (thin,
+/// in the selection colour) and the repeat cell its tile is cut from (dashed). Nothing when the
+/// selection is `big` (too many points to outline).
+pub(super) fn selection_outlines(app: &VectorcraftApp, ui: &mut egui::Ui, st: &DocState, rect: egui::Rect, big: bool) {
     if big {
         return;
     }
-    for (id, n) in objects.iter().filter_map(|id| Some((id, doc.node(*id)?))) {
-        if !matches!(n.kind, NodeKind::Text(ref tx) if matches!(tx.kind, vectorcraft_doc::TextKind::Point)) {
-            let outline = if copies { node_outline(n, symbols) } else { BezPath::new() };
-            selected_outlines(p, doc, n, &outline, xf, c32(doc.layer_color(*id)), copies);
+    let (doc, copies) = (&st.doc, app.ui.view.modifier_copy_outlines);
+    let symbols = doc.symbol_boxes();
+    for (id, n) in st.selection.objects.iter().filter_map(|id| Some((id, doc.node(*id)?))) {
+        if matches!(n.kind, NodeKind::Text(ref tx) if matches!(tx.kind, vectorcraft_doc::TextKind::Point)) {
+            continue;
+        }
+        let color = c32(doc.layer_color(*id));
+        let (faint, ties, cells) = selected_outlines(doc, n, &symbols, copies);
+        if !faint.is_empty() {
+            SelectionOutline::faint("Modifier copies", &faint).color(DataColor::new(color.gamma_multiply(0.4))).show_at(ui, rect);
+        }
+        if !ties.is_empty() {
+            SelectionOutline::faint("Stencil ties", &ties).color(DataColor::new(color.gamma_multiply(0.85))).show_at(ui, rect);
+        }
+        if !cells.is_empty() {
+            SelectionOutline::dashed("Stencil repeat cell", &cells).color(DataColor::new(color)).show_at(ui, rect);
         }
     }
 }
 
-/// What a selected object shows besides its own outline: a faint outline on its copies when
-/// `copies` (View › Show Modifier Copy Outlines), and, for a stencil with a computed sheet, its
-/// tie bars (thin, in the selection colour) and the repeat cell its tile is cut from (dashed).
-pub(super) fn selected_outlines(p: &egui::Painter, doc: &Document, n: &Node, outline: &BezPath, xf: &Xf, color: egui::Color32, copies: bool) {
-    if copies {
-        copy_outlines(p, doc, n, outline, xf, Stroke::new(1.0, color.gamma_multiply(0.4)));
-    }
+/// A selected object's extra outlines: its copies' (when `copies`), its stencil's tie bars and its
+/// stencil's repeat cells.
+pub(super) fn selected_outlines(doc: &Document, n: &Node, symbols: &SymbolBoxes, copies: bool) -> (Vec<BezPath>, Vec<BezPath>, Vec<BezPath>) {
+    let faint = if copies { copy_outline_paths(doc, n, &node_outline(n, symbols)) } else { Vec::new() };
+    let (mut ties, mut cells) = (Vec::new(), Vec::new());
     for (bp, dashed) in stencil_markers(doc, n).iter() {
-        if *dashed {
-            for pts in super::outline::to_screen_path(bp, xf) {
-                p.extend(egui::Shape::dashed_line(&pts, Stroke::new(1.0, color), 4.0, 3.0));
-            }
-        } else {
-            stroke_path(p, bp, xf, Stroke::new(1.0, color.gamma_multiply(0.85)));
-        }
+        if *dashed { cells.push(bp.clone()) } else { ties.push(bp.clone()) }
     }
+    (faint, ties, cells)
 }
 
 /// How many sheets' markers are kept (one per selected stencil, a few selected at once).
@@ -170,9 +186,65 @@ const CIRCLE_STEPS: usize = 96;
 /// `Session::picabia_mod_handles`): dashed guides, round knobs ringed in the selection colour
 /// (greyed when a field they set is bound), larger under the pointer, and the readout of the one
 /// dragged or hovered. Every size is in screen points, so the handles keep their size at any zoom.
-pub(super) fn modifier_handles(app: &VectorcraftApp, p: &egui::Painter, xf: &Xf, view: vectorcraft_engine::ViewInfo) {
-    let Some(v) = app.session.picabia_mod_handles(view) else { return };
-    let t = Tokens::get(p.ctx());
+pub(super) fn modifier_handles(app: &VectorcraftApp, ui: &mut egui::Ui, space: &CanvasSpace) {
+    let Some(v) = app.session.picabia_mod_handles(app.view_info()) else { return };
+    let t = Tokens::get(ui.ctx());
+    ModifierHandles { common: Common::new(), handles: &v, t }.label("Modifier handles").show_at(ui, space.view.rect);
+}
+
+/// The look of [`ModifierHandles`]: none of its own (its sizes are the handles' screen points).
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
+struct HandlesStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+}
+
+/// The selected object's modifier handles, painted over the canvas: no pointer, key or accessibility
+/// node (the engine's tooling takes their presses, as it takes the selection's handles').
+#[derive(craft::ui::contract::Component, craft::ui::contract::Props)]
+#[component(canvas_control, content_painter)]
+struct ModifierHandles<'a> {
+    #[common]
+    common: Common,
+    handles: &'a vectorcraft_engine::cmd::picabia_modifier::ModHandlesView,
+    t: Tokens,
+}
+
+impl Component for ModifierHandles<'_> {
+    const ROLE: Role = Role::GRAPHICS_OBJECT;
+    const ALT_ROLES: &'static [Role] = &[Role::None];
+    const INPUT: Input = Input::Display;
+    const PARTS: bool = false;
+    const STOPS: bool = false;
+    const OVERLAYS: bool = false;
+    type Style = HandlesStyle;
+    type Output = egui::Response;
+
+    fn style(_: &StyleCx<'_>, _: ModifierHandlesStyleKey) -> HandlesStyle {
+        HandlesStyle { metrics: Metrics::new() }
+    }
+
+    fn measure(&mut self, _: &MeasureCx<'_, Self>) -> egui::Vec2 {
+        egui::Vec2::ZERO
+    }
+
+    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        let Some(space) = canvas_space(&cx.env) else { return };
+        let painter = ui.content_painter(cx);
+        paint_handles(&painter.painter, &space.view, self.handles, &self.t);
+    }
+
+    fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
+        access.role(Role::None);
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> egui::Response {
+        cx.response.clone()
+    }
+}
+
+/// Paints the handles `v` under `xf`.
+fn paint_handles(p: &egui::Painter, xf: &CanvasView, v: &vectorcraft_engine::cmd::picabia_modifier::ModHandlesView, t: &Tokens) {
     let guide = Stroke::new(1.0, t.selection.gamma_multiply(0.8));
     for g in &v.guides {
         match g {
@@ -273,10 +345,9 @@ mod tests {
         app.ui.view.rulers = false;
         app.canvas.worker_started = true; // every frame on this thread
         app.run("shape.rectangle", json!({"x": 50, "y": 50, "width": 60, "height": 40})).unwrap();
-        let ctx = egui::Context::default();
+        let ctx = crate::testing::ui_context();
         let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), ..Default::default() };
-        let mut out = ctx.run_ui(raw, |ui| super::super::show(&mut app, ui));
-        out.textures_delta.clear();
+        crate::testing::part_frame(&mut app, &ctx, raw, super::super::show);
         let key = app.canvas.key.clone().unwrap();
         // (Not compared with the process-wide `generation()`: tests running beside this one move it.)
         let (_, opts) = app.canvas.shown.clone().unwrap();

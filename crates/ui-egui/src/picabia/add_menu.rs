@@ -9,11 +9,15 @@
 //! them), Color recolours the copies, Make turns the object into something else (a stencil sheet,
 //! a physics body).
 
+use craft::ui::contract::{MemoProps, Show as _};
+use craft::ui::display::Divider;
+use craft::ui::menu::{Menu, MenuItem};
+use craft::ui::primitives::Glyph;
+use craft::ui::style::{UiTokens, rgba_color};
 use egui::{Color32, Painter, Rect, Stroke, Ui, pos2, vec2};
 use serde_json::json;
 
 use crate::VectorcraftApp;
-use crate::theme::Tokens;
 
 /// One entry: its label, the kind `modifier.add` adds and the screen or color preset it fills in.
 #[derive(Clone, Copy, Debug)]
@@ -76,31 +80,28 @@ pub fn params(item: &AddItem) -> serde_json::Value {
     }
 }
 
-/// The grouped entries, inside a popup or submenu: each group's name, dim, then its entries; a
-/// click adds that modifier to the selected objects (`modifier.add`, one undo step) and closes the
-/// menu. Make ends with Physics ▸ Add Physics.
+/// The grouped entries, the body of a framework `Menu` or submenu: each group's name as a heading,
+/// then its entries; a pick adds that modifier to the selected objects (`modifier.add`, one undo
+/// step), and the menu closes. Make ends with Physics ▸ Add Physics.
 pub fn items(app: &mut VectorcraftApp, ui: &mut Ui) {
-    let t = Tokens::get(ui.ctx());
     for (i, (group, entries)) in GROUPS.iter().enumerate() {
         if i > 0 {
-            ui.separator();
+            Divider::horizontal().show(ui);
         }
-        ui.label(egui::RichText::new(tl!(group)).size(11.0).color(t.text_dim));
+        MenuItem::heading(tl!(group)).show(ui);
         for item in *entries {
-            if ui.button(tl!(item.label)).clicked() {
-                if let Err(e) = app.run("modifier.add", params(item)) {
-                    app.ui.status = e;
-                }
-                ui.close();
+            if MenuItem::new(tl!(item.label)).show(ui).ran
+                && let Err(e) = app.run("modifier.add", params(item))
+            {
+                app.ui.status = e;
             }
         }
     }
-    ui.menu_button(tl!("Physics"), |ui| {
-        if ui.button(tl!("Add Physics")).clicked() {
-            if let Err(e) = app.run("physics.set", json!({"props": {"enabled": true}})) {
-                app.ui.status = e;
-            }
-            ui.close();
+    Menu::submenu_row(ui, tl!("Physics"), |ui, _| {
+        if MenuItem::new(tl!("Add Physics")).show(ui).ran
+            && let Err(e) = app.run("physics.set", json!({"props": {"enabled": true}}))
+        {
+            app.ui.status = e;
         }
     });
 }
@@ -116,5 +117,16 @@ pub fn paint_glyph(painter: &Painter, rect: Rect, color: Color32, bg: Color32) {
         let r = Rect::from_min_size(min, vec2(side, side));
         painter.rect_filled(r, 1.5, bg);
         painter.rect_stroke(r, 1.5, stroke, egui::StrokeKind::Inside);
+    }
+}
+
+/// [`paint_glyph`] as an icon the framework's buttons show (the task bar's Modifiers button, the
+/// canvas badge), in the button's colour over the panel's.
+#[derive(MemoProps)]
+pub struct ModifiersGlyph;
+
+impl Glyph for ModifiersGlyph {
+    fn paint(&self, painter: &Painter, tokens: &UiTokens, rect: Rect, color: Color32, _mirrored: bool) {
+        paint_glyph(painter, rect, color, rgba_color(tokens.color.surface.panel));
     }
 }

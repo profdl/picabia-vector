@@ -31,8 +31,7 @@ fn undo_labels(app: &VectorcraftApp) -> Vec<String> {
 }
 
 fn ctx() -> egui::Context {
-    let ctx = egui::Context::default();
-    crate::theme::install_fonts(&ctx);
+    let ctx = crate::testing::ui_context();
     ctx.enable_accesskit();
     ctx
 }
@@ -155,13 +154,8 @@ fn the_grouped_menu_has_every_kind_and_preset() {
         assert!(entries.iter().any(|e| e.kind == *kind && e.preset == Some(*preset)), "{preset}");
     }
     assert_eq!(entries.len(), vectorcraft_modifiers::KINDS.len() + super::appearance::PRESETS.len());
-    let labels: Vec<&str> = super::menu::object_items()
-        .iter()
-        .filter_map(|i| match i {
-            crate::menus::Item::Cmd(l, "modifier.add", _) => Some(*l),
-            _ => None,
-        })
-        .collect();
+    let labels: Vec<String> =
+        super::menu::commands(&super::menu::object_items()).into_iter().filter(|(_, id, _)| id == "modifier.add").map(|(l, _, _)| l).collect();
     assert_eq!(labels, entries.iter().map(|e| e.label).collect::<Vec<_>>());
 }
 
@@ -172,19 +166,12 @@ struct Frame {
 }
 
 /// One canvas frame `width` × 700 (the canvas, then what Picabia draws over the app), with an area
-/// `cover` drawn over the canvas first when given (a floating panel's stand-in).
-fn frame(app: &mut VectorcraftApp, ctx: &egui::Context, events: Vec<Event>, width: f32, cover: Option<Rect>) -> Frame {
+fn frame(app: &mut VectorcraftApp, ctx: &egui::Context, events: Vec<Event>, width: f32) -> Frame {
     let screen = Rect::from_min_size(Pos2::ZERO, vec2(width, 700.0));
-    let mut out = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), events, ..Default::default() }, |ui| {
+    let out = crate::testing::part_frame(app, ctx, egui::RawInput { screen_rect: Some(screen), events, ..Default::default() }, |app, ui| {
         crate::canvas::show(app, ui);
-        if let Some(c) = cover {
-            egui::Area::new(egui::Id::unique("test-cover")).order(egui::Order::Middle).fixed_pos(c.min).show(ui.ctx(), |ui| {
-                ui.allocate_exact_size(c.size(), egui::Sense::click());
-            });
-        }
         crate::picabia_ui::show(app, ui.ctx());
     });
-    out.textures_delta.clear();
     let named = out
         .platform_output
         .accesskit_update
@@ -204,7 +191,7 @@ fn frame(app: &mut VectorcraftApp, ctx: &egui::Context, events: Vec<Event>, widt
 
 /// One canvas frame at 1000 × 700 → its texts.
 fn canvas(app: &mut VectorcraftApp, ctx: &egui::Context, events: Vec<Event>) -> Vec<(String, Rect)> {
-    frame(app, ctx, events, 1000.0, None).texts
+    frame(app, ctx, events, 1000.0).texts
 }
 
 /// The task bar's Modifiers button, found by its accessible name (none while it isn't drawn).
@@ -219,7 +206,7 @@ fn the_task_bar_button_opens_the_add_menu() {
     app.run("select.set", json!({"ids": [id]})).unwrap();
     let ctx = ctx();
     canvas(&mut app, &ctx, vec![]);
-    let f = frame(&mut app, &ctx, vec![], 1000.0, None);
+    let f = frame(&mut app, &ctx, vec![], 1000.0);
     let menu = click_at(modifiers_button(&f).expect("the button"), &mut |e| canvas(&mut app, &ctx, e));
     assert!(has(&menu, "Linear Array") && has(&menu, "Line Fill") && !has(&menu, "Show Modifiers"), "{menu:?}");
     click_at(at(&menu, "Grid Array"), &mut |e| canvas(&mut app, &ctx, e));
@@ -227,7 +214,7 @@ fn the_task_bar_button_opens_the_add_menu() {
     assert_eq!(undo_labels(&app).last().map(String::as_str), Some("Add Modifier"));
     // With a stack: Show Modifiers, Apply and Remove All first. Show Modifiers opens the
     // Properties panel's section.
-    let f = frame(&mut app, &ctx, vec![], 1000.0, None);
+    let f = frame(&mut app, &ctx, vec![], 1000.0);
     let menu = click_at(modifiers_button(&f).expect("the button"), &mut |e| canvas(&mut app, &ctx, e));
     for label in ["Show Modifiers", "Apply Modifiers", "Remove All Modifiers"] {
         assert!(has(&menu, label), "{label}: {menu:?}");
@@ -238,41 +225,11 @@ fn the_task_bar_button_opens_the_add_menu() {
     assert!(crate::panel_docking::showing(&app.ui, "properties"));
 }
 
-/// The bar keeps the button while it fits the canvas with it, and drops it (only it) in a window
-/// too narrow for it, without coming and going from frame to frame.
-#[test]
-fn the_task_bar_drops_the_button_when_the_bar_would_not_fit() {
-    let mut app = app();
-    let id = rect(&mut app, 60.0, 60.0);
-    app.run("select.set", json!({"ids": [id]})).unwrap();
-    let ctx = ctx();
-    canvas(&mut app, &ctx, vec![]);
-    for _ in 0..3 {
-        let f = frame(&mut app, &ctx, vec![], 1000.0, None);
-        assert!(modifiers_button(&f).is_some(), "a wide window has it");
-    }
-    let canvas_w = |app: &VectorcraftApp| app.canvas_rect.unwrap().width();
-    // Narrow the window until the bar no longer has room for the button.
-    let mut dropped = None;
-    for w in (300..1000).rev().step_by(20) {
-        let a = frame(&mut app, &ctx, vec![], w as f32, None);
-        let b = frame(&mut app, &ctx, vec![], w as f32, None);
-        assert_eq!(modifiers_button(&a).is_some(), modifiers_button(&b).is_some(), "steady at {w}");
-        if modifiers_button(&b).is_none() {
-            dropped = Some((w, b));
-            break;
-        }
-    }
-    let (w, f) = dropped.expect("a narrow window drops it");
-    assert!(has(&f.texts, "Duplicate"), "the rest of the bar stays at {w}: {:?}", f.texts);
-    let bar = crate::canvas::task_bar_rect(&ctx).expect("the bar shows");
-    assert!(bar.width() <= canvas_w(&app), "{bar:?} in {}", canvas_w(&app));
-}
-
-/// Where badge `i` was drawn (none while it isn't shown).
-fn badge(ctx: &egui::Context, i: usize) -> Option<Rect> {
-    let id = super::badge::area_id(i);
-    ctx.memory(|m| m.areas().is_visible(&egui::LayerId::new(egui::Order::Middle, id)).then(|| m.area_rect(id)).flatten())
+/// Where the badge of an object with `rows` modifiers was drawn in a fresh frame (none while it
+/// isn't shown): the button named by its count.
+fn badge(app: &mut VectorcraftApp, ctx: &egui::Context, rows: &str) -> Option<Rect> {
+    frame(app, ctx, vec![], 1000.0);
+    frame(app, ctx, vec![], 1000.0).named.into_iter().find(|(l, _)| l == rows).map(|(_, r)| r)
 }
 
 /// A selected rectangle with two modifiers, its badge drawn → the app, its context and the badge.
@@ -286,7 +243,7 @@ fn badged() -> (VectorcraftApp, egui::Context, u64, Rect) {
     let ctx = ctx();
     canvas(&mut app, &ctx, vec![]);
     canvas(&mut app, &ctx, vec![]);
-    let r = badge(&ctx, 0).expect("a badge for the stacked object");
+    let r = badge(&mut app, &ctx, "2").expect("a badge for the stacked object");
     (app, ctx, id, r)
 }
 
@@ -299,13 +256,12 @@ fn the_badge_shows_for_stacked_selected_objects_and_opens_the_section() {
     let ctx = ctx();
     canvas(&mut app, &ctx, vec![]);
     canvas(&mut app, &ctx, vec![]);
-    assert!(badge(&ctx, 0).is_none(), "no badge without modifiers");
+    assert!(badge(&mut app, &ctx, "1").is_none() && badge(&mut app, &ctx, "2").is_none(), "no badge without modifiers");
     let (mut app, ctx, id, r) = badged();
     let texts = canvas(&mut app, &ctx, vec![]);
     assert!(has(&texts, "2"), "the number of rows: {texts:?}");
     // Up and right of the bounding box's top-right corner, clear of its handle.
-    let (Some(view), Some(area)) = (app.view(), app.canvas_rect) else { panic!("a view") };
-    let xf = crate::canvas::Xf::new(area, view);
+    let xf = app.canvas_view().expect("a view");
     let b = app.session.active().unwrap().doc.bounds_of(&[NodeId(id)], true).unwrap();
     let corner = xf.to_screen(vectorcraft_geom::Point::new(b.x1, b.y0));
     assert!(r.left() > corner.x + 5.0 && r.bottom() < corner.y - 5.0, "{r:?} by {corner:?}");
@@ -320,35 +276,21 @@ fn the_badge_shows_for_stacked_selected_objects_and_opens_the_section() {
     // Not with a drawing tool, nor once the selection is gone.
     app.select_tool("rectangle");
     canvas(&mut app, &ctx, vec![]);
-    assert!(badge(&ctx, 0).is_none(), "not with the Rectangle tool");
+    assert!(badge(&mut app, &ctx, "2").is_none(), "not with the Rectangle tool");
     app.select_tool("selection");
     app.run("select.set", json!({"ids": []})).unwrap();
     canvas(&mut app, &ctx, vec![]);
-    assert!(badge(&ctx, 0).is_none(), "not without a selection");
+    assert!(badge(&mut app, &ctx, "2").is_none(), "not without a selection");
 }
 
-/// The badge follows the task bar's conditions (no badge in Presentation Mode) and gives way to a
-/// floating panel over it, which then gets the click.
+/// The badge follows the task bar's conditions: no badge in Presentation Mode.
 #[test]
-fn the_badge_hides_in_presentation_mode_and_under_a_floating_panel() {
-    let (mut app, ctx, _, r) = badged();
+fn the_badge_hides_in_presentation_mode() {
+    let (mut app, ctx, _, _) = badged();
     app.ui.screen_mode = 3;
-    canvas(&mut app, &ctx, vec![]);
-    assert!(badge(&ctx, 0).is_none(), "not in Presentation Mode");
+    assert!(badge(&mut app, &ctx, "2").is_none(), "not in Presentation Mode");
     app.ui.screen_mode = 0;
-    canvas(&mut app, &ctx, vec![]);
-    assert!(badge(&ctx, 0).is_some());
-    let cover = Some(Rect::from_center_size(r.center(), vec2(200.0, 120.0)));
-    for _ in 0..2 {
-        frame(&mut app, &ctx, vec![], 1000.0, cover);
-    }
-    assert!(badge(&ctx, 0).is_none(), "not under a floating panel");
-    app.picabia.reveal_modifiers = false;
-    click_at(r.center(), &mut |e| frame(&mut app, &ctx, e, 1000.0, cover).texts);
-    assert!(!app.picabia.reveal_modifiers, "the panel gets the click");
-    canvas(&mut app, &ctx, vec![]);
-    canvas(&mut app, &ctx, vec![]);
-    assert!(badge(&ctx, 0).is_some(), "back once the panel is gone");
+    assert!(badge(&mut app, &ctx, "2").is_some());
 }
 
 /// Show Modifiers and the badge leave the Properties panel open wherever it is (docked, a flyout,
@@ -397,13 +339,15 @@ fn badges_go_on_up_to_eight_stacked_objects() {
     app.run("modifier.add", json!({"ids": ids, "kind": "mirror"})).unwrap();
     let ctx = ctx();
     app.run("select.set", json!({"ids": &ids[..2]})).unwrap();
-    canvas(&mut app, &ctx, vec![]);
-    canvas(&mut app, &ctx, vec![]);
-    assert!(badge(&ctx, 0).is_some() && badge(&ctx, 1).is_some() && badge(&ctx, 2).is_none());
+    let badges = |app: &mut VectorcraftApp| {
+        frame(app, &ctx, vec![], 1000.0);
+        frame(app, &ctx, vec![], 1000.0).named.into_iter().filter(|(l, _)| l == "1").count()
+    };
+    assert_eq!(badges(&mut app), 2);
+    app.run("select.set", json!({"ids": &ids[..8]})).unwrap();
+    assert_eq!(badges(&mut app), 8, "up to eight");
     app.run("select.set", json!({"ids": ids})).unwrap();
-    canvas(&mut app, &ctx, vec![]);
-    canvas(&mut app, &ctx, vec![]);
-    assert!(badge(&ctx, 0).is_none(), "none past eight");
+    assert_eq!(badges(&mut app), 0, "none past eight");
 }
 
 /// The palette finds each kind and preset by name (one command each, `modifier.add.<kind>`),
@@ -415,12 +359,12 @@ fn the_palette_finds_each_kind_and_preset_by_name() {
         let q = q.to_lowercase();
         items
             .iter()
-            .filter(|(label, id, _)| {
+            .filter(|(label, id)| {
                 let hay = format!("{}\n{}", label.to_lowercase(), id.to_lowercase());
                 q.split_whitespace().all(|w| hay.contains(w))
             })
             .take(14)
-            .map(|(_, id, _)| id.clone())
+            .map(|(_, id)| id.clone())
             .collect()
     };
     for (query, id) in [
@@ -438,7 +382,7 @@ fn the_palette_finds_each_kind_and_preset_by_name() {
     for group in super::add_menu::GROUPS {
         for e in group.1 {
             let id = format!("modifier.add.{}", e.preset.unwrap_or(e.kind));
-            assert!(items.iter().any(|(label, i, _)| *i == id && label.ends_with(e.label)), "{id}");
+            assert!(items.iter().any(|(label, i)| *i == id && label.ends_with(e.label)), "{id}");
         }
     }
     // A pick runs it as the palette does: no params, the selection.

@@ -6,8 +6,8 @@
 use egui::Ui;
 use serde_json::{Value, json};
 
-use crate::theme::Tokens;
-use crate::widgets;
+use crate::picabia_ui::Tokens;
+use crate::picabia_ui::widgets;
 
 /// The most steps per axis (as `vectorcraft-stencil`'s `MAX_LADDER_STEPS`).
 pub const MAX_STEPS: u32 = 12;

@@ -5,8 +5,8 @@ use egui::Color32;
 use serde_json::Value;
 
 use crate::i18n;
+use crate::picabia_ui::Tokens;
 use crate::picabia_ui::{f, s, strings};
-use crate::theme::Tokens;
 
 /// The running (or last) job.
 #[derive(Clone, Debug, Default, PartialEq)]

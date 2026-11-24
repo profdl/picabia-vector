@@ -15,7 +15,7 @@ use vectorcraft_doc::Document;
 use vectorcraft_engine::cmd::picabia_physics::session;
 
 use crate::VectorcraftApp;
-use crate::theme::Tokens;
+use crate::picabia_ui::Tokens;
 
 /// The bar's widest, points.
 const BAR: egui::Vec2 = egui::Vec2::new(560.0, 40.0);
@@ -34,7 +34,7 @@ pub fn show(app: &mut VectorcraftApp, ctx: &egui::Context) {
     if session::tick(&mut app.session, dt) {
         ctx.request_repaint();
     }
-    if let (Some(state), Some(canvas)) = (session::bar_state(&app.session), app.canvas_rect) {
+    if let (Some(state), Some(canvas)) = (session::bar_state(&app.session), app.canvas_view().map(|v| v.rect)) {
         // Bottom centre of the canvas, as wide as it fits.
         let width = BAR.x.min(canvas.width() - 24.0).max(200.0);
         let at = pos2(canvas.center().x, canvas.bottom() - 12.0);
@@ -175,12 +175,12 @@ fn paint_glyph(p: &egui::Painter, r: Rect, g: Glyph, col: Color32) {
 /// Pins on the canvas (PIC31.8): a ring where a point is pinned in place, a dot where it is attached
 /// to another body; on the session's bodies where they are now, else on the selected soft objects.
 fn pin_markers(app: &VectorcraftApp, ctx: &egui::Context) {
-    let (Some(rect), Some(view)) = (app.canvas_rect, app.view()) else { return };
+    let Some(xf) = app.canvas_view() else { return };
+    let rect = xf.rect;
     let marks = vectorcraft_engine::cmd::picabia_physics::pins::markers(&app.session);
     if marks.is_empty() {
         return;
     }
-    let xf = crate::canvas::Xf::at(rect, view, app.canvas_ui_zoom);
     let t = Tokens::get(ctx);
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Background, Id::unique("picabia_physics_pins"))).with_clip_rect(rect);
     for (p, attached) in marks.iter().take(512) {

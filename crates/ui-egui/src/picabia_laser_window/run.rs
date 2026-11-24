@@ -30,9 +30,10 @@ use serde_json::{Value, json};
 use super::Action;
 use super::status::{self, Status};
 use crate::VectorcraftApp;
+use crate::picabia_ui::Tokens;
+use crate::picabia_ui::widgets;
 use crate::picabia_ui::{button, readable, wrapped};
-use crate::theme::{Tokens, semibold};
-use crate::widgets;
+use crate::theme::semibold;
 
 /// What the checklist confirms.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -236,7 +237,19 @@ pub fn may_arm(automated: bool, sim: bool) -> bool {
 /// injected, a control request being answered, or an accessibility client's action (AccessKit's
 /// `Click` and the rest: any screen-reader or UI-automation client can send them).
 pub fn automated_frame(app: &VectorcraftApp, ctx: &Context) -> bool {
-    app.synthetic_frame || app.ui.answering_control || ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::AccessKitActionRequest(_))))
+    injected(app, ctx) || app.ui.answering_control || ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::AccessKitActionRequest(_))))
+}
+
+/// The pass carries input the control channel injected.
+#[cfg(not(test))]
+fn injected(_app: &VectorcraftApp, ctx: &Context) -> bool {
+    craft::ui::runtime::windows::WindowHost::of(ctx).injected_pass()
+}
+
+/// [`injected`], or a test says the frame is (`PicabiaUi::injected`).
+#[cfg(test)]
+fn injected(app: &VectorcraftApp, ctx: &Context) -> bool {
+    app.picabia.injected || craft::ui::runtime::windows::WindowHost::of(ctx).injected_pass()
 }
 
 /// The checklist's Start (or Resume) was pressed: arm the laser for this one command and run it.
