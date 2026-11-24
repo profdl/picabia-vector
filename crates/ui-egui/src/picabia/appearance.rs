@@ -972,9 +972,12 @@ fn object_picker(ui: &mut Ui, choices: Vec<(NodeId, String)>, current: &str, fid
         None if current.is_empty() => tl!("Choose an object").to_string(),
         None => tl!("Not available").to_string(),
     };
-    let labels: Vec<&str> = choices.iter().map(|(_, name)| name.as_str()).collect();
+    // With no object chosen (or one no longer there) the select shows why, as its first entry.
+    let listed = current_id.is_some_and(|t| choices.iter().any(|(c, _)| *c == t));
+    let mut labels: Vec<&str> = if listed { vec![] } else { vec![shown.as_str()] };
+    labels.extend(choices.iter().map(|(_, name)| name.as_str()));
     let picked = widgets::dropdown_names(ui, fid, &shown, &labels, 120.0)?;
-    let (t, _) = choices.get(picked)?;
+    let (t, _) = choices.get(if listed { picked } else { picked.checked_sub(1)? })?;
     (Some(*t) != current_id).then(|| json!(t.0.to_string()))
 }
 

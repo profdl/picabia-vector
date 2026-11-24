@@ -425,9 +425,9 @@ pub fn show(app: &mut VectorcraftApp, ui: &mut Ui) {
     let (mut acts, mut pressed) = (Vec::new(), None);
     let mut picabia = crate::picabia::params_panel::Section::of(app); // PICABIA: Picabia's parameters (numbers and texts modifier fields bind to)
     Stack::new().fill().footer(|ui, _| pressed = footer(ui, &states)).show(ui, |ui, _| {
+        picabia.show(ui); // PICABIA: above the table, which fills the panel
         data_set_bar(ui, &rows.sets, &mut acts);
         variable_table(ui, &rows.vars, sort, &states, &mut acts);
-        picabia.show(ui); // PICABIA
         Text::new(tl!("Data Sets")).role(TypeRole::Heading).show(ui);
         data_set_list(ui, &rows.sets, &mut acts);
     });

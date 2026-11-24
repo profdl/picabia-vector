@@ -22,7 +22,7 @@ use egui::{Context, CornerRadius, Id, Sense, Ui, vec2};
 use serde_json::{Value, json};
 
 pub use job::{JobState, Source};
-pub use run::{Checklist, Confirm, stop_shortcut};
+pub use run::{Checklist, Confirm, note_stop_shortcut, stop_shortcut};
 pub use status::Status;
 
 use crate::VectorcraftApp;

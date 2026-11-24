@@ -80,7 +80,7 @@ pub fn show(app: &mut VectorcraftApp, ui: &mut egui::Ui, space: &CanvasSpace) {
     let mut clicked = false;
     for (i, (_, b, rows)) in badges.iter().enumerate() {
         let text = rows.to_string();
-        let width = 6.0 + 12.0 + 4.0 + 8.0 * text.len() as f32 + 6.0;
+        let width = 48.0 + 8.0 * text.len() as f32;
         let Some(r) = place(&xf.quad(*b), width).filter(|r| canvas.contains_rect(*r)) else { continue };
         let tip = crate::i18n::trn(crate::i18n::current(), *rows as u64, "{n} modifier — click to show", "{n} modifiers — click to show");
         let shown = Button::new(text)

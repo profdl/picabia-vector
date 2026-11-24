@@ -53,9 +53,9 @@ fn the_rows_sit_in_the_appearance_list_with_the_copies_and_apply() {
     let (mut app, ctx, _) = arrayed();
     let shown = frame(&mut app, &ctx, vec![]);
     let y = |label: &str| shown.iter().find(|(s, _)| s == label).map(|(_, r)| r.center().y).unwrap_or_else(|| panic!("no {label:?} in {shown:?}"));
-    // Between the fills and strokes and the object's Opacity row.
+    // A block of their own above the panel's list (its object row, fills, strokes and Opacity).
     let row = y("Linear Array  ×5");
-    assert!(y("Fill:") < row && row < y("Opacity:"), "{shown:?}");
+    assert!(row < y("Rectangle") && row < y("Fill:") && row < y("Opacity:"), "{shown:?}");
     assert!(shown.iter().any(|(s, _)| s == "5 copies"));
     assert!(shown.iter().any(|(s, _)| s == "Apply"));
 }
@@ -313,7 +313,8 @@ fn the_screen_row_shows_the_fields_its_tone_uses() {
     set_pstate(&ctx, &format!("pc-open-{a}-m2"), true);
     let shown = texts(&mut app, &ctx);
     for want in ["Screen", "Spot", "Round", "Lines/inch", "Angle", "Quality", "Tone", "Fill colour", "Invert"] {
-        assert!(shown.iter().any(|s| s == want), "{want} in {shown:?}");
+        let undo: Vec<String> = app.session.doc().unwrap().history.undo.iter().map(|e| e.label.clone()).collect();
+        assert!(shown.iter().any(|s| s == want), "{want} in {shown:?} {undo:?}");
     }
     for hidden in ["Amount", "Image"] {
         assert!(!shown.iter().any(|s| s == hidden), "{hidden} hidden in {shown:?}");

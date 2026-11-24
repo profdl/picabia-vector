@@ -56,6 +56,7 @@ fn ticked(kind: Confirm, params: Value) -> Checklist {
 fn frame(app: &mut VectorcraftApp, ctx: &egui::Context, events: Vec<egui::Event>) -> Vec<egui::epaint::ClippedShape> {
     let raw =
         egui::RawInput { events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0))), ..Default::default() };
+    run::note_stop_shortcut(app, &raw);
     let mut out = ctx.run_ui(raw, |ui| {
         run::stop_shortcut(app, ui.ctx());
         crate::picabia_ui::show(app, ui.ctx());
@@ -309,7 +310,9 @@ fn no_file_dialog_opens_over_a_working_laser_and_motion_goes_the_persons_way() {
     // Shift+Esc acts whenever the link is open.
     let ctx = context(false);
     let key = egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::SHIFT };
-    let mut out = ctx.run_ui(egui::RawInput { events: vec![key], ..Default::default() }, |ui| run::stop_shortcut(&mut app, ui.ctx()));
+    let raw = egui::RawInput { events: vec![key], ..Default::default() };
+    run::note_stop_shortcut(&app, &raw);
+    let mut out = ctx.run_ui(raw, |ui| run::stop_shortcut(&mut app, ui.ctx()));
     out.textures_delta.clear();
     wait(&mut app, "stopped", |s| s.job.as_ref().is_some_and(|j| j.state == "stopped") && !s.stopping);
     app.run("laser.disconnect", json!({})).unwrap();

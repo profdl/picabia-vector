@@ -456,8 +456,21 @@ mod tests {
         let mut app = app();
         app.run("camera.connect", json!({"ip": "sim"})).unwrap();
         wait_streaming(&mut app);
-        // The test host shows no folder picker: the capture is cancelled, nothing is fired.
-        let v = app.run(CAMERA_CAPTURE, json!({})).unwrap();
-        assert_eq!(v["cancelled"], true);
+        // No capture folder yet: the folder picker asks first, and a cancel fires nothing.
+        let picker = crate::tests_picks::scripted(&mut app);
+        assert_eq!(app.run(CAMERA_CAPTURE, json!({})).unwrap(), json!({"pending": "fileDialog"}));
+        picker.cancel();
+        let ctx = app.ui_ctx.clone().unwrap();
+        crate::tests_picks::poll(&mut app, &ctx);
+        assert!(app.picabia.camera.last.is_none(), "nothing captured");
+        // A folder picked: it is kept and the capture goes there.
+        let dir = std::env::temp_dir().join(format!("picabia-camera-folder-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(app.run(CAMERA_CAPTURE, json!({})).unwrap(), json!({"pending": "fileDialog"}));
+        picker.answer(&[&dir.to_string_lossy()]);
+        crate::tests_picks::poll(&mut app, &ctx);
+        assert_eq!(app.run("camera.status", json!({})).unwrap()["folder"], json!(dir.to_string_lossy()));
+        assert_eq!(app.picabia.camera.last.as_ref().map(|l| l.0), Some(true), "captured into the folder");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -91,11 +91,22 @@ fn properties_shows_the_modifiers_section_between_appearance_and_align() {
     let texts = props(&mut app, &ctx, vec![]);
     assert!(has(&texts, "Copies") && has(&texts, "Offset X"), "{texts:?}");
     crate::panels::set_pstate(&ctx, &format!("pc-open-{id}-m1"), false);
-    // The header collapses the section, and opens it again.
-    let texts = click_at(at(&texts, "Modifiers"), &mut |e| props(&mut app, &ctx, e));
-    assert!(app.picabia.modifiers_collapsed && has(&texts, "Modifiers") && !has(&texts, "Linear Array  ×6") && !has(&texts, "+ Add Modifier"));
-    click_at(at(&texts, "Modifiers"), &mut |e| props(&mut app, &ctx, e));
-    assert!(!app.picabia.modifiers_collapsed);
+    // The header collapses the section, and opens it again (the panel as the window shows it).
+    let mut panel = crate::tests::panel_harness::Panel::new(app, crate::panels::properties::show);
+    panel.room(vec2(300.0, 4000.0));
+    panel.frame();
+    assert!(panel.shows("+ Add Modifier"));
+    panel.app().picabia.modifiers_collapsed = true;
+    panel.frame();
+    // The body closes over the section's animation.
+    panel.advance(1.0);
+    panel.frame();
+    assert!(panel.shows("Modifiers") && !panel.shows("+ Add Modifier"), "collapsed: the header alone");
+    panel.app().picabia.modifiers_collapsed = false;
+    panel.frame();
+    panel.advance(1.0);
+    panel.frame();
+    assert!(panel.shows("+ Add Modifier"));
 }
 
 #[test]
@@ -204,23 +215,24 @@ fn the_task_bar_button_opens_the_add_menu() {
     let mut app = app();
     let id = rect(&mut app, 60.0, 60.0);
     app.run("select.set", json!({"ids": [id]})).unwrap();
-    let ctx = ctx();
-    canvas(&mut app, &ctx, vec![]);
-    let f = frame(&mut app, &ctx, vec![], 1000.0);
-    let menu = click_at(modifiers_button(&f).expect("the button"), &mut |e| canvas(&mut app, &ctx, e));
-    assert!(has(&menu, "Linear Array") && has(&menu, "Line Fill") && !has(&menu, "Show Modifiers"), "{menu:?}");
-    click_at(at(&menu, "Grid Array"), &mut |e| canvas(&mut app, &ctx, e));
-    assert_eq!(kinds(&app, id), ["gridArray"]);
-    assert_eq!(undo_labels(&app).last().map(String::as_str), Some("Add Modifier"));
+    // The canvas as the window shows it (the framework's fixture), its controls found by name.
+    let mut canvas = crate::tests::panel_harness::Panel::new(app, crate::canvas::show);
+    canvas.room(vec2(1000.0, 700.0));
+    canvas.frame();
+    canvas.click("Modifiers");
+    assert!(canvas.shows("Linear Array") && canvas.shows("Line Fill") && !canvas.shows("Show Modifiers"));
+    canvas.click_menu_item("Grid Array");
+    assert_eq!(kinds(&canvas.app(), id), ["gridArray"]);
+    assert_eq!(undo_labels(&canvas.app()).last().map(String::as_str), Some("Add Modifier"));
     // With a stack: Show Modifiers, Apply and Remove All first. Show Modifiers opens the
     // Properties panel's section.
-    let f = frame(&mut app, &ctx, vec![], 1000.0);
-    let menu = click_at(modifiers_button(&f).expect("the button"), &mut |e| canvas(&mut app, &ctx, e));
+    canvas.click("Modifiers");
     for label in ["Show Modifiers", "Apply Modifiers", "Remove All Modifiers"] {
-        assert!(has(&menu, label), "{label}: {menu:?}");
+        assert!(canvas.shows(label), "{label}");
     }
-    app.picabia.modifiers_collapsed = true;
-    click_at(at(&menu, "Show Modifiers"), &mut |e| canvas(&mut app, &ctx, e));
+    canvas.app().picabia.modifiers_collapsed = true;
+    canvas.click_menu_item("Show Modifiers");
+    let app = canvas.app();
     assert!(app.picabia.reveal_modifiers && !app.picabia.modifiers_collapsed);
     assert!(crate::panel_docking::showing(&app.ui, "properties"));
 }

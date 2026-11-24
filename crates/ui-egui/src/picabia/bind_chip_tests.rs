@@ -254,18 +254,14 @@ fn the_variables_panel_lists_parameters_and_adds_them() {
     assert!(texts.iter().any(|s| s == "copies"), "{texts:?}");
     let nodes = f.nodes(&mut app, variables);
     assert!(nodes.iter().any(|n| n.0 == egui::accesskit::Role::Slider), "a number parameter has a slider");
-    let add = f.at(&mut app, variables, &|l| l == "+ Number");
-    f.click(&mut app, add, variables);
-    let names: Vec<Value> = app.run("param.list", json!({})).unwrap()["parameters"].as_array().unwrap().iter().map(|p| p["name"].clone()).collect();
-    assert_eq!(names, vec![json!("copies"), json!("param1")]);
+    // The panel as the window shows it (the framework's fixture), its controls found by name.
+    let mut panel = crate::tests::panel_harness::Panel::new(app, variables);
+    assert!(panel.in_view("+ Number"));
+    panel.click("+ Number");
+    let names: Vec<Value> =
+        panel.app().run("param.list", json!({})).unwrap()["parameters"].as_array().unwrap().iter().map(|p| p["name"].clone()).collect();
+    assert_eq!(names, vec![json!("copies"), json!("param1")], "{:?}", panel.app().ui.status);
     // Typing a value in the parameter's field sets it, and the bound object follows.
-    let field = f.at(&mut app, variables, &|l| l == "copies");
-    f.click(&mut app, field, variables);
-    let select_all = Event::Key { key: egui::Key::A, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND };
-    let enter = Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
-    f.run(&mut app, vec![select_all], variables);
-    f.run(&mut app, vec![Event::Text("9".into())], variables);
-    f.run(&mut app, vec![enter], variables);
-    f.run(&mut app, vec![], variables);
-    assert_eq!(list(&mut app, id)["instances"], json!(9));
+    panel.type_into("copies", "9");
+    assert_eq!(list(&mut panel.app(), id)["instances"], json!(9));
 }

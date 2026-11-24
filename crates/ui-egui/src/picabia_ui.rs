@@ -85,6 +85,8 @@ pub const PHYSICS_SETTINGS: &str = "ui.physicsSettings";
 /// Picabia's UI state (not the document).
 #[derive(Default)]
 pub struct PicabiaUi {
+    /// A Shift+Esc press the window's raw input held, for the laser's stop (`picabia_laser_window::run`).
+    pub stop_pressed: std::cell::Cell<bool>,
     /// Tests: the frames carry injected input (`picabia_laser_window::run::automated_frame`).
     #[cfg(test)]
     pub injected: bool,

@@ -1,5 +1,5 @@
 //! PICABIA: the Parameters section of VectorCraft's Variables panel (`panels::variables::show`
-//! shows a [`Section`] between its Variables and Data Sets lists).
+//! shows a [`Section`] at the top of its body, above the variable table that fills the panel).
 //!
 //! One row per document parameter: its name (editable: a rename carries the bindings that read
 //! it), a slider and a field for a number (the slider drags live and commits one undo step on
@@ -7,7 +7,8 @@
 //! set is active, what that gave, and a bin. "+ Number" and "+ Text" add one. Every edit is a
 //! `param.*` command, so an agent does the same (`docs/picabia/parameters.md`).
 
-use craft::ui::contract::{Bind, Props as _, Show as _};
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft::ui::layout_components::Row;
 use craft::ui::value_drag::Slider;
 use egui::Ui;
 use serde_json::json;
@@ -109,8 +110,15 @@ impl Section {
         }
     }
 
-    /// The rows.
+    /// The rows, in a container of the framework's, so the panel's stack measures them and lays its
+    /// lists out around them.
     pub fn show(&mut self, ui: &mut Ui) {
+        if self.snap.is_some() {
+            craft::ui::layout_components::Stack::new().fill_width().show(ui, |ui, _| self.rows(ui));
+        }
+    }
+
+    fn rows(&mut self, ui: &mut Ui) {
         let Some(snap) = &self.snap else { return };
         let acts = &mut self.acts;
         let t = Tokens::get(ui.ctx());
@@ -122,6 +130,8 @@ impl Section {
             let name = p.name.clone();
             let resolved = snap.scope.get(&name);
             let from_data = resolved.is_some_and(|r| r.from_dataset);
+            // A number's slider goes on a line of its own under the row: (shown, min, max, step).
+            let mut slider_line = None;
             ui.horizontal(|ui| {
                 if let Some(new) = widgets::text_field_named(ui, ("pc-param-name", &name), Some(tl!("Parameter name")), Some(&name), NAME_W, 1)
                     && !new.is_empty()
@@ -134,13 +144,7 @@ impl Section {
                             Some(Ok(v)) => v,
                             _ => *value,
                         };
-                        let mut slider = Slider::new(Bind::given(shown), *min..=*max).label(name.clone()).id_salt(("pc-param-slider", &name));
-                        if *step > 0.0 {
-                            slider = slider.step(*step);
-                        }
-                        // A value from the data set is the data set's: change it there.
-                        let edit = slider.enabled(!from_data).show(ui);
-                        acts.push(Act::Slide { name: name.clone(), edit, min: *min, max: *max });
+                        slider_line = Some((shown, *min, *max, *step));
                         let typed = ui
                             .add_enabled_ui(!from_data, |ui| {
                                 widgets::plain_field_named(ui, ("pc-param-value", &name), Some(&name), shown, "", decimals(*step), VALUE_W)
@@ -168,6 +172,16 @@ impl Section {
                     acts.push(Act::Run("param.remove", json!({"name": name})));
                 }
             });
+            if let Some((shown, min, max, step)) = slider_line {
+                let mut slider =
+                    Slider::new(Bind::given(shown), min..=max).label(format!("{name} {}", tl!("slider"))).id_salt(("pc-param-slider", &name));
+                if step > 0.0 {
+                    slider = slider.step(step);
+                }
+                // A value from the data set is the data set's: change it there.
+                let edit = slider.enabled(!from_data).show(ui);
+                acts.push(Act::Slide { name: name.clone(), edit, min, max });
+            }
             // Its data source: a VectorCraft variable whose value in the active data set it takes.
             ui.horizontal(|ui| {
                 ui.add_space(NAME_W + ui.spacing().item_spacing.x);
@@ -190,7 +204,7 @@ impl Section {
             }
             ui.add_space(2.0);
         }
-        ui.horizontal(|ui| {
+        Row::new().show(ui, |ui, _| {
             let full = snap.params.list.len() >= vectorcraft_modifiers::params::MAX_PARAMS;
             if crate::picabia_ui::button(ui, tl!("+ Number"), false, !full) {
                 acts.push(Act::Run("param.add", json!({"name": fresh_name(&snap.params), "type": "number", "value": 0})));

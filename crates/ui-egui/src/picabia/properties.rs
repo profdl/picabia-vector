@@ -11,6 +11,7 @@
 
 use craft::ui::buttons::Button;
 use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Trigger};
+use craft::ui::display::{Shade, Text};
 use craft::ui::menu::Menu;
 use craft::ui::sections::Section;
 use craft::ui::style::Variant;
@@ -82,15 +83,22 @@ pub fn section(app: &mut VectorcraftApp, ui: &mut Ui) {
     let Some((count, _)) = offer(app, ui.ctx()) else { return };
     let reveal = std::mem::take(&mut app.picabia.reveal_modifiers);
     let mut open = reveal || !app.picabia.modifiers_collapsed;
-    let title = if count > 0 { format!("{} ({count})", tl!("Modifiers")) } else { tl!("Modifiers").to_string() };
-    let shown = Section::new(title).open(Bind::bound(&mut open)).show(ui, |ui, _| {
-        super::appearance::modifier_rows(app, ui);
-        // The physics row, as the Appearance panel shows it: Add Physics is on this section's
-        // menu, so its result shows here.
-        super::physics::section(app, ui);
-        let add = Button::new(tl!("+ Add Modifier")).variant(Variant::SECONDARY).tooltip(tl!("Add a modifier to the selected objects")).show(ui);
-        Menu::new(tl!("Add Modifier")).opened_by(&add.response, Trigger::Press).show(ui, |ui, _| super::add_menu::items(app, ui));
-    });
+    let shown = Section::new(tl!("Modifiers"))
+        .open(Bind::bound(&mut open))
+        .controls(move |ui, _| {
+            // The number of rows, dim, at the header's end.
+            if count > 0 {
+                Text::new(count.to_string()).shade(Shade::Muted).show(ui);
+            }
+        })
+        .show(ui, |ui, _| {
+            super::appearance::modifier_rows(app, ui);
+            // The physics row, as the Appearance panel shows it: Add Physics is on this section's
+            // menu, so its result shows here.
+            super::physics::section(app, ui);
+            let add = Button::new(tl!("+ Add Modifier")).variant(Variant::SECONDARY).tooltip(tl!("Add a modifier to the selected objects")).show(ui);
+            Menu::new(tl!("Add Modifier")).opened_by(&add.response, Trigger::Press).show(ui, |ui, _| super::add_menu::items(app, ui));
+        });
     app.picabia.modifiers_collapsed = !open;
     if reveal {
         shown.response.scroll_to_me(Some(egui::Align::TOP));

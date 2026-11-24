@@ -489,11 +489,24 @@ pub fn bar(app: &mut VectorcraftApp, ctx: &Context, st: &Status) {
 /// panel's own window, the Laser window closed), whenever the link is open, whatever its status
 /// says. Runs before the shortcuts and dialogs see the key (seams in `handle_input_once` and the
 /// floating panels' body). Esc alone never stops a job.
+/// Notes a Shift+Esc press in a window's raw input (seam in `VectorcraftApp::raw_input`, before the
+/// framework and egui read the keys), for [`stop_shortcut`] to act on in the frame.
+pub fn note_stop_shortcut(app: &VectorcraftApp, raw: &egui::RawInput) {
+    let shift_esc = |e: &egui::Event| matches!(e, egui::Event::Key { key: Key::Escape, pressed: true, repeat: false, modifiers, .. } if *modifiers == Modifiers::SHIFT);
+    if raw.events.iter().any(shift_esc) {
+        app.picabia.stop_pressed.set(true);
+    }
+}
+
 pub fn stop_shortcut(app: &mut VectorcraftApp, ctx: &Context) {
     if !super::link_open(app) {
         return;
     }
-    if ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::Escape)) {
+    // The framework routes Escape to the window's Cancel and takes the press out of the pass's
+    // events: the press is noted from the window's raw input, before the framework reads it
+    // ([`note_stop_shortcut`]).
+    let pressed = app.picabia.stop_pressed.take();
+    if pressed || ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::Escape)) {
         stop_now(app);
         app.status(tl!("Laser stopped"));
     }

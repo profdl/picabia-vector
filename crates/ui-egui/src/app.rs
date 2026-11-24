@@ -329,6 +329,7 @@ impl VectorcraftApp {
 
     /// A window's raw input, before egui and the keys read it (the host's `raw_input_hook`).
     pub fn raw_input(&self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        crate::picabia_laser_window::note_stop_shortcut(self, raw); // PICABIA: Shift+Esc stops the laser, before the keys are read
         crate::type_editing::keep_layout_text(self, ctx, raw);
     }
 
