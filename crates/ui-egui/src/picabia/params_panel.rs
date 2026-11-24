@@ -77,7 +77,7 @@ fn decimals(step: f64) -> usize {
 /// What the section does once it is drawn: its commands, and its sliders' edits.
 enum Act {
     Run(&'static str, serde_json::Value),
-    Slide { name: String, edit: craft::ui::contract::EditResponse<f64>, min: f64, max: f64 },
+    Slide { name: String, edit: Box<craft::ui::contract::EditResponse<f64>>, min: f64, max: f64 },
 }
 
 /// The Parameters section: read from the document before the panel draws (the panel's body can't
@@ -100,7 +100,7 @@ impl Section {
                 Act::Run(cmd, params) => run(app, cmd, params),
                 Act::Slide { name, edit, min, max } => {
                     // The slider drags live and commits one undo step on release.
-                    apply_edits(app, &edit, EditPath::Preview, |app, v, phase| {
+                    apply_edits(app, &*edit, EditPath::Preview, |app, v, phase| {
                         if v.is_finite() {
                             crate::panels::live_run(app, "Set Parameter", "param.set", json!({"name": name, "value": v.clamp(min, max)}), phase);
                         }
@@ -180,7 +180,7 @@ impl Section {
                 }
                 // A value from the data set is the data set's: change it there.
                 let edit = slider.enabled(!from_data).show(ui);
-                acts.push(Act::Slide { name: name.clone(), edit, min, max });
+                acts.push(Act::Slide { name: name.clone(), edit: Box::new(edit), min, max });
             }
             // Its data source: a VectorCraft variable whose value in the active data set it takes.
             ui.horizontal(|ui| {

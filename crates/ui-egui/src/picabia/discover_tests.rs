@@ -205,11 +205,6 @@ fn canvas(app: &mut VectorcraftApp, ctx: &egui::Context, events: Vec<Event>) -> 
     frame(app, ctx, events, 1000.0).texts
 }
 
-/// The task bar's Modifiers button, found by its accessible name (none while it isn't drawn).
-fn modifiers_button(f: &Frame) -> Option<Pos2> {
-    f.named.iter().find(|(l, _)| l == "Modifiers").map(|(_, r)| r.center())
-}
-
 #[test]
 fn the_task_bar_button_opens_the_add_menu() {
     let mut app = app();
