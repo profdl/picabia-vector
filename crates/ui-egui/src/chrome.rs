@@ -117,7 +117,8 @@ fn leading(ui: &mut Ui, app: &mut VectorcraftApp) {
 /// first, before the menus narrow.
 fn trailing(ui: &mut Ui, app: &mut VectorcraftApp) {
     let safe = vectorcraft_plugins::safe_mode::active();
-    for t in Trailing::SHOWN.into_iter().filter(|t| safe || *t != Trailing::Safe).filter(|t| crate::picabia::SHOWS_DISCORD || *t != Trailing::Discord) {
+    for t in Trailing::SHOWN.into_iter().filter(|t| safe || *t != Trailing::Safe).filter(|t| crate::picabia::SHOWS_DISCORD || *t != Trailing::Discord)
+    {
         // PICABIA: no VectorCraft Discord
         match t.rank() {
             Some(rank) => {
