@@ -8,6 +8,8 @@ use craft::keymap::CommandRef;
 use craft::ui::bars::{BarItem, BarItems};
 use craft::ui::buttons::{IconButton, PopupMark, ToggleButton};
 use craft::ui::contract::{Bind, PopupKind, Props as _, Show as _, ShowContainer as _, Trigger};
+use craft::ui::display::Divider;
+use craft::ui::layout_components::Row;
 use craft::ui::menu::{Menu, MenuItem, PanelRow};
 use craft::ui::runtime::commands::{CommandState, CommandStates};
 use craft::ui::text::NumberField;
@@ -304,7 +306,7 @@ fn bar_items(buttons: impl Iterator<Item = Button>) -> BarItems {
 /// Align panel's Align To says (the key object while there is one), as its own buttons do (#789),
 /// and the selected artboards with the Artboard tool chosen.
 pub(crate) fn align_buttons(_app: &mut VectorcraftApp, ui: &mut Ui) {
-    ui.horizontal(|ui| {
+    Row::new().show(ui, |ui, _| {
         for (icon, b) in align_icons() {
             command_button(ui, bar_glyph(b).unwrap_or(icon), b);
         }
@@ -332,7 +334,7 @@ pub(crate) fn button_enabled(app: &VectorcraftApp, b: &Button) -> bool {
 pub(crate) fn control_bar_strip(app: &mut VectorcraftApp, ui: &mut Ui) {
     let (icon, name) = align_to_icon_name(shown_align_to(app), key_is_anchor(app));
     let distributes = if on_artboards(app) { artboards_distribute(app) } else { objects_aligned(app) > 1 };
-    ui.horizontal(|ui| {
+    Row::new().show(ui, |ui, _| {
         bar_items(align_icons().map(|(_, b)| b)).show(ui);
         let button = IconButton::new(IconId::new(icon))
             .label(tl!("Align To:"))
@@ -496,15 +498,15 @@ pub(crate) fn run_align_to(app: &mut VectorcraftApp, v: AlignTo) -> Result<Value
 /// Spacing with its value and Align To. The buttons are commands, so their state and clicks come
 /// from the command layer ([`button_enabled`], [`run_button`]).
 pub fn show(app: &mut VectorcraftApp, ui: &mut Ui) {
-    crate::panels::section(tl!("Align Objects:")).show(ui, |ui, _| {
-        ui.horizontal(|ui| {
+    crate::panels::subheading(tl!("Align Objects:")).show(ui, |ui, _| {
+        Row::new().show(ui, |ui, _| {
             for (icon, b) in align_icons() {
                 command_button(ui, icon, b);
             }
         });
     });
-    crate::panels::section(tl!("Distribute Objects:")).show(ui, |ui, _| {
-        ui.horizontal(|ui| {
+    crate::panels::subheading(tl!("Distribute Objects:")).show(ui, |ui, _| {
+        Row::new().show(ui, |ui, _| {
             for (icon, b) in distribute_icons() {
                 command_button(ui, icon, b);
             }
@@ -513,6 +515,7 @@ pub fn show(app: &mut VectorcraftApp, ui: &mut Ui) {
     if part_hidden(app, HIDE_OPTIONS) {
         return;
     }
+    Divider::horizontal().show(ui);
     // The Distribute Spacing value is sent while there is a key object or a key guide (#2143), or
     // for artboards while Align to Artboard is chosen.
     let spacing = app.ui.align_spacing;
@@ -521,8 +524,8 @@ pub fn show(app: &mut VectorcraftApp, ui: &mut Ui) {
     let lengths = crate::canvas::general_lengths(app);
     let min_spacing = spacing_min(app);
     let mut edited = None;
-    crate::panels::section(tl!("Distribute Spacing:")).show(ui, |ui, _| {
-        ui.horizontal(|ui| {
+    crate::panels::subheading(tl!("Distribute Spacing:")).show(ui, |ui, _| {
+        Row::new().show(ui, |ui, _| {
             command_button(ui, "dc-dist-vspace", Button::Spacing("vertical"));
             command_button(ui, "dc-dist-hspace", Button::Spacing("horizontal"));
             // The value is UI state, not a document edit: a landed value is assigned.
@@ -536,10 +539,10 @@ pub fn show(app: &mut VectorcraftApp, ui: &mut Ui) {
     if let Some(v) = edited {
         app.ui.align_spacing = v;
     }
-    crate::panels::section(tl!("Align To:")).show(ui, |ui, _| {
+    crate::panels::subheading(tl!("Align To:")).show(ui, |ui, _| {
         // With one object selected the buttons align it to the artboard, and Align To shows Artboard.
         let anchor = key_is_anchor(app);
-        ui.horizontal(|ui| {
+        Row::new().show(ui, |ui, _| {
             for (id, v) in ALIGN_TO_COMMANDS {
                 let (icon, _) = align_to_icon_name(v, anchor);
                 ToggleButton::command(CommandRef::new(id)).icon(IconId::new(icon)).icon_only().show(ui);

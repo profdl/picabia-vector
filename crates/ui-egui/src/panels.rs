@@ -58,11 +58,11 @@ use std::sync::Arc;
 
 use craft::behavior::{IconId, Mixed};
 use craft::color_ui::ui::{ChannelRule, HarmonyCommand};
-use craft::color_ui::ui::{PaintChip, PairWell, SwatchPair, SwatchPairOutput, SwatchPalette, Well};
+use craft::color_ui::ui::{PaintChip, PaintChipSize, PairWell, SwatchPair, SwatchPairOutput, SwatchPalette, Well};
 use craft::keymap::CommandRef;
 use craft::theme::Srgba;
 use craft::theme::variant::Tone;
-use craft::ui::buttons::IconButton;
+use craft::ui::buttons::{IconButton, Link, PopupMark};
 use craft::ui::choice::SwatchSpacing;
 use craft::ui::contract::{Bind, CommandSet as _, Entry, ListDrag, PopupKind, Props as _, Show as _, ShowContainer as _, Sizing, Trigger};
 use craft::ui::display::{Divider, Shade, Text};
@@ -682,8 +682,8 @@ pub struct PaintPopover {
     mixer: bool,
 }
 
-/// The Fill (or `stroke`) chip of the Control bar and the Properties panel: the proxy's paint, "?"
-/// when the selected objects' paints differ, the stroke as a ring. A click brings that proxy
+/// The Fill (or `stroke`) chip of the Control bar and the Properties panel: a small square of the proxy's paint, "?"
+/// when the selected objects' paints differ, the stroke as a ring, as production drew both. A click brings that proxy
 /// forward and opens a popover with the Swatches panel; Shift-click (or the popover's toggle)
 /// shows the Color panel's mixer instead.
 pub(crate) fn paint_chip(app: &mut VectorcraftApp, ui: &mut Ui, stroke: bool) {
@@ -696,7 +696,13 @@ pub(crate) fn paint_chip(app: &mut VectorcraftApp, ui: &mut Ui, stroke: bool) {
     };
     let shown = if mixed { Mixed::Mixed } else { Mixed::Same(well_paint(&paint, &|_| None)) };
     let fallback = srgba(&paint.color().unwrap_or(Color::BLACK));
-    let out = PaintChip::new(label, Bind::given(shown), fallback).popover(false).ring(stroke).tooltip(tip).show(ui);
+    let out = PaintChip::new(label, Bind::given(shown), fallback)
+        .chip_size(PaintChipSize::Compact)
+        .popover(false)
+        .ring(stroke)
+        .popup_mark(PopupMark::Menu)
+        .tooltip(tip)
+        .show(ui);
     let chip = out.edit.response.id;
     if let Some(mods) = out.clicked {
         app.run("paint.toggleActive", json!({ "fill": !stroke })).ok();
@@ -901,6 +907,18 @@ pub(crate) fn section<'a>(title: impl Into<Label>) -> Section<'a> {
     Section::fixed(title).strength(HeaderStrength::Normal)
 }
 
+/// A sub-heading over a group of a panel's controls ("Align Objects:", "Shape Modes:"): label text in the normal ink,
+/// with no rule, as the reference app drew them.
+pub(crate) fn subheading<'a>(title: impl Into<Label>) -> Section<'a> {
+    Section::fixed(title).strength(HeaderStrength::Subheading)
+}
+
+/// A link to a control's options ("Stroke", "Opacity:", "Character:"): underlined in the normal ink, as the reference
+/// app drew them; links that leave the panel's subject (a file, more results) keep the accent.
+pub(crate) fn option_link(label: impl Into<Label>) -> Link {
+    Link::new(label).tone(Tone::Neutral)
+}
+
 /// The empty state of a panel with nothing to show: `icon` over the title and the message,
 /// centred in the panel.
 pub(crate) fn empty_state(ui: &mut Ui, icon: &'static str, title: &str, body: &str) {
@@ -977,6 +995,8 @@ mod tests_color_wheel_gamut;
 #[cfg(test)]
 mod tests_color_wheel_harmony;
 #[cfg(test)]
+mod tests_color_wheel_opacity;
+#[cfg(test)]
 mod tests_color_wheel_vision;
 #[cfg(test)]
 mod tests_constrain;
@@ -990,6 +1010,8 @@ mod tests_freeform;
 mod tests_links;
 #[cfg(test)]
 mod tests_maskview;
+#[cfg(test)]
+mod tests_panel_rows;
 #[cfg(test)]
 mod tests_script_console;
 #[cfg(test)]
