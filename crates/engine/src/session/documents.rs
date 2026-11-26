@@ -24,8 +24,6 @@ impl Session {
         });
         // Clicks find an image's own fills and strokes where their effects draw them.
         vectorcraft_doc::hit::set_image_paint(vectorcraft_render::effects::image_paint);
-        // PICABIA: clicks, hover and marquees find an object by its modifier copies.
-        vectorcraft_doc::hit::set_copies(vectorcraft_render::picabia::hit_hooks());
         // Direct Selection picks and outlines the parts of a dynamic symbol's instance where the
         // effects of the instance's fill and stroke draw them.
         vectorcraft_doc::hit::set_instance_row_art(vectorcraft_render::effects::add_instance_row_effects_to_parts);
@@ -63,7 +61,8 @@ impl Session {
             histories_seen: None,
             tool: vectorcraft_tools::create("selection"),
             lender: None,
-            back_to_bucket: false,
+            back_to_painter: None,
+            stop_pick: None,
             held_input: Default::default(),
             input_count: 0,
             edit_started_by: None,
@@ -73,6 +72,9 @@ impl Session {
             selection_at_lend: None,
             lent_selection: None,
             last_selection_tool: None,
+            last_part_selection_tool: None,
+            press_lent: None,
+            hover_lent: None,
             last_view: ViewInfo::default(),
             preview_memo: Default::default(),
             depth: 0,
@@ -107,6 +109,8 @@ impl Session {
             profile_dir: None,
             color_settings_file: None,
             plugin_dir: None,
+            plugin_loads: Default::default(),
+            plugin_loads_in_background: false,
             scripts_dir: None,
             metadata_templates_dir: None,
             new_doc_profile_dir: None,
@@ -122,6 +126,7 @@ impl Session {
             journal_note: Default::default(),
             note_depth: 1,
             journal_query: false,
+            defaults_only_ran: None,
             explicit_undo_group: None,
             batch_stash: None,
             batch_steps: None,
@@ -141,6 +146,7 @@ impl Session {
             recovery: Default::default(),
             in_tool_actions: false,
             settled_warnings: None,
+            held_interaction: None,
             previewing: false,
             decoded_images: Default::default(),
             envelope_defaults: None,
@@ -162,7 +168,6 @@ impl Session {
             link_stamps: Default::default(),
             link_scan: None,
             global_edit_options: Default::default(),
-            picabia: Default::default(), // PICABIA: Picabia session state.
             select_similar: crate::cmd::SIMILAR[0].0,
             keyboard_text: false,
             toasts: Default::default(),
@@ -215,6 +220,7 @@ impl Session {
             return;
         }
         self.press_type_selection = None;
+        self.press_lent = None;
         let view = self.last_view;
         // The edit the tool computes on another thread and the input held for it belong to the
         // document being left. The switch goes on whatever they did, as for the deactivation.
@@ -421,6 +427,8 @@ impl Session {
         st.opened_as_tab = old.opened_as_tab;
         st.revision = old.revision + 1;
         st.format = old.format;
+        // What scripts' commands did to the document stays until the person saves it.
+        st.by_script = old.by_script.clone();
         st.save_options = old.save_options.clone();
         // The remembered artboard pick follows the artboards it named when the file read back has
         // the artboards the document had at the save, in the same order and with the same ids (a

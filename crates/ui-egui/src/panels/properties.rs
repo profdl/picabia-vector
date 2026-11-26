@@ -7,6 +7,7 @@ use craft::ui::layout_components::{Grid, Row, Stack};
 use craft::ui::patterns::panels::Inspector;
 
 use craft::ui::runtime::commands::CommandRef;
+use craft::ui::sections::HeaderStrength;
 use egui::Ui;
 use serde_json::json;
 use vectorcraft_doc::{LiveShape, Node, NodeKind};
@@ -37,7 +38,7 @@ pub(crate) struct QuickAction {
 /// The panel for what is selected: the selection's kind as its heading, then its sections (Edit
 /// Artboards' with the Artboard tool, the document's with nothing selected).
 pub fn show(app: &mut VectorcraftApp, ui: &mut Ui) {
-    let inspector = Inspector::new(tl!("Properties")).empty(tl!("No document open"));
+    let inspector = Inspector::new(tl!("Properties")).title_strength(HeaderStrength::Quiet).empty(tl!("No document open"));
     let Some(key) = target_key(app) else {
         inspector.show(ui, |_, _| {});
         return;
@@ -116,7 +117,7 @@ fn body(app: &mut VectorcraftApp, ui: &mut Ui, first: Option<&Node>, n_sel: usiz
     appearance_section::appearance_section(app, ui);
     crate::picabia::properties::section(app, ui); // PICABIA: the Modifiers section (PIC3.4)
     section(tl!("Align")).show(ui, |ui, _| {
-        Row::new().show(ui, |ui, _| {
+        Row::new().wrap(true).show(ui, |ui, _| {
             super::align::align_buttons(app, ui);
             // The rest (Distribute Objects, Distribute Spacing, Align To) is the Align panel's.
             more_options(ui, "align", tl!("More Align options"));

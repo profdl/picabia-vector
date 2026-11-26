@@ -44,16 +44,6 @@ vectorcraft-plugins = { workspace = true }
 vectorcraft-affinity = { workspace = true }
 craft-cdr = { workspace = true }
 vectorcraft-scriptcheck = { workspace = true }
-# PICABIA: modifier stacks (cmd/picabia_modifier.rs).
-vectorcraft-modifiers = { workspace = true }
-# PICABIA: the laser link (cmd/picabia_laser_link.rs): GRBL protocol and simulator; the test card and power ladder G-code.
-vectorcraft-grbl = { workspace = true }
-# PICABIA: stencil sheets and laser export (picabia_stencil.rs, cmd/picabia_modifier/).
-vectorcraft-stencil = { workspace = true }
-# PICABIA: physics settings and the drop-and-settle simulation (cmd/picabia_physics.rs).
-vectorcraft-physics = { workspace = true }
-# PICABIA: the camera link (cmd/picabia_camera.rs): Lumix protocol, simulator and network.
-vectorcraft-lumix = { workspace = true }
 vectorcraft-js = { workspace = true }
 # The commands' parameter schemas (schemas.rs).
 vectorcraft-apischema = { workspace = true }
@@ -115,8 +105,9 @@ proptest = { workspace = true }
 vectorcraft-text = { workspace = true, features = ["test-fonts"] }
 # How many times an open reads a PDF.
 vectorcraft-pdf = { workspace = true, features = ["read-count"] }
-# How many times the symbol list is read to find symbols by name.
-vectorcraft-doc = { workspace = true, features = ["symbol-read-count"] }
+# How many times the symbol list is read to find symbols by name, and how many objects are
+# measured against locked artboards.
+vectorcraft-doc = { workspace = true, features = ["symbol-read-count", "locked-artboard-count"] }
 wat = { workspace = true }
 # Zstandard streams for the Illustrator editing data fuzz tests.
 ruzstd = { workspace = true }

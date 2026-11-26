@@ -481,6 +481,23 @@ impl Renderer {
 
     /// What [`Self::draw_object_fx`] draws inside the object's transparency group.
     fn draw_object_fx_art(&mut self, ctx: &mut RenderContext, f: &Frame, a: &Arc<Node>, cache: bool) {
+        // A placed document whose effects make no art of their own (raster effects and color
+        // adjustments, which Outline mode does not draw) shows its box crossed as without effects
+        // ([`Self::draw_placed`]). Effects that change geometry (plug-in effects among them,
+        // [`effects::is_geometry`]), 3D and Pathfinder make art from
+        // the file's art, which is drawn; Crop Marks and Vector Halftone draw the placed document
+        // itself among their art.
+        if let NodeKind::PlacedDocument(p) = &a.kind
+            && self.crosses_placed(f)
+            && !effects::has_geometry(&a.appearance.effects)
+            && !effects::has_revolve(a)
+            && !effects::has_solid(a)
+            && !effects::has_pathfinder(a)
+            && !effects::has_crop_marks(a)
+            && !effects::addons::halftone::has_halftone(a)
+        {
+            return self.draw_crossed_placed(ctx, f, p);
+        }
         if !self.charge_fx_instance(f.symbols, a) {
             return;
         }
@@ -586,7 +603,6 @@ impl Renderer {
     /// colors shaded through the color settings ([`reads_outside`]), is kept only while what it
     /// reads from outside `a` stays the same ([`Self::live_found`]).
     pub(super) fn fx_art(&mut self, symbols: &SymbolBoxes, a: &Arc<Node>, cache: bool) -> Arc<Node> {
-        let cache = cache && !crate::picabia::holds_targets(a); // PICABIA: copy-to-shape art follows its target
         let key = Arc::as_ptr(a) as usize;
         let mut kept = None;
         if cache
@@ -711,7 +727,6 @@ impl Renderer {
             None if matches!(a.kind, NodeKind::Text(_) | NodeKind::Image(_) | NodeKind::Path { .. } | NodeKind::Compound { .. }) => (**a).clone(),
             None => effects::outline_art(Some(doc), a, symbol.as_ref()).unwrap_or_else(|| Node::group(a.id, vec![])),
         };
-        let art = crate::picabia::unstacked(art); // PICABIA: the art drawn never comes back to its stack
         let has_three_d = effects::has_revolve(a) || effects::has_solid(a);
         let mut art = if has_three_d { effects::evaluate_container(Some(doc), &art).unwrap_or(art) } else { art };
         // A 3D effect on a fill or stroke that built nothing (Revolve after Roughen, a solid too

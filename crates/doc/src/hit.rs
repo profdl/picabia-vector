@@ -11,9 +11,6 @@ use vectorcraft_geom::{BezPath, FillRule, PathData, PathSeg, Point, Rect};
 
 use crate::{AppearanceItem, Document, Node, NodeId, NodeKind, StrokeAlign, SymbolBoxes};
 
-mod picabia; // PICABIA: modifier copies hit as their object.
-pub use picabia::{CopyHooks, set_copies};
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HitKind {
     Fill,
@@ -222,7 +219,7 @@ pub fn set_live_art(f: LiveArt, inputs: LiveInputs) {
 }
 
 /// The registered [`LiveInputs`] now, 0 while nothing is registered.
-fn live_inputs() -> u64 {
+pub fn live_inputs() -> u64 {
     LIVE_ART.get().map_or(0, |(_, inputs)| inputs())
 }
 
