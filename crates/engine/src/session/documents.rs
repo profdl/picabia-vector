@@ -24,6 +24,8 @@ impl Session {
         });
         // Clicks find an image's own fills and strokes where their effects draw them.
         vectorcraft_doc::hit::set_image_paint(vectorcraft_render::effects::image_paint);
+        // PICABIA: clicks, hover and marquees find an object by its modifier copies.
+        vectorcraft_doc::hit::set_copies(vectorcraft_render::picabia::hit_hooks());
         // Direct Selection picks and outlines the parts of a dynamic symbol's instance where the
         // effects of the instance's fill and stroke draw them.
         vectorcraft_doc::hit::set_instance_row_art(vectorcraft_render::effects::add_instance_row_effects_to_parts);
@@ -168,6 +170,7 @@ impl Session {
             link_stamps: Default::default(),
             link_scan: None,
             global_edit_options: Default::default(),
+            picabia: Default::default(), // PICABIA: Picabia session state.
             select_similar: crate::cmd::SIMILAR[0].0,
             keyboard_text: false,
             toasts: Default::default(),

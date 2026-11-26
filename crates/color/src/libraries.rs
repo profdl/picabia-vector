@@ -108,7 +108,7 @@ pub fn oklab_to_srgb(l: f64, a: f64, b: f64) -> [f64; 3] {
 }
 
 /// Linear sRGB of OKLab `(l, a, b)`, unclamped.
-pub(crate) fn oklab_to_linear_srgb(l: f64, a: f64, b: f64) -> [f64; 3] {
+pub fn oklab_to_linear_srgb(l: f64, a: f64, b: f64) -> [f64; 3] {
     let l_ = l + 0.396_337_777_4 * a + 0.215_803_757_3 * b;
     let m_ = l - 0.105_561_345_8 * a - 0.063_854_172_8 * b;
     let s_ = l - 0.089_484_177_5 * a - 1.291_485_548_0 * b;

@@ -12,6 +12,7 @@ pub mod guard;
 pub mod inspect;
 pub mod journal;
 pub mod link_watch;
+pub mod picabia_stencil; // PICABIA: stencil sheets computed off the UI thread, kept for the renderer.
 pub mod schemas;
 pub mod steps;
 pub mod store;
@@ -408,6 +409,8 @@ pub struct Session {
     /// The Global Edit Options Start Global Edit matches with (`select.globalEditOptions`); not
     /// saved.
     pub global_edit_options: cmd::globaledit::Options,
+    /// PICABIA: Picabia's session state (the rows `modifier.copy` copied…); not saved.
+    pub(crate) picabia: cmd::picabia_modifier::PicabiaState,
     /// The attribute Select Similar Objects selects by (`select.similar`), one of
     /// [`cmd::SIMILAR`]; not saved.
     pub select_similar: &'static str,

@@ -1611,7 +1611,7 @@ fn the_zoom_hint_follows_animated_zoom() {
 fn window_title_with_no_document_is_the_app_name() {
     let app = crate::VectorcraftApp::new(Session::new(), Default::default());
     let title = super::window_title(&app);
-    assert!(title.contains(crate::picabia::APP_NAME), "{title}"); // PICABIA: app name
+    assert!(title.contains("VectorCraft"), "{title}");
 }
 
 /// The window's title names the active file and the app, and unsaved changes mark it.
@@ -1620,11 +1620,11 @@ fn window_title_follows_the_active_file() {
     let mut app = crate::VectorcraftApp::new(Session::new(), Default::default());
     app.run("file.new", json!({"width": 100, "height": 100, "name": "foo.svg"})).unwrap();
     let saved = super::window_title(&app);
-    assert!(saved.contains("foo.svg") && saved.contains(crate::picabia::APP_NAME), "{saved}"); // PICABIA: app name
+    assert!(saved.contains("foo.svg") && saved.contains("VectorCraft"), "{saved}");
     app.run("shape.rectangle", json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
     let modified = super::window_title(&app);
     assert!(
-        modified != saved && modified.contains("foo.svg") && modified.contains(crate::picabia::APP_NAME), // PICABIA: app name
+        modified != saved && modified.contains("foo.svg") && modified.contains("VectorCraft"),
         "an edit marks the title: {saved} then {modified}"
     );
 }

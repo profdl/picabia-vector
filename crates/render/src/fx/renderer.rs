@@ -603,6 +603,7 @@ impl Renderer {
     /// colors shaded through the color settings ([`reads_outside`]), is kept only while what it
     /// reads from outside `a` stays the same ([`Self::live_found`]).
     pub(super) fn fx_art(&mut self, symbols: &SymbolBoxes, a: &Arc<Node>, cache: bool) -> Arc<Node> {
+        let cache = cache && !crate::picabia::holds_targets(a); // PICABIA: copy-to-shape art follows its target
         let key = Arc::as_ptr(a) as usize;
         let mut kept = None;
         if cache
@@ -727,6 +728,7 @@ impl Renderer {
             None if matches!(a.kind, NodeKind::Text(_) | NodeKind::Image(_) | NodeKind::Path { .. } | NodeKind::Compound { .. }) => (**a).clone(),
             None => effects::outline_art(Some(doc), a, symbol.as_ref()).unwrap_or_else(|| Node::group(a.id, vec![])),
         };
+        let art = crate::picabia::unstacked(art); // PICABIA: the art drawn never comes back to its stack
         let has_three_d = effects::has_revolve(a) || effects::has_solid(a);
         let mut art = if has_three_d { effects::evaluate_container(Some(doc), &art).unwrap_or(art) } else { art };
         // A 3D effect on a fill or stroke that built nothing (Revolve after Roughen, a solid too

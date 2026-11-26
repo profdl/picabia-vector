@@ -25,7 +25,7 @@ use std::sync::OnceLock;
 /// Files in the install folder that switch on portable mode (either one; contents are ignored).
 pub const PORTABLE_MARKERS: [&str; 2] = ["portable.txt", "VectorCraft.portable"];
 /// The settings folder created in the install folder in portable mode.
-pub const PORTABLE_DATA_DIR: &str = super::picabia::PORTABLE_DATA_DIR; // PICABIA: own portable folder
+pub const PORTABLE_DATA_DIR: &str = "VectorCraftData";
 
 /// The profile root this process was launched with, if any: a nightly launch's private folder.
 static DATA_ROOT: OnceLock<PathBuf> = OnceLock::new();
@@ -82,7 +82,7 @@ fn prefs_dir_with(
 
 /// The platform's settings folder of VectorCraft, or of DrawCraft (`legacy`).
 fn platform_dir(os: &str, legacy: bool, env: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
-    let (name, lower) = if legacy { ("DrawCraft", "drawcraft") } else { (super::picabia::CONFIG_DIR, super::picabia::CONFIG_DIR_LOWER) }; // PICABIA: own folder
+    let (name, lower) = if legacy { ("DrawCraft", "drawcraft") } else { ("VectorCraft", "vectorcraft") };
     match os {
         "macos" => env("HOME").map(|p| PathBuf::from(p).join("Library/Application Support").join(name)),
         "windows" => env("APPDATA").map(|p| PathBuf::from(p).join(name)),
@@ -268,20 +268,6 @@ mod tests {
             assert_eq!(prefs_dir_with(os, false, env, installed, None), Some("/isolated".into()));
             assert_eq!(prefs_dir_with(os, true, env, installed, None), None);
         }
-    }
-
-    // PICABIA: Picabia's own override wins over a VectorCraft one, so the two don't share a folder.
-    #[test]
-    fn picabia_config_dir_wins_over_vectorcrafts() {
-        let env = |key: &str| match key {
-            "PICABIA_CONFIG_DIR" => Some("/picabia-only".into()),
-            "VECTORCRAFT_CONFIG_DIR" => Some("/every-vectorcraft".into()),
-            _ => environment(key),
-        };
-        assert_eq!(prefs_dir_with("macos", false, env, installed), Some("/picabia-only".into()));
-        let no_prefs = |key: &str| if key == "PICABIA_NO_PREFS" { Some("1".into()) } else { environment(key) };
-        let portable = || -> Option<PathBuf> { panic!("the portable folder is not looked for under PICABIA_NO_PREFS") };
-        assert_eq!(prefs_dir_with("windows", false, no_prefs, portable), Some("/roaming/Picabia".into()));
     }
 
     #[test]

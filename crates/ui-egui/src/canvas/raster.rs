@@ -299,7 +299,6 @@ pub(super) fn picture(app: &mut VectorcraftApp, ui: &mut Ui, space: &CanvasSpace
     let env = Env::of(ui);
     let Some(st) = app.session.active() else { return };
     let (doc, effects, mask_view) = (st.doc.clone(), st.plugin_effects.clone(), st.shown_mask());
-    let doc = crate::picabia::sim_bar::display_doc(app).unwrap_or(doc); // PICABIA: a physics session's clones
     let device_ppp = ui.ctx().pixels_per_point();
     let max_side = ui.ctx().input(|i| i.max_texture_side);
     let ppp = frame_ppp(rect.size(), device_ppp, max_side);

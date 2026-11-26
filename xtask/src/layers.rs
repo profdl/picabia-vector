@@ -63,6 +63,16 @@ pub const TABLE: &[(&str, Class)] = &[
     ("plugins", Class::Layer(2)),
     ("affinity", Class::Standalone),
     ("scriptcheck", Class::Standalone),
+    // PICABIA: modifier stacks (geom, doc)
+    ("modifiers", Class::Layer(2)),
+    // PICABIA: stencil geometry and laser export (geom, color, doc, pathops, modifiers)
+    ("stencil", Class::Layer(3)),
+    // PICABIA: the GRBL laser link (protocol, simulator, serial port); no workspace deps.
+    ("grbl", Class::Standalone),
+    // PICABIA: physics settings and the drop-and-settle simulation (geom, doc; rapier2d)
+    ("physics", Class::Layer(2)),
+    // PICABIA: the Lumix camera link (protocol, simulator, std::net); no workspace deps.
+    ("lumix", Class::Standalone),
     ("js", Class::Standalone),
     ("apischema", Class::Standalone),
 ];
@@ -85,6 +95,10 @@ pub const INTRA_LAYER_ORDER: &[&[&str]] = &[
     &["three-d", "effects"],
     // Inflate cuts its surface's grid cells to the shape with Pathfinder's booleans.
     &["pathops", "three-d"],
+    // PICABIA: the renderer draws stencil sheets (render reads vectorcraft-stencil's store).
+    &["stencil", "render"],
+    // PICABIA: the screen row clips its dots with Pathfinder's intersect and fits them with Simplify.
+    &["pathops", "modifiers"],
     // Outline Object on an image's fill or stroke follows the outline Image Trace makes of its
     // opaque area.
     &["trace", "effects"],

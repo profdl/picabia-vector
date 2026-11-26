@@ -11,7 +11,7 @@ use crate::menus::unbound;
 /// The layout options every Mac layout of VectorCraft's menus uses: the app's name and its
 /// translation of the labels the layout writes itself.
 pub(crate) fn options() -> LayoutOptions<'static> {
-    LayoutOptions::new(crate::picabia::APP_NAME).label(&translate_label) // PICABIA: macOS app menu "Picabia"
+    LayoutOptions::new(APP_NAME).label(&translate_label)
 }
 
 /// Install the native menu bar from the app's menus; `None` off macOS or when AppKit refuses it.

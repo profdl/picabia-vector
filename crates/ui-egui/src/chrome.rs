@@ -97,7 +97,7 @@ impl Trailing {
 fn leading(ui: &mut Ui, app: &mut VectorcraftApp) {
     if !matches!(WindowHost::of(ui.ctx()).frame(), Frame::Native) {
         let image = || (*brand::image()).clone();
-        Picture::new(crate::picabia::APP_NAME, brand::BRAND_KEY, &image).show(ui); // PICABIA: app name
+        Picture::new(tl!("VectorCraft"), brand::BRAND_KEY, &image).show(ui);
     }
     let mut home = menus::home_showing(app);
     let before = home;

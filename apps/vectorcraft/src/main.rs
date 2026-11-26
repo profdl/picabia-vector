@@ -88,7 +88,7 @@ use craft::ui::InstallSpec;
 use craft::ui::shell::embed;
 use craft::window::Prefix;
 use craft::window::policy::{TitleBarPref, decide_for};
-use craft::window::restore::{FILE_NAME, Store}; // PICABIA: FILE_NAME
+use craft::window::restore::Store;
 use craft::window::system::SystemWindows;
 use vectorcraft_engine::Session;
 use vectorcraft_engine::cmd::fileio;
@@ -116,9 +116,9 @@ const MIN_SIZE: [f32; 2] = [800.0, 500.0];
 /// `packaging/linux/ai.storyteller.vectorcraft.desktop` so Wayland docks find the launcher icon.
 fn app_icon() -> egui::IconData {
     #[cfg(target_os = "macos")]
-    let png: &[u8] = include_bytes!("../../../assets/picabia/app-icon/picabia-macos-512.png"); // PICABIA: Picabia's icon
+    let png: &[u8] = include_bytes!("../../../assets/app-icon/vectorcraft-macos-512.png");
     #[cfg(not(target_os = "macos"))]
-    let png: &[u8] = include_bytes!("../../../assets/picabia/app-icon/picabia-256.png"); // PICABIA: Picabia's icon
+    let png: &[u8] = include_bytes!("../../../assets/app-icon/hicolor/256x256/apps/ai.storyteller.vectorcraft.png");
     eframe::icon_data::from_png_bytes(png).unwrap_or_default()
 }
 
@@ -808,12 +808,6 @@ fn main() -> std::process::ExitCode {
                 .files(files.clone())
                 .install(ctx);
                 let mut session = Session::new();
-                // PICABIA: real laser ports on (the Laser window has its always-visible Stop and Shift+Esc); off with
-                // PICABIA_LASER_HARDWARE=0, and off under --control unless PICABIA_LASER_HARDWARE=1.
-                if vectorcraft_ui_egui::picabia_laser_window::hardware_allowed(control_port.is_some()) {
-                    session.laser_enable_hardware();
-                }
-                session.camera_enable_network(); // PICABIA: the desktop app reaches real Lumix cameras.
                 // The profiles loaded before come back before the preferences name any of them.
                 prefs_dir::attach_profile_store(&mut session);
                 // Then Edit › Color Settings, which may name one of those profiles.

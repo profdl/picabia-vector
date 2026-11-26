@@ -11,6 +11,9 @@ use vectorcraft_geom::{BezPath, FillRule, PathData, PathSeg, Point, Rect};
 
 use crate::{AppearanceItem, Document, Node, NodeId, NodeKind, StrokeAlign, SymbolBoxes};
 
+mod picabia; // PICABIA: modifier copies hit as their object.
+pub use picabia::{CopyHooks, set_copies};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HitKind {
     Fill,

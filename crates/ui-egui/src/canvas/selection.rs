@@ -375,8 +375,7 @@ pub(super) fn hover(app: &VectorcraftApp, st: &DocState, tool: &str, at: Point, 
 /// The hover outline of `id` in its layer colour, unless it has too many points.
 fn outline_of(st: &DocState, id: NodeId) -> Option<Hovered> {
     let node = st.doc.node(id).filter(|n| !too_many_anchors([*n]))?;
-    let path = super::picabia::with_copies(&st.doc, node, node_outline(node, &st.doc.symbol_boxes())); // PICABIA: on every copy too
-    Some(Hovered { path, color: c32(st.doc.layer_color(id)) })
+    Some(Hovered { path: node_outline(node, &st.doc.symbol_boxes()), color: c32(st.doc.layer_color(id)) })
 }
 
 /// The hover outline the canvas shows at document point `at` with the keys `held`: none while Space lends the view
@@ -648,7 +647,6 @@ pub(super) fn show(app: &mut VectorcraftApp, ui: &mut egui::Ui, space: &CanvasSp
     if !(dots.centers.is_empty() && dots.origins.is_empty() && dots.key_anchor.is_none()) {
         SelectionDots { common: Common::new(), dots: &dots }.label("Selection dots").show_at(ui, rect);
     }
-    super::picabia::modifier_handles(app, ui, space); // PICABIA: the selected object's modifier handles
 }
 
 #[cfg(test)]
