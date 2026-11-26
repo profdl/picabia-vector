@@ -803,6 +803,10 @@ pub const DESKTOP_MENU_ITEMS: &[(&[&str], &str)] = &[
     (&["View"], "Snap to Point"),
     (&["View"], "Snap to Glyph"),
     (&["View"], "Saved View"),
+    // PICABIA: Picabia's desktop items in placeable menus (Object ▸ Modifiers and Physics, View ▸ copy outlines).
+    (&["Object"], "Modifiers"),
+    (&["Object"], "Physics"),
+    (&["View"], "Show Modifier Copy Outlines"),
 ];
 
 /// The command spec of plug-in `p`'s command `c`: its id, its label as menus show it (escaped and
