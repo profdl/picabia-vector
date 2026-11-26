@@ -222,6 +222,7 @@ impl VectorcraftApp {
             plugin_runs: Default::default(),
             placing: Default::default(),
             trace_runs: Default::default(),
+            picabia: Default::default(), // PICABIA: Picabia's UI state
             recovery: Default::default(),
             closing: None,
             prefs: None,
@@ -353,6 +354,7 @@ impl VectorcraftApp {
 
     /// A window's raw input, before egui and the keys read it (the host's `raw_input_hook`).
     pub fn raw_input(&self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        crate::picabia_laser_window::note_stop_shortcut(self, raw); // PICABIA: Shift+Esc stops the laser, before the keys are read
         crate::type_editing::keep_layout_text(self, ctx, raw);
     }
 
@@ -423,6 +425,7 @@ impl VectorcraftApp {
     pub fn tick(&mut self, ctx: &egui::Context) {
         let confined = self.automation_scope(ctx);
         if let Err(msg) = file_access::confine(confined.as_ref(), || vectorcraft_engine::guard::catch_panic(|| self.tick_frame(ctx))) {
+            self.session.laser_emergency_stop(); // PICABIA: a panicking frame stops a running laser job.
             self.session.set_replaying(false);
             self.status(format!("Internal error: {msg} (please report this bug)"));
         }
@@ -479,6 +482,8 @@ impl VectorcraftApp {
         if ctx.current_pass_index() == 0 {
             self.poll_finished_work();
         }
+        // PICABIA: stale stencil sheets recompute off the UI thread (web: once settled); repaint while one is coming.
+        let picabia_busy = vectorcraft_engine::picabia_stencil::poll(&self.session, now);
         crate::script_runs::poll(self);
         // A panel's, a dialog's or the text input's commit journaled in the frame before.
         crate::panels::actions::after_journaled_edit(self);
@@ -504,6 +509,8 @@ impl VectorcraftApp {
             || !self.plugin_runs.running.is_empty()
             || !self.placing.pending.is_empty()
             || !self.trace_runs.running.is_empty()
+            || picabia_busy
+        // PICABIA: a stencil sheet is coming.
         {
             // Keep the status bar's progress moving and pick the result up when it arrives.
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -610,6 +617,7 @@ impl VectorcraftApp {
                 self.window_keys(&ctx);
             })
         }) {
+            self.session.laser_emergency_stop(); // PICABIA: a panicking frame stops a running laser job.
             self.session.set_replaying(false);
             self.status(format!("Internal error: {msg} (please report this bug)"));
         }
@@ -660,6 +668,7 @@ impl VectorcraftApp {
         panels::learn::locate::tidy(self, &ctx);
         crate::doc_windows::show(self, ui);
         export_progress::show(self, ui);
+        crate::picabia_ui::show(self, &ctx); // PICABIA: the Laser window (or its Stop bar), the Stencil window, stencil markers
         // After every window this pass may open, and before the palette's field takes the keyboard.
         panel_docking::close_overlays_for_modal(self, &ctx);
         dialogs::host::pump(self, &ctx);

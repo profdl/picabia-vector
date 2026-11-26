@@ -97,7 +97,7 @@ impl Trailing {
 fn leading(ui: &mut Ui, app: &mut VectorcraftApp) {
     if !matches!(WindowHost::of(ui.ctx()).frame(), Frame::Native) {
         let image = || (*brand::image()).clone();
-        Picture::new(tl!("VectorCraft"), brand::BRAND_KEY, &image).show(ui);
+        Picture::new(crate::picabia::APP_NAME, brand::BRAND_KEY, &image).show(ui); // PICABIA: app name
     }
     let mut home = menus::home_showing(app);
     let before = home;
@@ -118,6 +118,9 @@ fn leading(ui: &mut Ui, app: &mut VectorcraftApp) {
 fn trailing(ui: &mut Ui, app: &mut VectorcraftApp) {
     let safe = vectorcraft_plugins::safe_mode::active();
     for t in Trailing::SHOWN.into_iter().filter(|t| safe || *t != Trailing::Safe) {
+        if !crate::picabia::SHOWS_DISCORD && t == Trailing::Discord {
+            continue; // PICABIA: no VectorCraft Discord
+        }
         match t.rank() {
             Some(rank) => {
                 Row::new().fit_rank(rank).show(ui, |ui, _| t.show(app, ui));
@@ -138,7 +141,7 @@ pub fn app_bar(ui: &mut Ui, _cx: &mut BodyCx<'_>, app: &mut VectorcraftApp) {
     let start = |ui: &mut Ui, _: &mut BodyCx<'_>| leading(ui, &mut app.borrow_mut());
     let end = |ui: &mut Ui, _: &mut BodyCx<'_>| trailing(ui, &mut app.borrow_mut());
     // A nightly's window and Dock entry carry its own name, so they never read as the stable app's.
-    let title = if crate::os_window::stable_services_allowed() { tl!("VectorCraft") } else { crate::os_window::name() };
+    let title = if crate::os_window::stable_services_allowed() { crate::picabia::APP_NAME } else { crate::os_window::name() }; // PICABIA: app name
     let _ = if titled {
         TitleBar::new().surface(SurfaceKind::Background).show_titled(ui, Title::new(title), start, end)
     } else {

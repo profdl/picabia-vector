@@ -43,6 +43,7 @@ pub(super) fn home(app: &mut VectorcraftApp, ui: &mut Ui, rect: egui::Rect) {
     for ((label, url), icon) in crate::community::link_urls(app).into_iter().zip(LINK_ICONS) {
         links.push(StartLink::url(tl!(label), Some(IconId::new(icon)), url));
     }
+    let links = if crate::picabia::SHOWS_DISCORD { links } else { crate::picabia::home_links() }; // PICABIA: Picabia's and VectorCraft's links, not ArtCraft's
     let mut pressed = None;
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::top_down(egui::Align::Min)));
     // Production's community links read in the accent alone, with no underline.
@@ -52,7 +53,7 @@ pub(super) fn home(app: &mut VectorcraftApp, ui: &mut Ui, rect: egui::Rect) {
     // Learn follows the presets, which stand right under New and Open as in production 0.24.1.
     let start = StartScreen::new(Bind::bound(&mut app.ui.home_view), Bind::bound(&mut app.ui.home_sort), &recent)
         .layout(StartLayout::Column)
-        .title(tl!("Welcome to VectorCraft"))
+        .title(crate::picabia::rename(tl!("Welcome to VectorCraft"))) // PICABIA: Picabia's name
         .subtitle(tl!("Vector illustration — fast, open, scriptable."))
         .new_label(tl!("New file"))
         .open_label(tl!("Open"))

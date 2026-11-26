@@ -5,13 +5,13 @@ use craft::menu::{Gate, ItemKind, LayoutOptions, MenuBar, NativeMenu, Node, mac,
 use craft::ui::runtime::commands::{FirePhase, FireSource, Fired, holder};
 
 use crate::VectorcraftApp;
-use crate::menus::model::{APP_NAME, item_title, pressed_pass, recording_shortcut, refresh, state_key, translate_label};
+use crate::menus::model::{item_title, pressed_pass, recording_shortcut, refresh, state_key, translate_label};
 use crate::menus::unbound;
 
 /// The layout options every Mac layout of VectorCraft's menus uses: the app's name and its
 /// translation of the labels the layout writes itself.
 pub(crate) fn options() -> LayoutOptions<'static> {
-    LayoutOptions::new(APP_NAME).label(&translate_label)
+    LayoutOptions::new(crate::picabia::APP_NAME).label(&translate_label) // PICABIA: macOS app menu "Picabia"
 }
 
 /// Install the native menu bar from the app's menus; `None` off macOS or when AppKit refuses it.

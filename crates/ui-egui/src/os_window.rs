@@ -8,7 +8,7 @@
 //! gets the stable identity and this crate's own version.
 
 /// Matches the `.desktop` file and hicolor icon name, so Wayland docks pick up the icon.
-pub const APP_ID: &str = "ai.storyteller.vectorcraft";
+pub const APP_ID: &str = crate::picabia::APP_ID; // PICABIA: Picabia's window id
 
 /// The craft-settings app id, which the runtime keys a theme's `[apps.<id>]` pins on: neither the
 /// window id nor the channel, so it stays the same in both, and a user's theme keeps applying.
@@ -22,7 +22,7 @@ pub const NIGHTLY_PACKAGE_ID: &str = "ai.storyteller.vectorcraft.nightly";
 pub const NIGHTLY_APP_ID: &str = "ai.storyteller.vectorcraft.nightly-v1";
 
 /// Stable's name; `nightly`'s differs so the two are told apart in the Dock, the taskbar and menus.
-pub const APP_NAME: &str = "VectorCraft";
+pub const APP_NAME: &str = crate::picabia::APP_NAME; // PICABIA: Picabia's name
 pub const NIGHTLY_APP_NAME: &str = "VectorCraft Nightly";
 
 /// Immutable startup identity. The desktop selects it before any UI or runtime service is created.

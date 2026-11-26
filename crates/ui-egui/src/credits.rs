@@ -67,10 +67,10 @@ pub(crate) fn discord_url(app: &mut VectorcraftApp) -> String {
 
 /// The About tab's contents.
 pub fn about_info(app: &mut VectorcraftApp) -> AboutInfo {
-    let discord = discord_url(app);
-    let links = crate::community::link_urls(app).map(|(label, url)| AboutLink::new(tl!(label), url));
-    let mut built_with =
-        tl!("Part of ArtCraft. MIT OR Apache-2.0. Fonts: Source Sans 3, Inter, JetBrains Mono (OFL). Icons: Lucide (ISC) + VectorCraft.").to_string();
+    // PICABIA: Picabia's links and credits (VectorCraft credited) replace the ArtCraft Discord, links and line.
+    let discord = if crate::picabia::SHOWS_DISCORD { discord_url(app) } else { String::new() };
+    let links = crate::picabia::about_links();
+    let mut built_with = crate::picabia::about_credits();
     // The GPU the window renders with, for bug reports (Preferences › Performance picks it).
     if let Some(adapter) = &app.graphics_adapter {
         built_with.push('\n');

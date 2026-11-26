@@ -224,7 +224,7 @@ pub(crate) fn set_canvas(app: &mut VectorcraftApp, rect: egui::Rect) {
 pub(crate) fn themed(dark: bool) -> egui::Context {
     let ctx = crate::testing::ui_context();
     let prefs = vectorcraft_engine::Prefs { ui_brightness: if dark { "dark" } else { "light" }.into(), ..Default::default() };
-    craft::ui::runtime::frame::set_input(&ctx, craft::ui::runtime::frame::FrameInput::new(crate::app::root_env(&prefs, 1.0)));
+    craft::ui::runtime::frame::set_input(&ctx, craft::ui::runtime::frame::FrameInput::new(crate::app::root_env(&prefs, 1.0, None)));
     ctx
 }
 
