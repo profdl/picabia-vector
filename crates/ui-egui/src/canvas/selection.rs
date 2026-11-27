@@ -382,7 +382,7 @@ pub(super) fn hover(app: &VectorcraftApp, st: &DocState, tool: &str, at: Point, 
 /// points.
 fn outline_of(st: &DocState, id: NodeId, hides: ViewHides) -> Option<Hovered> {
     let node = st.doc.node(id).filter(|n| !too_many_anchors([*n], hides))?;
-    let path = super::picabia::with_copies(&st.doc, node, node_outline(node, &st.doc.symbol_boxes(), hides)); // PICABIA: on every copy too
+    let path = super::picabia::with_copies(&st.doc, node, hides, node_outline(node, &st.doc.symbol_boxes(), hides)); // PICABIA: on every copy too
     Some(Hovered { path, color: c32(st.doc.layer_color(id)) })
 }
 
@@ -639,7 +639,7 @@ pub(super) fn show(app: &mut VectorcraftApp, ui: &mut egui::Ui, space: &CanvasSp
         }
         outline.show_at(ui, rect);
     }
-    super::picabia::selection_outlines(app, ui, st, rect, too_big(st)); // PICABIA: copies' outlines, stencil ties and cells
+    super::picabia::selection_outlines(app, ui, st, rect, too_big(app, st)); // PICABIA: copies' outlines, stencil ties and cells
     let marks = anchors(app, st, tool, tool_points);
     if !marks.paths.is_empty() {
         let mut paths = marks.paths;

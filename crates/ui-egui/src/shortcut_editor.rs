@@ -422,6 +422,9 @@ fn own_group(id: &str) -> String {
     if let Some(path) = family_path(id) {
         return path.to_string();
     }
+    if let Some(group) = crate::picabia_camera_window::shortcut_group(id) {
+        return group.to_string(); // PICABIA: the Camera window's commands go under Window › Camera
+    }
     GROUPS
         .iter()
         .find(|(key, _)| if key.ends_with('.') { id.starts_with(key) } else { id == *key })

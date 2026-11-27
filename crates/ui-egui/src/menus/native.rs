@@ -6,7 +6,7 @@ use craft::menu::{Gate, ItemKind, LayoutOptions, MenuBar, NativeMenu, Node, mac,
 use craft::ui::runtime::commands::{FirePhase, FireSource, Fired, holder};
 
 use crate::VectorcraftApp;
-use crate::menus::model::{APP_NAME, item_title, pressed_pass, recording_shortcut, refresh, state_key, translate_label};
+use crate::menus::model::{item_title, pressed_pass, recording_shortcut, refresh, state_key, translate_label};
 use crate::menus::{command_shortcuts, item_shortcut_in, unbound};
 
 /// The layout options every Mac layout of VectorCraft's menus uses: the app's name and its

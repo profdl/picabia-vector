@@ -196,8 +196,9 @@ fn the_popover_binds_an_expression_and_unbinds() {
     f.click(&mut app, chip, appearance);
     let texts = f.texts(&mut app, appearance);
     assert!(texts.iter().any(|s| s == "Bind Offset X") && texts.iter().any(|s| s == "Expression"), "{texts:?}");
-    // Type an expression into the popover's field and commit it.
-    let field = f.at(&mut app, appearance, &|l| l == "Expression");
+    // Type an expression into the popover's field (not its label, also named "Expression") and commit it.
+    let nodes = f.nodes(&mut app, appearance);
+    let field = nodes.iter().find(|n| n.0 == egui::accesskit::Role::TextInput && n.1 == "Expression").map(|n| n.2).expect("the Expression field");
     f.click(&mut app, field, appearance);
     let enter = Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
     f.run(&mut app, vec![Event::Text("copies * 10".into())], appearance);

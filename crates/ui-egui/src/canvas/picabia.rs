@@ -18,7 +18,7 @@ use vectorcraft_engine::DocState;
 use vectorcraft_geom::{Affine, BezPath};
 use vectorcraft_modifiers::Guide;
 
-use super::outline::{c32, node_outline};
+use super::outline::{ViewHides, c32, node_outline};
 use crate::VectorcraftApp;
 use crate::picabia_ui::Tokens;
 
@@ -29,14 +29,15 @@ const MAX_OUTLINE_ELEMENTS: usize = 200_000;
 
 /// `outline` (the object's own) moved to each of `n`'s copies but the unmoved one: at most
 /// [`MAX_OUTLINES`], and none when that would be more than [`MAX_OUTLINE_ELEMENTS`] path elements
-/// (as VectorCraft leaves out the outlines of selections with too many anchors).
-pub(super) fn copy_outline_paths(doc: &Document, n: &Node, outline: &BezPath) -> Vec<BezPath> {
+/// (as VectorCraft leaves out the outlines of selections with too many anchors). Copies reshaped by
+/// geometry rows leave out the members `hides` leaves out, as `outline` does.
+pub(super) fn copy_outline_paths(doc: &Document, n: &Node, outline: &BezPath, hides: ViewHides) -> Vec<BezPath> {
     if !vectorcraft_render::picabia::draws_copies(doc, n) {
         return Vec::new();
     }
     let Some(out) = vectorcraft_modifiers::evaluate_node_in_doc(doc, n) else { return Vec::new() };
     if out.has_geometry() {
-        return shaped_outlines(doc, n);
+        return shaped_outlines(doc, n, hides);
     }
     let shown = out.instances.len().min(MAX_OUTLINES);
     if outline.elements().len().saturating_mul(shown) > MAX_OUTLINE_ELEMENTS {
@@ -55,9 +56,10 @@ pub(super) fn copy_outline_paths(doc: &Document, n: &Node, outline: &BezPath) ->
 }
 
 /// The paths of `n`'s copies as drawn, when geometry rows reshape them (a transform of the
-/// object's outline isn't what is drawn): every copy, the unmoved one too, within the same caps.
-fn shaped_outlines(doc: &Document, n: &Node) -> Vec<BezPath> {
-    fn walk(n: &Node, depth: usize, budget: &mut usize, out: &mut Vec<BezPath>) {
+/// object's outline isn't what is drawn): every copy, the unmoved one too, within the same caps,
+/// without the members `hides` leaves out.
+fn shaped_outlines(doc: &Document, n: &Node, hides: ViewHides) -> Vec<BezPath> {
+    fn walk(n: &Node, depth: usize, budget: &mut usize, hides: ViewHides, out: &mut Vec<BezPath>) {
         if depth > vectorcraft_doc::MAX_DEPTH || out.len() >= MAX_OUTLINES {
             return;
         }
@@ -70,19 +72,20 @@ fn shaped_outlines(doc: &Document, n: &Node) -> Vec<BezPath> {
             }
             return;
         }
-        for c in n.children().into_iter().flatten() {
-            walk(c, depth + 1, budget, out);
+        for c in n.children().into_iter().flatten().filter(|c| !c.hidden_by_view(hides.templates, hides.guides)) {
+            walk(c, depth + 1, budget, hides, out);
         }
     }
     let Some(art) = vectorcraft_render::picabia::art(doc, n) else { return Vec::new() };
     let (mut out, mut budget) = (Vec::new(), MAX_OUTLINE_ELEMENTS);
-    walk(&art, 0, &mut budget, &mut out);
+    walk(&art, 0, &mut budget, hides, &mut out);
     out
 }
 
-/// `outline` (the hovered object's own) with its copies' outlines added (seam in `selection::hover`).
-pub(super) fn with_copies(doc: &Document, n: &Node, mut outline: BezPath) -> BezPath {
-    for bp in copy_outline_paths(doc, n, &outline) {
+/// `outline` (the hovered object's own, without the members `hides` leaves out) with its copies'
+/// outlines added (seam in `selection::hover`).
+pub(super) fn with_copies(doc: &Document, n: &Node, hides: ViewHides, mut outline: BezPath) -> BezPath {
+    for bp in copy_outline_paths(doc, n, &outline, hides) {
         outline.extend(bp);
     }
     outline
@@ -100,14 +103,14 @@ pub(super) fn selection_outlines(app: &VectorcraftApp, ui: &mut egui::Ui, st: &D
     if big {
         return;
     }
-    let (doc, copies) = (&st.doc, app.ui.view.modifier_copy_outlines);
+    let (doc, copies, hides) = (&st.doc, app.ui.view.modifier_copy_outlines, ViewHides::of(app));
     let symbols = doc.symbol_boxes();
     for (id, n) in st.selection.objects.iter().filter_map(|id| Some((id, doc.node(*id)?))) {
         if matches!(n.kind, NodeKind::Text(ref tx) if matches!(tx.kind, vectorcraft_doc::TextKind::Point)) {
             continue;
         }
         let color = c32(doc.layer_color(*id));
-        let (faint, ties, cells) = selected_outlines(doc, n, &symbols, copies);
+        let (faint, ties, cells) = selected_outlines(doc, n, &symbols, hides, copies);
         if !faint.is_empty() {
             SelectionOutline::faint("Modifier copies", &faint).color(DataColor::new(color.gamma_multiply(0.4))).show_at(ui, rect);
         }
@@ -120,10 +123,16 @@ pub(super) fn selection_outlines(app: &VectorcraftApp, ui: &mut egui::Ui, st: &D
     }
 }
 
-/// A selected object's extra outlines: its copies' (when `copies`), its stencil's tie bars and its
-/// stencil's repeat cells.
-pub(super) fn selected_outlines(doc: &Document, n: &Node, symbols: &SymbolBoxes, copies: bool) -> (Vec<BezPath>, Vec<BezPath>, Vec<BezPath>) {
-    let faint = if copies { copy_outline_paths(doc, n, &node_outline(n, symbols)) } else { Vec::new() };
+/// A selected object's extra outlines: its copies' (when `copies`, without the members `hides`
+/// leaves out), its stencil's tie bars and its stencil's repeat cells.
+pub(super) fn selected_outlines(
+    doc: &Document,
+    n: &Node,
+    symbols: &SymbolBoxes,
+    hides: ViewHides,
+    copies: bool,
+) -> (Vec<BezPath>, Vec<BezPath>, Vec<BezPath>) {
+    let faint = if copies { copy_outline_paths(doc, n, &node_outline(n, symbols, hides), hides) } else { Vec::new() };
     let (mut ties, mut cells) = (Vec::new(), Vec::new());
     for (bp, dashed) in stencil_markers(doc, n).iter() {
         if *dashed { cells.push(bp.clone()) } else { ties.push(bp.clone()) }
@@ -319,12 +328,12 @@ mod tests {
         let l = d.layers[0].id;
         let mut n = Node::path(d.alloc_id(), shapes::rectangle(Rect::new(0.0, 0.0, 20.0, 20.0)), Appearance::basic(Paint::None, Paint::None, 0.0));
         let outline = shapes::rectangle(Rect::new(0.0, 0.0, 20.0, 20.0)).to_bezpath();
-        assert!(super::copy_outline_paths(&d, &n, &outline).is_empty(), "no stack: the object's own outline only");
+        assert!(super::copy_outline_paths(&d, &n, &outline, Default::default()).is_empty(), "no stack: the object's own outline only");
         let src = r#"{"v":1,"stack":[{"id":"m1","kind":"linearArray","count":3,"offsetX":40}]}"#;
         vectorcraft_modifiers::set_node_source(&mut n, Some(src.into()));
         let id = d.insert(Some(l), 0, n).unwrap();
         let n = Arc::new(d.node(id).unwrap().clone());
-        let copies = super::copy_outline_paths(&d, &n, &outline);
+        let copies = super::copy_outline_paths(&d, &n, &outline, Default::default());
         let xs: Vec<f64> = copies.iter().map(|bp| vectorcraft_geom::Shape::bounding_box(bp).x0).collect();
         assert_eq!(xs, [40.0, 80.0], "the two copies besides the object");
     }

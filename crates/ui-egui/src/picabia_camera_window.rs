@@ -48,6 +48,12 @@ impl std::fmt::Debug for CameraPanel {
     }
 }
 
+/// The Keyboard Shortcuts group of a camera UI command no menu holds: the Camera window's (seam in
+/// `shortcut_editor::own_group`); `None`: not one of them.
+pub fn shortcut_group(id: &str) -> Option<&'static str> {
+    matches!(id, CAMERA_CAPTURE | CAMERA_FOLDER).then_some("Window › Camera")
+}
+
 /// Picabia's camera UI commands; `None`: not one of them.
 pub fn command(app: &mut VectorcraftApp, id: &str) -> Option<Result<Value, String>> {
     match id {
