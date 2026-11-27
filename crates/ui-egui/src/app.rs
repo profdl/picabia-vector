@@ -524,7 +524,8 @@ impl VectorcraftApp {
             || !self.placing.pending.is_empty()
             || !self.trace_runs.running.is_empty()
             || self.retype_runs.running.is_some()
-            || picabia_busy // PICABIA: a stencil sheet is coming.
+            || picabia_busy
+        // PICABIA: a stencil sheet is coming.
         {
             // Keep the status bar's progress moving and pick the result up when it arrives.
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
